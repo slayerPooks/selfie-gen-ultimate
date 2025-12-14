@@ -39,6 +39,15 @@ FAL_API_DOCS_URL = "https://docs.fal.ai"
 # Using frozenset for O(1) lookup performance
 VAGUE_MODEL_NAMES = frozenset(['kling video', 'pixverse', 'wan effects', 'longcat video', 'pika'])
 
+# Precompiled regex patterns for word-boundary matching of vague names
+# Compiled once at module load to avoid per-call compilation overhead
+# Pattern: (?<!\w)name(?!\w) matches 'name' only when not surrounded by word characters
+# e.g., 'pika' matches "Pika Video" but NOT "Pikachu Model"
+VAGUE_MODEL_PATTERNS = {
+    name: re.compile(rf'(?<!\w){re.escape(name)}(?!\w)', re.IGNORECASE)
+    for name in VAGUE_MODEL_NAMES
+}
+
 # UI Configuration
 COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~10)
 
@@ -136,11 +145,12 @@ class ModelFetcher:
                         # 3. If endpoint has version but API name doesn't, use parsed name
                         name_lower = api_display_name.lower().strip()
 
-                        # Check if name matches a known vague pattern (word-boundary aware to avoid false positives)
+                        # Check if name matches a known vague pattern using precompiled regexes
+                        # Patterns use word-boundary matching to avoid false positives
                         # e.g., 'pika' matches 'Pika Video' but not 'Pikachu Model'
                         is_vague = any(
-                            re.search(rf'(?<!\w){re.escape(vague)}(?!\w)', name_lower)
-                            for vague in VAGUE_MODEL_NAMES
+                            pattern.search(name_lower)
+                            for pattern in VAGUE_MODEL_PATTERNS.values()
                         )
 
                         # Check if name has version info (v2, v2.5, 2.1, 1.6, etc.)
@@ -734,7 +744,12 @@ class PromptEditorDialog(tk.Toplevel):
         self.minsize(600, 450)
 
         # Increase Combobox dropdown height to show more models at once
-        self.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
+        # Note: This sets a global Tk option that affects all TCombobox widgets in this window
+        # Guarded to prevent crashes in headless or unusual Tk backend environments
+        try:
+            self.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
+        except tk.TclError:
+            pass  # Silently ignore if Tk backend doesn't support this option
 
         # Create UI
         self._setup_ui()
