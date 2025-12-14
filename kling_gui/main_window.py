@@ -7,8 +7,11 @@ from tkinter import ttk, messagebox, filedialog
 import json
 import os
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, List
+from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -54,8 +57,11 @@ class KlingGUIWindow:
         """
         self.config_path = config_path
         self.config = self._load_config()
+        self.history_path = Path(self.config_path).with_name("kling_history.json")
+        self.history: List[dict] = self._load_history()
         self.generator: Optional[FalAIKlingGenerator] = None
         self.queue_manager: Optional[QueueManager] = None
+        self.logger = self._setup_logging()
 
         # Create root window with DnD support if available
         self.root = create_dnd_root()
@@ -73,6 +79,29 @@ class KlingGUIWindow:
         # Protocol for window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _setup_logging(self) -> logging.Logger:
+        """Configure rotating file logging."""
+        log_dir = Path(self.config_path).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "kling_gui.log"
+
+        logger = logging.getLogger("kling_gui")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+            handler = RotatingFileHandler(
+                log_file,
+                maxBytes=int(self.config.get("log_max_mb", 5) * 1024 * 1024),
+                backupCount=int(self.config.get("log_backups", 3)),
+                encoding="utf-8"
+            )
+            fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+            handler.setFormatter(fmt)
+            logger.addHandler(handler)
+
+        return logger
+
     def _load_config(self) -> dict:
         """Load configuration from JSON file."""
         default_config = {
@@ -80,6 +109,8 @@ class KlingGUIWindow:
             "use_source_folder": True,
             "falai_api_key": "",
             "verbose_logging": True,
+            "log_max_mb": 5,
+            "log_backups": 3,
             "duplicate_detection": True,
             "current_prompt_slot": 1,
             "saved_prompts": {"1": "", "2": "", "3": ""},
@@ -109,6 +140,24 @@ class KlingGUIWindow:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             self._log(f"Error saving config: {e}", "error")
+
+    def _load_history(self) -> List[dict]:
+        """Load processed video history from disk."""
+        try:
+            if self.history_path.exists():
+                with open(self.history_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            self._log(f"Could not load history: {e}", "warning")
+        return []
+
+    def _save_history(self):
+        """Persist processed video history."""
+        try:
+            with open(self.history_path, "w", encoding="utf-8") as f:
+                json.dump(self.history[-500:], f, indent=2)
+        except Exception as e:
+            self._log(f"Could not save history: {e}", "warning")
 
     def _setup_ui(self):
         """Set up the main UI layout."""
@@ -149,9 +198,16 @@ class KlingGUIWindow:
         # Queue panel (left)
         self._setup_queue_panel(bottom_frame)
 
-        # Log panel (right)
-        self.log_display = LogDisplay(bottom_frame)
-        self.log_display.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        # Right side: Log + History
+        right_frame = tk.Frame(bottom_frame, bg=COLORS["bg_main"])
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+
+        # Log panel (top)
+        self.log_display = LogDisplay(right_frame)
+        self.log_display.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 5))
+
+        # History panel (bottom)
+        self._setup_history_panel(right_frame)
 
         # Control buttons at bottom
         self._setup_controls()
@@ -236,6 +292,50 @@ class KlingGUIWindow:
         self.queue_menu = tk.Menu(self.queue_listbox, tearoff=0)
         self.queue_menu.add_command(label="Remove", command=self._remove_selected_item)
         self.queue_listbox.bind("<Button-3>", self._show_queue_menu)
+
+    def _setup_history_panel(self, parent):
+        """Processed videos history with open-in-explorer helpers."""
+        panel = tk.Frame(parent, bg=COLORS["bg_panel"], height=220)
+        panel.pack(fill=tk.X, padx=0, pady=(0, 0))
+        panel.pack_propagate(False)
+
+        header = tk.Frame(panel, bg=COLORS["bg_panel"])
+        header.pack(fill=tk.X, padx=5, pady=(4, 2))
+
+        tk.Label(
+            header, text="🎞️ PROCESSED VIDEOS", font=("Segoe UI", 10, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"]
+        ).pack(side=tk.LEFT)
+
+        btn_frame = tk.Frame(header, bg=COLORS["bg_panel"])
+        btn_frame.pack(side=tk.RIGHT)
+
+        ttk.Button(btn_frame, text="Open File", command=self._open_selected_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Open Folder", command=self._open_selected_folder).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Refresh", command=self._refresh_history_view).pack(side=tk.LEFT, padx=2)
+
+        columns = ("time", "source", "output", "status")
+        self.history_tree = ttk.Treeview(
+            panel, columns=columns, show="headings", height=6, selectmode="browse"
+        )
+        for col, text, width in [
+            ("time", "Time", 110),
+            ("source", "Source", 180),
+            ("output", "Output", 280),
+            ("status", "Status", 90),
+        ]:
+            self.history_tree.heading(col, text=text)
+            self.history_tree.column(col, width=width, anchor=tk.W)
+
+        scrollbar = ttk.Scrollbar(panel, orient="vertical", command=self.history_tree.yview)
+        self.history_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=(0, 5))
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=(0, 5))
+
+        self.history_tree.bind("<Double-1>", lambda e: self._open_selected_file())
+
+        self._refresh_history_view()
 
     def _setup_controls(self):
         """Set up the control buttons."""
@@ -331,6 +431,14 @@ class KlingGUIWindow:
         """Log a message to the log display."""
         if hasattr(self, 'log_display'):
             self.log_display.log(message, level)
+        if self.logger:
+            level_map = {
+                "info": self.logger.info,
+                "success": self.logger.info,
+                "warning": self.logger.warning,
+                "error": self.logger.error,
+            }
+            level_map.get(level, self.logger.info)(message)
 
     def _log_thread_safe(self, message: str, level: str = "info"):
         """Thread-safe logging using after()."""
@@ -368,6 +476,63 @@ class KlingGUIWindow:
         """Thread-safe queue display update."""
         self.root.after(0, self._update_queue_display)
 
+    def _refresh_history_view(self):
+        """Reload history tree from stored list."""
+        if not hasattr(self, "history_tree"):
+            return
+        self.history_tree.delete(*self.history_tree.get_children())
+        for entry in reversed(self.history[-200:]):  # show recent first
+            status = entry.get("status", "")
+            tag = "success" if status == "completed" else ("error" if status == "failed" else "")
+            self.history_tree.insert(
+                "", tk.END,
+                values=(
+                    entry.get("time", ""),
+                    os.path.basename(entry.get("source", "")),
+                    entry.get("output", ""),
+                    status,
+                ),
+                tags=(tag,)
+            )
+        # color tags
+        self.history_tree.tag_configure("success", foreground=COLORS["success"])
+        self.history_tree.tag_configure("error", foreground=COLORS["error"])
+
+    def _get_selected_history(self) -> Optional[dict]:
+        if not hasattr(self, "history_tree"):
+            return None
+        sel = self.history_tree.selection()
+        if not sel:
+            return None
+        # Tree shows reversed order; map index
+        index = self.history_tree.index(sel[0])
+        # reversed list so map back
+        try:
+            entry = list(reversed(self.history[-200:]))[index]
+            return entry
+        except Exception:
+            return None
+
+    def _open_selected_file(self):
+        entry = self._get_selected_history()
+        path = entry.get("output") if entry else None
+        if path and os.path.exists(path):
+            os.startfile(path)
+        elif entry and entry.get("output"):
+            self._log(f"File not found: {entry['output']}", "warning")
+
+    def _open_selected_folder(self):
+        entry = self._get_selected_history()
+        path = None
+        if entry:
+            path = entry.get("output") or entry.get("source")
+        if path:
+            folder = os.path.dirname(path)
+            if folder and os.path.exists(folder):
+                os.startfile(folder)
+                return
+        self._log("No folder to open for selection", "warning")
+
     def _on_files_dropped(self, files: List[str]):
         """Handle files dropped onto the drop zone."""
         if not self.queue_manager:
@@ -398,7 +563,25 @@ class KlingGUIWindow:
 
     def _on_item_complete(self, item: QueueItem):
         """Called when an item finishes processing."""
-        pass  # Queue manager handles logging
+        status = item.status
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = {
+            "time": timestamp,
+            "source": item.path,
+            "output": item.output_path or "",
+            "status": status,
+            "error": item.error_message or "",
+        }
+        self.history.append(entry)
+        # Keep history reasonably sized
+        self.history = self.history[-500:]
+        self._save_history()
+        self._refresh_history_view()
+
+        if status == "completed" and item.output_path:
+            self._log(f"Finished {os.path.basename(item.path)} → {item.output_path}", "success")
+        elif status == "failed":
+            self._log(f"Failed {os.path.basename(item.path)}: {item.error_message}", "error")
 
     def _toggle_pause(self):
         """Toggle pause/resume."""
@@ -462,6 +645,8 @@ class KlingGUIWindow:
 
             self.queue_manager.stop_processing()
 
+        self._save_history()
+        self._save_config()
         self.root.destroy()
 
     def run(self):
