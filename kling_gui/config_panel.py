@@ -129,9 +129,9 @@ class ModelFetcher:
                         # 3. If endpoint has version but API name doesn't, use parsed name
                         name_lower = api_display_name.lower().strip()
 
-                        # Known vague names that need replacement
+                        # Known vague names that need replacement (use substring match, not exact)
                         vague_names = ['kling video', 'pixverse', 'wan effects', 'longcat video', 'pika']
-                        is_vague = name_lower in vague_names
+                        is_vague = any(vague in name_lower for vague in vague_names)
 
                         # Check if name has version info (v2, v2.5, 2.1, 1.6, etc.)
                         # Match: "v" followed by digits, OR digits with decimal (not "Video 01")
@@ -722,6 +722,9 @@ class PromptEditorDialog(tk.Toplevel):
         self.configure(bg=COLORS["bg_panel"])
         self.geometry("750x620")
         self.minsize(600, 450)
+
+        # Increase Combobox dropdown height to show more models at once (default is ~10)
+        self.option_add('*TCombobox*Listbox.height', 25)
 
         # Create UI
         self._setup_ui()
