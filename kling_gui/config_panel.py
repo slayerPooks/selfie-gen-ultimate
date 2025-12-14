@@ -35,6 +35,13 @@ FAL_MODELS_URL = "https://fal.ai/models?categories=image-to-video"
 FAL_EXPLORE_URL = "https://fal.ai/explore/models"
 FAL_API_DOCS_URL = "https://docs.fal.ai"
 
+# Vague model names that should be replaced with parsed endpoint names
+# Using frozenset for O(1) lookup performance
+VAGUE_MODEL_NAMES = frozenset(['kling video', 'pixverse', 'wan effects', 'longcat video', 'pika'])
+
+# UI Configuration
+COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~10)
+
 
 def parse_endpoint_to_display_name(endpoint_id: str) -> str:
     """
@@ -129,9 +136,12 @@ class ModelFetcher:
                         # 3. If endpoint has version but API name doesn't, use parsed name
                         name_lower = api_display_name.lower().strip()
 
-                        # Known vague names that need replacement (use substring match, not exact)
-                        vague_names = ['kling video', 'pixverse', 'wan effects', 'longcat video', 'pika']
-                        is_vague = any(vague in name_lower for vague in vague_names)
+                        # Check if name matches a known vague pattern (word-boundary aware to avoid false positives)
+                        # e.g., 'pika' matches 'Pika Video' but not 'Pikachu Model'
+                        is_vague = any(
+                            re.search(rf'(?<!\w){re.escape(vague)}(?!\w)', name_lower)
+                            for vague in VAGUE_MODEL_NAMES
+                        )
 
                         # Check if name has version info (v2, v2.5, 2.1, 1.6, etc.)
                         # Match: "v" followed by digits, OR digits with decimal (not "Video 01")
@@ -723,8 +733,8 @@ class PromptEditorDialog(tk.Toplevel):
         self.geometry("750x620")
         self.minsize(600, 450)
 
-        # Increase Combobox dropdown height to show more models at once (default is ~10)
-        self.option_add('*TCombobox*Listbox.height', 25)
+        # Increase Combobox dropdown height to show more models at once
+        self.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
 
         # Create UI
         self._setup_ui()
