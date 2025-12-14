@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import re
+import logging
 
 
 # Color palette
@@ -50,6 +51,9 @@ VAGUE_MODEL_PATTERNS = {
 
 # UI Configuration
 COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~10)
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 def parse_endpoint_to_display_name(endpoint_id: str) -> str:
@@ -130,7 +134,8 @@ class ModelFetcher:
                     )
 
                     if response.status_code != 200:
-                        callback([], f"API error: {response.status_code}")
+                        detail = response.text[:200] if response.text else ""
+                        callback([], f"API error {response.status_code}: {detail}")
                         return
 
                     data = response.json()
@@ -143,13 +148,14 @@ class ModelFetcher:
                         # 1. Check if API name is too vague (known problematic names)
                         # 2. Check if API name has version info (v2.5, 2.1, etc.)
                         # 3. If endpoint has version but API name doesn't, use parsed name
-                        name_lower = api_display_name.lower().strip()
+                        # Normalize for fuzzy checks (convert hyphens/underscores to spaces)
+                        name_for_match = re.sub(r'[-_]+', ' ', api_display_name).strip()
 
                         # Check if name matches a known vague pattern using precompiled regexes
                         # Patterns use word-boundary matching to avoid false positives
                         # e.g., 'pika' matches 'Pika Video' but not 'Pikachu Model'
                         is_vague = any(
-                            pattern.search(name_lower)
+                            pattern.search(name_for_match)
                             for pattern in VAGUE_MODEL_PATTERNS.values()
                         )
 
@@ -748,8 +754,8 @@ class PromptEditorDialog(tk.Toplevel):
         # Guarded to prevent crashes in headless or unusual Tk backend environments
         try:
             self.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
-        except tk.TclError:
-            pass  # Silently ignore if Tk backend doesn't support this option
+        except tk.TclError as e:
+            logger.warning("Failed to set combobox dropdown height: %s", e)
 
         # Create UI
         self._setup_ui()
