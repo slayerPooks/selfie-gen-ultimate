@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__desktop-commander__list_directory",
+      "mcp__desktop-commander__read_file",
+      "mcp__perplexity__perplexity_search_web",
+      "mcp__exa__get_code_context_exa"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
