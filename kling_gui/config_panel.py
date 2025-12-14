@@ -134,8 +134,10 @@ class ModelFetcher:
                     )
 
                     if response.status_code != 200:
+                        # Log detail for debugging but don't expose to user (may contain sensitive info)
                         detail = response.text[:200] if response.text else ""
-                        callback([], f"API error {response.status_code}: {detail}")
+                        logger.debug("Fal API error %s: %s", response.status_code, detail)
+                        callback([], f"API error {response.status_code}")
                         return
 
                     data = response.json()
@@ -750,10 +752,11 @@ class PromptEditorDialog(tk.Toplevel):
         self.minsize(600, 450)
 
         # Increase Combobox dropdown height to show more models at once
-        # Note: This sets a global Tk option that affects all TCombobox widgets in this window
+        # Scoped to toplevel window to avoid affecting other windows in the process
         # Guarded to prevent crashes in headless or unusual Tk backend environments
         try:
-            self.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
+            root = self.winfo_toplevel()
+            root.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
         except tk.TclError as e:
             logger.warning("Failed to set combobox dropdown height: %s", e)
 
