@@ -232,8 +232,9 @@ class ModelFetcher:
         cached_list = cached.get("models", [])
         cached_time = cached.get("timestamp", 0)
 
-        # If cache exists and is less than TTL old, use it
-        if cached_list and (time.time() - cached_time) < ModelFetcher.CACHE_TTL:
+        # If cache exists, use it (even if stale - background refresh will update)
+        # Only fall back if no cached models at all
+        if cached_list:
             return cached_list
 
         return FALLBACK_MODELS
@@ -772,15 +773,21 @@ class PromptEditorDialog(tk.Toplevel):
             logger.warning("Failed to set combobox dropdown height: %s", e)
 
         # Style to ensure Combobox text is visible on dark background
+        # NOTE: Do NOT use style.theme_use() - it breaks global ttk rendering
         style = ttk.Style(self)
-        style.theme_use('clam')
         style.configure(
             "Dialog.TCombobox",
             fieldbackground=COLORS["bg_input"],
             background=COLORS["bg_panel"],
-            foreground=COLORS["text_light"],
-            selectbackground=COLORS["accent_blue"],
-            selectforeground=COLORS["text_light"]
+            foreground="#000000",  # Black text on light combobox
+            arrowcolor=COLORS["text_light"]
+        )
+        # Map ensures text is visible in all states
+        style.map("Dialog.TCombobox",
+            fieldbackground=[("readonly", COLORS["bg_input"]), ("disabled", "#666666")],
+            foreground=[("readonly", "#000000"), ("disabled", "#999999")],
+            selectbackground=[("readonly", COLORS["accent_blue"])],
+            selectforeground=[("readonly", "#FFFFFF")]
         )
 
         # Create UI
