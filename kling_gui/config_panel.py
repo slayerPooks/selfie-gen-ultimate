@@ -1216,6 +1216,8 @@ class PromptEditorDialog(tk.Toplevel):
                 break
 
         self.custom_status.config(text="✓ Custom model set", fg="#64FF64")
+        # Trigger negative prompt capability check for custom endpoint
+        self._check_negative_support(custom_endpoint)
 
     def _refresh_models(self):
         """Fetch fresh model list from fal.ai API."""
@@ -1274,10 +1276,13 @@ class PromptEditorDialog(tk.Toplevel):
             except Exception as e:
                 logger.debug(f"Negative prompt capability check failed: {e}")
 
-            # cache result
-            self.capabilities[endpoint_id] = supported
-            self.config["model_capabilities"] = self.capabilities
-            self.after(0, lambda: self._apply_negative_support(supported))
+            # Schedule cache update and UI apply on main thread for thread safety
+            def update_on_main():
+                self.capabilities[endpoint_id] = supported
+                self.config["model_capabilities"] = self.capabilities
+                self._apply_negative_support(supported)
+
+            self.after(0, update_on_main)
 
         threading.Thread(target=worker, daemon=True).start()
 

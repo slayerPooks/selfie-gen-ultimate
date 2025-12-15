@@ -154,6 +154,7 @@ class FalAIKlingGenerator:
             character_image_path: Path to source image
             output_folder: Fallback output folder (used when use_source_folder=False)
             custom_prompt: Custom generation prompt
+            negative_prompt: Negative prompt for content to avoid (model-dependent)
             use_source_folder: If True, save video in same folder as source image
             skip_duplicate_check: If True, skip duplicate detection (for reprocessing)
         """
