@@ -1278,6 +1278,8 @@ class PromptEditorDialog(tk.Toplevel):
 
             # Schedule cache update and UI apply on main thread for thread safety
             def update_on_main():
+                if not self.winfo_exists():
+                    return
                 self.capabilities[endpoint_id] = supported
                 self.config["model_capabilities"] = self.capabilities
                 self._apply_negative_support(supported)

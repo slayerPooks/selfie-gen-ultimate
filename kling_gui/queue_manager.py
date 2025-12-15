@@ -393,6 +393,12 @@ class QueueManager:
         Returns:
             Output path on success, None on failure
         """
+        # Respect model capability: if not supported, drop negative_prompt
+        supports_negative = self.get_config().get("model_capabilities", {}).get(
+            self.generator.base_url.replace("https://queue.fal.run/", ""), False
+        )
+        neg_for_payload = negative_prompt if supports_negative else None
+
         # For increment mode, we need to handle the output path ourselves
         if custom_output_path:
             # Generate with skip_duplicate_check since we've already handled it
@@ -400,7 +406,7 @@ class QueueManager:
                 character_image_path=item.path,
                 output_folder=output_folder,
                 custom_prompt=prompt,
-                negative_prompt=negative_prompt,
+                negative_prompt=neg_for_payload,
                 use_source_folder=use_source_folder,
                 skip_duplicate_check=True  # We've already handled duplicate check
             )
@@ -422,7 +428,7 @@ class QueueManager:
                 character_image_path=item.path,
                 output_folder=output_folder,
                 custom_prompt=prompt,
-                negative_prompt=negative_prompt,
+                negative_prompt=neg_for_payload,
                 use_source_folder=use_source_folder,
                 skip_duplicate_check=skip_duplicate_check
             )
