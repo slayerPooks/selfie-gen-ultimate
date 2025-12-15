@@ -945,6 +945,17 @@ class PromptEditorDialog(tk.Toplevel):
         )
         self.neg_entry.pack(side=tk.LEFT, padx=5, pady=2, fill=tk.X, expand=True)
 
+        self.neg_badge = tk.Label(
+            neg_row,
+            text="Checking",
+            font=("Segoe UI", 8, "bold"),
+            bg=COLORS["warning"],
+            fg="black",
+            padx=6,
+            pady=2
+        )
+        self.neg_badge.pack(side=tk.LEFT, padx=4)
+
         self.neg_status = tk.Label(
             neg_row,
             text="Checking support...",
@@ -1235,6 +1246,7 @@ class PromptEditorDialog(tk.Toplevel):
             return
 
         self.neg_status.config(text="Checking support...", fg=COLORS["text_dim"])
+        self.neg_badge.config(text="Checking", bg=COLORS["warning"], fg="black")
         self.neg_entry.config(state="disabled")
 
         def worker():
@@ -1274,10 +1286,12 @@ class PromptEditorDialog(tk.Toplevel):
         if supported:
             self.neg_entry.config(state="normal")
             self.neg_status.config(text="Supported by model", fg=COLORS["success"])
+            self.neg_badge.config(text="Supported", bg=COLORS["success"], fg="black")
         else:
             self.neg_entry.delete(0, tk.END)
             self.neg_entry.config(state="disabled")
             self.neg_status.config(text="Not supported by this model", fg=COLORS["text_dim"])
+            self.neg_badge.config(text="Unsupported", bg=COLORS["error"], fg="white")
 
     def _update_models(self, models: list, error: str):
         """Update model dropdown with fetched models."""
