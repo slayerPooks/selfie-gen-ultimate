@@ -22,6 +22,9 @@ COLORS = {
     "text_dim": "#B4B4B4",
     "accent_blue": "#6496FF",
     "border": "#5A5A5E",
+    "warning": "#FFB347",
+    "success": "#64FF64",
+    "error": "#FF6464",
 }
 
 # Minimal fallback - ONLY used when API fails AND no cache exists
