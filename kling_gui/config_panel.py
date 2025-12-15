@@ -748,8 +748,8 @@ class PromptEditorDialog(tk.Toplevel):
 
         # Configure window
         self.configure(bg=COLORS["bg_panel"])
-        self.geometry("750x620")
-        self.minsize(600, 450)
+        self.geometry("900x820")
+        self.minsize(720, 560)
 
         # Increase Combobox dropdown height to show more models at once
         # Scoped to toplevel window to avoid affecting other windows in the process
@@ -759,6 +759,18 @@ class PromptEditorDialog(tk.Toplevel):
             root.option_add('*TCombobox*Listbox.height', COMBOBOX_DROPDOWN_HEIGHT)
         except tk.TclError as e:
             logger.warning("Failed to set combobox dropdown height: %s", e)
+
+        # Style to ensure Combobox text is visible on dark background
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure(
+            "Dialog.TCombobox",
+            fieldbackground=COLORS["bg_input"],
+            background=COLORS["bg_panel"],
+            foreground=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"],
+            selectforeground=COLORS["text_light"]
+        )
 
         # Create UI
         self._setup_ui()
@@ -855,7 +867,8 @@ class PromptEditorDialog(tk.Toplevel):
             values=model_names,
             state="readonly",
             font=("Segoe UI", 10),
-            width=28
+            width=28,
+            style="Dialog.TCombobox"
         )
         self.model_combo.pack(side=tk.LEFT, padx=5)
         if model_names:
@@ -1005,7 +1018,7 @@ class PromptEditorDialog(tk.Toplevel):
 
         # Text area with scrollbar
         text_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5, side=tk.TOP)
 
         scrollbar = ttk.Scrollbar(text_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1032,7 +1045,7 @@ class PromptEditorDialog(tk.Toplevel):
 
         # Button frame
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10, side=tk.BOTTOM)
 
         # Info label
         tk.Label(
@@ -1052,7 +1065,7 @@ class PromptEditorDialog(tk.Toplevel):
             fg=COLORS["text_light"],
             width=12,
             command=self._cancel
-        ).pack(side=tk.RIGHT, padx=5)
+        ).pack(side=tk.RIGHT, padx=5, pady=(5, 0))
 
         # Save button
         tk.Button(
@@ -1063,7 +1076,7 @@ class PromptEditorDialog(tk.Toplevel):
             fg="white",
             width=12,
             command=self._save
-        ).pack(side=tk.RIGHT, padx=5)
+        ).pack(side=tk.RIGHT, padx=5, pady=(5, 0))
 
     def _on_slot_changed(self):
         """Handle slot selection change - save current and load new slot's prompt."""
