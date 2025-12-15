@@ -700,6 +700,14 @@ class ConfigPanel(tk.Frame):
                 saved_prompts[str(dialog.result["slot"])] = dialog.result["prompt"]
                 self.config["saved_prompts"] = saved_prompts
 
+            # Update negative prompts
+            if "all_negative_prompts" in dialog.result:
+                self.config["negative_prompts"] = dialog.result["all_negative_prompts"]
+
+            # Persist capability cache
+            if "model_capabilities" in dialog.result:
+                self.config["model_capabilities"] = dialog.result["model_capabilities"]
+
             # Update current slot
             self.config["current_prompt_slot"] = dialog.result["slot"]
             self.slot_var.set(dialog.result["slot"])
@@ -736,7 +744,10 @@ class PromptEditorDialog(tk.Toplevel):
         self.config = config
         # IMPORTANT: Make a deep copy so cancel doesn't affect original config
         original_prompts = config.get("saved_prompts", {"1": "", "2": "", "3": ""})
+        original_negative_prompts = config.get("negative_prompts", {"1": "", "2": "", "3": ""})
+        self.capabilities = config.get("model_capabilities", {})
         self.saved_prompts = {k: (v if v else "") for k, v in original_prompts.items()}
+        self.saved_negative_prompts = {k: (v if v else "") for k, v in original_negative_prompts.items()}
 
         # Model list - start with cached/fallback, then fetch fresh
         self.models = ModelFetcher.get_cached_or_fallback(config)
@@ -907,6 +918,48 @@ class PromptEditorDialog(tk.Toplevel):
             fg=COLORS["text_dim"]
         )
         self.model_status.pack(side=tk.LEFT, padx=5)
+
+        # Negative prompt row (capability-aware)
+        neg_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
+        neg_row.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(
+            neg_row,
+            text="Negative:",
+            font=("Segoe UI", 9, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            width=12,
+            anchor="w"
+        ).pack(side=tk.LEFT)
+
+        self.neg_var = tk.StringVar(value=self.saved_negative_prompts.get(str(self.slot_var.get()), ""))
+        self.neg_entry = tk.Entry(
+            neg_row,
+            textvariable=self.neg_var,
+            font=("Segoe UI", 9),
+            bg=COLORS["bg_main"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            width=60
+        )
+        self.neg_entry.pack(side=tk.LEFT, padx=5, pady=2, fill=tk.X, expand=True)
+
+        self.neg_status = tk.Label(
+            neg_row,
+            text="Checking support...",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_dim"]
+        )
+        self.neg_status.pack(side=tk.LEFT, padx=5)
+
+        # Kick off capability check for initially selected model
+        if self.models:
+            self._check_negative_support(self.models[current_index]["endpoint"])
+        else:
+            self.neg_status.config(text="No models loaded", fg=COLORS["warning"])
+            self.neg_entry.config(state="disabled")
 
         # Row 3: Browse models link
         link_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
@@ -1083,6 +1136,7 @@ class PromptEditorDialog(tk.Toplevel):
         # Save current slot's text before switching
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
+        self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
 
         # Switch to new slot
         new_slot = self.slot_var.get()
@@ -1093,8 +1147,10 @@ class PromptEditorDialog(tk.Toplevel):
     def _load_prompt_for_slot(self, slot: int):
         """Load prompt text for the specified slot."""
         prompt = self.saved_prompts.get(str(slot), "") or ""
+        neg_prompt = self.saved_negative_prompts.get(str(slot), "") or ""
         self.text.delete("1.0", tk.END)
         self.text.insert("1.0", prompt)
+        self.neg_var.set(neg_prompt)
         self._update_char_count()
 
     def _on_model_changed(self, event=None):
@@ -1105,6 +1161,7 @@ class PromptEditorDialog(tk.Toplevel):
                 self.duration_label.config(text=f"Duration: {m['duration']}s")
                 # Clear custom status when selecting from dropdown
                 self.custom_status.config(text="", fg=COLORS["text_dim"])
+                self._check_negative_support(m["endpoint"])
                 break
 
     def _use_custom_endpoint(self):
@@ -1169,6 +1226,59 @@ class PromptEditorDialog(tk.Toplevel):
 
         ModelFetcher.fetch_models(api_key, on_models_fetched)
 
+    def _check_negative_support(self, endpoint_id: str):
+        """Detect if the selected model supports negative_prompt via its OpenAPI schema."""
+        # Use cached capability if present
+        cached = self.capabilities.get(endpoint_id)
+        if cached is not None:
+            self._apply_negative_support(cached)
+            return
+
+        self.neg_status.config(text="Checking support...", fg=COLORS["text_dim"])
+        self.neg_entry.config(state="disabled")
+
+        def worker():
+            supported = False
+            try:
+                import requests
+                url = f"https://fal.ai/api/openapi/queue/openapi.json?endpoint_id={endpoint_id}"
+                resp = requests.get(url, timeout=6)
+                if resp.status_code == 200:
+                    props = resp.json().get("paths", {})
+                    for pdata in props.values():
+                        for info in pdata.values():
+                            schema_props = (
+                                info.get("requestBody", {})
+                                .get("content", {})
+                                .get("application/json", {})
+                                .get("schema", {})
+                                .get("properties", {})
+                            )
+                            if any("negative" in k.lower() for k in schema_props.keys()):
+                                supported = True
+                                break
+                        if supported:
+                            break
+            except Exception as e:
+                logger.debug(f"Negative prompt capability check failed: {e}")
+
+            # cache result
+            self.capabilities[endpoint_id] = supported
+            self.config["model_capabilities"] = self.capabilities
+            self.after(0, lambda: self._apply_negative_support(supported))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_negative_support(self, supported: bool):
+        """Enable/disable negative prompt entry based on support."""
+        if supported:
+            self.neg_entry.config(state="normal")
+            self.neg_status.config(text="Supported by model", fg=COLORS["success"])
+        else:
+            self.neg_entry.delete(0, tk.END)
+            self.neg_entry.config(state="disabled")
+            self.neg_status.config(text="Not supported by this model", fg=COLORS["text_dim"])
+
     def _update_models(self, models: list, error: str):
         """Update model dropdown with fetched models."""
         # Safety check: dialog may have been closed before callback fired
@@ -1206,6 +1316,7 @@ class PromptEditorDialog(tk.Toplevel):
         self.model_var.set(model_names[new_index])
         self.duration_label.config(text=f"Duration: {models[new_index]['duration']}s")
         self.model_status.config(text=f"({len(models)} models)", fg="#64FF64")
+        self._check_negative_support(models[new_index]["endpoint"])
 
     def _update_char_count(self, event=None):
         """Update character count label."""
@@ -1228,6 +1339,7 @@ class PromptEditorDialog(tk.Toplevel):
         # Save current slot's text to local dict
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
+        self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
 
         model = self._get_selected_model()
         self.result = {
@@ -1236,7 +1348,9 @@ class PromptEditorDialog(tk.Toplevel):
             "model_name": model["name"],
             "model_endpoint": model["endpoint"],
             "duration": model["duration"],
-            "all_prompts": self.saved_prompts.copy()  # Include all edited prompts
+            "all_prompts": self.saved_prompts.copy(),  # Include all edited prompts
+            "all_negative_prompts": self.saved_negative_prompts.copy(),
+            "model_capabilities": self.capabilities
         }
         self.destroy()
 

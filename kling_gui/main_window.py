@@ -114,6 +114,8 @@ class KlingGUIWindow:
             "duplicate_detection": True,
             "current_prompt_slot": 1,
             "saved_prompts": {"1": "", "2": "", "3": ""},
+            "negative_prompts": {"1": "", "2": "", "3": ""},
+            "model_capabilities": {},
             "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
             "model_display_name": "Kling 2.5 Turbo Pro",
             "video_duration": 10,

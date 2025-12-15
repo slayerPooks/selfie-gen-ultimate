@@ -275,6 +275,7 @@ class QueueManager:
                 use_source_folder = config.get("use_source_folder", True)
                 output_folder = config.get("output_folder", "")
                 prompt = self._get_current_prompt(config)
+                negative_prompt = self._get_current_negative_prompt(config)
                 allow_reprocess = config.get("allow_reprocess", False)
                 reprocess_mode = config.get("reprocess_mode", "increment")
 
@@ -337,7 +338,7 @@ class QueueManager:
                 # increment mode uses custom path)
                 skip_check = video_exists and reprocess_mode == "overwrite"
                 result = self._generate_video(
-                    item, actual_output, prompt, use_source_folder, custom_output_path,
+                    item, actual_output, prompt, negative_prompt, use_source_folder, custom_output_path,
                     skip_duplicate_check=skip_check
                 )
 
@@ -372,6 +373,7 @@ class QueueManager:
         item: QueueItem,
         output_folder: str,
         prompt: str,
+        negative_prompt: str,
         use_source_folder: bool,
         custom_output_path: Optional[str] = None,
         skip_duplicate_check: bool = False
@@ -383,6 +385,7 @@ class QueueManager:
             item: Queue item being processed
             output_folder: Output folder path
             prompt: Generation prompt
+            negative_prompt: Negative prompt (optional, model-dependent)
             use_source_folder: Whether to save to source folder
             custom_output_path: Optional custom output path (for increment mode)
             skip_duplicate_check: Whether to skip duplicate detection
@@ -397,6 +400,7 @@ class QueueManager:
                 character_image_path=item.path,
                 output_folder=output_folder,
                 custom_prompt=prompt,
+                negative_prompt=negative_prompt,
                 use_source_folder=use_source_folder,
                 skip_duplicate_check=True  # We've already handled duplicate check
             )
@@ -418,6 +422,7 @@ class QueueManager:
                 character_image_path=item.path,
                 output_folder=output_folder,
                 custom_prompt=prompt,
+                negative_prompt=negative_prompt,
                 use_source_folder=use_source_folder,
                 skip_duplicate_check=skip_duplicate_check
             )
@@ -458,3 +463,9 @@ class QueueManager:
         slot = config.get("current_prompt_slot", 1)
         saved_prompts = config.get("saved_prompts", {})
         return saved_prompts.get(str(slot), "") or ""
+
+    def _get_current_negative_prompt(self, config: dict) -> str:
+        """Get current negative prompt from config."""
+        slot = config.get("current_prompt_slot", 1)
+        saved = config.get("negative_prompts", {})
+        return saved.get(str(slot), "") or ""

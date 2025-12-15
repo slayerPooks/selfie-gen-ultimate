@@ -145,7 +145,8 @@ class FalAIKlingGenerator:
         return genx_images
     
     def create_kling_generation(self, character_image_path: str, output_folder: str = None,
-                                custom_prompt: str = None, use_source_folder: bool = False,
+                                custom_prompt: str = None, negative_prompt: str = None,
+                                use_source_folder: bool = False,
                                 skip_duplicate_check: bool = False) -> Optional[str]:
         """Create Kling 2.5 Turbo Pro video via fal.ai
 
@@ -196,6 +197,8 @@ class FalAIKlingGenerator:
                 "duration": "10",
                 "aspect_ratio": "9:16"
             }
+            if negative_prompt:
+                payload["negative_prompt"] = negative_prompt
             
             if self.verbose:
                 logger.info(f"Creating {self.model_display_name} video via fal.ai...")
