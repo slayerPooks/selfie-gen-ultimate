@@ -1,6 +1,10 @@
 @echo off
 setlocal
 
+:: ============================================================
+::  Kling UI Launcher - Auto-venv setup with dependency check
+:: ============================================================
+
 :: Get the directory of the batch file
 set BATCH_DIR=%~dp0
 
@@ -29,6 +33,22 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Check if tkinter is available (required for GUI)
+python -c "import tkinter" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo ============================================
+    echo   WARNING: tkinter not found
+    echo ============================================
+    echo.
+    echo tkinter is required for GUI mode.
+    echo Please reinstall Python with the "tcl/tk" option enabled.
+    echo.
+    echo The app will continue but GUI mode may not work.
+    echo.
+    timeout /t 5
+)
+
 :: Check if venv exists, create if not
 if not exist "%VENV_PYTHON%" (
     echo.
@@ -38,7 +58,7 @@ if not exist "%VENV_PYTHON%" (
     echo.
 
     :: Create venv
-    echo [1/3] Creating virtual environment...
+    echo [1/4] Creating virtual environment...
     python -m venv "%VENV_DIR%"
     if %errorlevel% neq 0 (
         echo ERROR: Failed to create virtual environment.
@@ -48,16 +68,16 @@ if not exist "%VENV_PYTHON%" (
     )
 
     :: Upgrade pip in venv
-    echo [2/3] Upgrading pip...
+    echo [2/4] Upgrading pip...
     "%VENV_PYTHON%" -m pip install --upgrade pip --quiet
 
     :: Install required packages from requirements.txt
-    echo [3/3] Installing required packages...
+    echo [3/4] Installing required packages...
     if exist "%REQUIREMENTS%" (
         "%VENV_PIP%" install -r "%REQUIREMENTS%" --quiet
     ) else (
-        echo Installing: requests pillow rich selenium webdriver-manager
-        "%VENV_PIP%" install requests pillow rich selenium webdriver-manager --quiet
+        echo Installing: requests pillow rich tkinterdnd2 selenium webdriver-manager
+        "%VENV_PIP%" install requests pillow rich tkinterdnd2 selenium webdriver-manager --quiet
     )
 
     if %errorlevel% neq 0 (
@@ -67,6 +87,15 @@ if not exist "%VENV_PYTHON%" (
         exit /b 1
     )
 
+    :: Verify critical packages
+    echo [4/4] Verifying installation...
+    "%VENV_PYTHON%" -c "import requests, PIL, rich, tkinterdnd2" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo WARNING: Some packages may not have installed correctly.
+        echo Attempting to reinstall critical packages...
+        "%VENV_PIP%" install --force-reinstall tkinterdnd2 --quiet
+    )
+
     echo.
     echo ============================================
     echo   Setup complete! Virtual environment ready.
@@ -74,14 +103,21 @@ if not exist "%VENV_PYTHON%" (
     echo.
 ) else (
     :: Venv exists, quick check if packages are there
-    "%VENV_PYTHON%" -c "import requests, PIL, rich, selenium" >nul 2>&1
+    "%VENV_PYTHON%" -c "import requests, PIL, rich" >nul 2>&1
     if %errorlevel% neq 0 (
         echo Reinstalling missing packages...
         if exist "%REQUIREMENTS%" (
             "%VENV_PIP%" install -r "%REQUIREMENTS%" --quiet
         ) else (
-            "%VENV_PIP%" install requests pillow rich selenium webdriver-manager --quiet
+            "%VENV_PIP%" install requests pillow rich tkinterdnd2 selenium webdriver-manager --quiet
         )
+    )
+
+    :: Check tkinterdnd2 separately (often fails silently)
+    "%VENV_PYTHON%" -c "import tkinterdnd2" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo Installing tkinterdnd2 for drag-drop support...
+        "%VENV_PIP%" install tkinterdnd2 --quiet
     )
 )
 

@@ -44,7 +44,7 @@ class KlingAutomationUI:
         )
 
         default_config = {
-            "output_folder": os.path.join(os.path.expanduser("~"), "Downloads"),
+            "output_folder": "",  # Empty by default - user picks their own
             "use_source_folder": True,  # Default: save videos alongside source images
             "falai_api_key": "",  # Will prompt user on first run
             "verbose_logging": True,

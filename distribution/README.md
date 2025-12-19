@@ -1,121 +1,192 @@
-# Kling UI - Video Generation Tool
+# 🎬 Kling UI - AI Video Generator
 
-A self-contained UI tool for batch video generation using Kling AI via fal.ai API.
+Batch video generation tool using fal.ai Platform API to create AI videos from images.
 
-## Quick Start
+## ✨ Features
 
-1. **Double-click `run_kling_ui.bat`** to launch
-2. **First Run**: Automatically creates a virtual environment and installs dependencies (~60 seconds)
-3. **Enter API Key**: On first launch, enter your fal.ai API key (saved for future use)
-4. **Configure**: Select input/output folders and start generating videos
+- **CLI Mode**: Rich terminal UI with colorful menus and progress tracking
+- **GUI Mode**: Modern dark-themed Tkinter interface with drag-and-drop
+- **40+ AI Video Models**: Access Kling, Veo, Sora, Wan, and many more from fal.ai
+- **Queue Management**: Process up to 50 images with concurrent generation (5 workers)
+- **Ping-Pong Loop**: Create seamless looping videos with FFmpeg integration
+- **Smart Prompts**: 3 prompt slots with quick switching and full editor
+- **Negative Prompts**: Model-aware negative prompt support (auto-detected)
+- **Reprocessing Options**: Overwrite or increment filenames for re-runs
+- **Flexible Output**: Save to source folder or custom location
+- **Duplicate Detection**: Skip already-processed images automatically
+- **Balance Tracking**: Optional real-time fal.ai credit monitoring via Selenium
 
-## Requirements
+## 🚀 Quick Start
 
-- **Python 3.8+** - Must be installed and in PATH
-- **Internet connection** - For API calls and package installation
-- **fal.ai API key** - Get one from https://fal.ai
+### Windows Users (Recommended)
 
-**That's it!** All Python packages are auto-installed to a local `venv/` folder.
+1. **Extract** the distribution folder anywhere
+2. **Double-click** `run_kling_ui.bat`
+3. First run will:
+   - Create a Python virtual environment (`venv/`)
+   - Install all dependencies automatically
+   - Launch the CLI interface
+4. **Enter your fal.ai API key** when prompted (get one at https://fal.ai)
 
-## First Run Setup
+### Manual Setup
 
-On first launch, the batch file automatically:
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate it
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/Mac
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the app
+python kling_automation_ui.py
 ```
-============================================
-  First-time setup: Creating virtual environment...
-============================================
 
-[1/3] Creating virtual environment...
-[2/3] Upgrading pip...
-[3/3] Installing required packages...
+## 📋 Requirements
 
-============================================
-  Setup complete! Virtual environment ready.
-============================================
+- **Python 3.8+** (with tkinter - included in standard Windows installer)
+- **fal.ai API key** (https://fal.ai - create free account)
+- **FFmpeg** (optional, for video looping feature)
+  - Download: https://ffmpeg.org/download.html
+  - Or install via: `winget install FFmpeg`
+
+## 🎮 Usage
+
+### CLI Mode (Default)
+
+Run `python kling_automation_ui.py` or use the batch file.
+
+**Menu Options:**
+| Key | Action |
+|-----|--------|
+| 1 | Change output mode (source folder / custom) |
+| 2 | Edit/view prompt (full editor with slots) |
+| 3 | Toggle verbose logging |
+| 4 | Select input folder (GUI dialog) |
+| 5 | Select single image (GUI dialog) |
+| 6 | **Launch GUI** (drag-and-drop mode) |
+| 7 | Check dependencies |
+| e | Quick edit prompt (single line) |
+| m | Change AI model (browse 40+ models) |
+| p | Swap prompt slot (1/2/3) |
+| q | Quit |
+
+**Or:** Paste/type a folder path directly to start processing.
+
+### GUI Mode
+
+Launch via menu option `6` or directly:
+```python
+python -c "from kling_gui import KlingGUIWindow; KlingGUIWindow().run()"
 ```
 
-This only happens once. Subsequent runs start instantly.
+**Features:**
+- Drag images from Windows Explorer onto the drop zone
+- Real-time processing queue with status icons
+- Color-coded log display
+- Processed videos history with quick-open buttons
+- Edit prompt and model from the config panel
+- Pause/Resume/Retry controls
 
-## Included Files
+## ⚙️ Configuration
+
+All settings are saved to `kling_config.json`:
+
+| Setting | Description |
+|---------|-------------|
+| `falai_api_key` | Your fal.ai API key |
+| `output_folder` | Default output location |
+| `use_source_folder` | Save videos alongside source images |
+| `current_model` | Active AI model endpoint |
+| `current_prompt_slot` | Active prompt slot (1-3) |
+| `saved_prompts` | Prompt text for each slot |
+| `negative_prompts` | Negative prompt text for each slot |
+| `video_duration` | Default duration in seconds |
+| `loop_videos` | Enable ping-pong loop effect |
+| `allow_reprocess` | Allow reprocessing existing videos |
+| `reprocess_mode` | "overwrite" or "increment" |
+| `verbose_logging` | Show detailed API logs |
+| `duplicate_detection` | Skip existing videos |
+
+## 🤖 Supported Models
+
+The app dynamically fetches all available image-to-video models from fal.ai:
+
+**Popular Models:**
+- Kling v2.6 / v2.5 Turbo Pro (recommended)
+- Google Veo 3 / Veo 3.1
+- Sora 2
+- Wan 2.5 (with audio)
+- Pixverse V5
+- Hunyuan Video
+- LTX-2
+- And 30+ more...
+
+Use `m` in CLI or the model dropdown in GUI to browse all available models.
+
+## 📁 File Structure
 
 ```
 distribution/
-├── run_kling_ui.bat           # Launcher (double-click to run)
-├── kling_automation_ui.py     # Main UI script
-├── kling_generator_falai.py   # Kling generator with fal.ai API
-├── balance_tracker.py         # Real-time balance tracking
-├── selenium_balance_checker.py # Balance checker module
-├── requirements.txt           # Python dependencies
-├── venv/                      # Created automatically on first run
-└── kling_config.json          # Created on first run (stores settings)
+├── run_kling_ui.bat        # Main launcher (creates venv on first run)
+├── kling_automation_ui.py  # CLI application
+├── kling_generator_falai.py # fal.ai API integration
+├── dependency_checker.py   # Package verification tool
+├── balance_tracker.py      # Real-time balance monitoring
+├── selenium_balance_checker.py # Chrome automation for balance
+├── requirements.txt        # Python dependencies
+├── README.md              # This file
+└── kling_gui/             # GUI package
+    ├── __init__.py
+    ├── main_window.py     # Main Tkinter window
+    ├── config_panel.py    # Model/prompt settings
+    ├── queue_manager.py   # Processing queue
+    ├── drop_zone.py       # Drag-and-drop widget
+    ├── log_display.py     # Color-coded log
+    └── video_looper.py    # FFmpeg loop wrapper
 ```
 
-## First Run Setup
+## 💰 Pricing
 
-On first launch, you'll be prompted to enter your fal.ai API key:
-```
-============================================
-  KLING UI - First Time Setup
-============================================
+Costs vary by model (check fal.ai dashboard):
+- **Kling 2.5 Turbo Pro**: ~$0.07/second = ~$0.70 per 10s video
+- **Veo 3**: Varies by duration
+- Other models have different pricing tiers
 
-Welcome! To use this tool, you need a fal.ai API key.
+## 🔧 Troubleshooting
 
-To get your API key:
-  1. Go to https://fal.ai
-  2. Create an account or sign in
-  3. Navigate to your API keys section
-  4. Create and copy your API key
-```
+### "tkinter not found"
+- Reinstall Python with the "tcl/tk and IDLE" option checked
+- Or use the CLI mode which has limited tkinter dependency
 
-Your API key is saved to `kling_config.json` and persists between sessions.
+### "tkinterdnd2 import error"
+- The batch file will attempt to reinstall automatically
+- Manual fix: `pip install --force-reinstall tkinterdnd2`
 
-## Configuration
+### "No drag-drop"
+- Fallback: Use the "Add Files..." button in GUI
+- Or use CLI mode with folder selection dialog (option 4/5)
 
-Settings stored in `kling_config.json`:
-- fal.ai API key (entered on first run)
-- Output folder path
-- Input folder with source images
-- Prompt templates (3 slots, 2 pre-configured)
-- Model selection (default: Kling 2.5 Turbo Pro)
+### "FFmpeg not found"
+- Download from https://ffmpeg.org/download.html
+- Or: `winget install FFmpeg`
+- Make sure `ffmpeg.exe` is in your PATH
 
-## Features
+### API Errors
+- Check your API key is correct
+- Verify your fal.ai account has credits
+- Check https://status.fal.ai for outages
 
-- **Batch Processing**: Generate videos from multiple images
-- **Concurrent Generation**: Process 5 videos simultaneously
-- **Duplicate Detection**: Avoid regenerating existing videos
-- **Real-time Progress**: Rich console UI with progress tracking
-- **Custom Prompts**: 3 saveable prompt slots
-- **Balance Tracking**: Monitor fal.ai API credits (optional)
+## 📝 License
 
-## Python Dependencies
+MIT License - Feel free to modify and distribute.
 
-Automatically installed to local venv:
-- `requests` - HTTP client for API calls
-- `Pillow` - Image processing
-- `rich` - Beautiful console UI
-- `selenium` - Browser automation (for balance tracking)
-- `webdriver-manager` - Automatic ChromeDriver management
+## 🙏 Credits
 
-## Troubleshooting
-
-- **"Python not found"**: Install Python 3.8+ and check "Add to PATH"
-- **"Failed to create venv"**: Ensure Python's venv module is available
-- **API errors**: Check your fal.ai API key is valid
-- **Balance tracking fails**: This feature is optional, can be disabled in UI
-
-## Cost
-
-Kling 2.5 Turbo Pro: ~$0.45 per 10-second video via fal.ai API
-
-## Distribution
-
-This folder is **100% self-contained**. To share:
-1. Zip the entire folder (excluding `venv/` and `kling_config.json` to save space)
-2. Recipients only need Python 3.8+ installed
-3. Virtual environment and config are auto-created on first run
-
-### To Clean for Distribution
-```cmd
-rmdir /s /q venv
-del kling_config.json
-```
+- **fal.ai** - AI video generation platform
+- **tkinterdnd2** - Drag-and-drop support
+- **Rich** - Beautiful terminal UI
+- **FFmpeg** - Video processing

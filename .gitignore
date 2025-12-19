@@ -32,3 +32,10 @@ nul
 # Temporary
 *.tmp
 *.temp
+tmp_run/
+
+# Session/History files
+kling_history.json
+
+# Serena MCP
+.serena/

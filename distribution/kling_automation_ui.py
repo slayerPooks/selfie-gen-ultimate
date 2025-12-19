@@ -18,7 +18,7 @@ class KlingAutomationUI:
         self.verbose_logging = self.config.get("verbose_logging", False)
         self.setup_logging()
         self.check_first_run_api_key()
-        
+
     def load_config(self) -> Dict[str, Any]:
         """Load configuration from file or create default"""
         # Default prompt slot 1 - basic head turn
@@ -44,7 +44,7 @@ class KlingAutomationUI:
         )
 
         default_config = {
-            "output_folder": os.path.join(os.path.expanduser("~"), "Downloads"),
+            "output_folder": "",  # Empty by default - user picks their own
             "use_source_folder": True,  # Default: save videos alongside source images
             "falai_api_key": "",  # Will prompt user on first run
             "verbose_logging": True,
@@ -419,6 +419,8 @@ class KlingAutomationUI:
         print(f"  \033[93m3\033[0m   Toggle verbose logging (currently: {verbose_status})")
         print(f"  \033[93m4\033[0m   Select Input Folder (GUI)")
         print(f"  \033[93m5\033[0m   Select Single Image (GUI)")
+        print(f"  \033[93m6\033[0m   Launch GUI (Drag & Drop mode)")
+        print(f"  \033[93m7\033[0m   Check Dependencies")
         print()
         print(f"  \033[96me\033[0m   Quick edit prompt")
         print(f"  \033[96mm\033[0m   Change model (\033[95m{model_name}\033[0m)")
@@ -447,7 +449,38 @@ class KlingAutomationUI:
         )
         root.destroy()
         return file_path
-    
+
+    def launch_gui(self):
+        """Launch the Tkinter GUI mode for drag-and-drop processing."""
+        try:
+            from kling_gui.main_window import KlingGUIWindow
+            print("\nLaunching GUI mode...")
+            gui = KlingGUIWindow(config_path=self.config_file)
+            gui.run()
+        except ImportError as e:
+            self.print_red(f"\nGUI module not found: {e}")
+            self.print_yellow("Make sure kling_gui package is in the same directory.")
+            input("Press Enter to continue...")
+        except Exception as e:
+            self.print_red(f"\nError launching GUI: {e}")
+            input("Press Enter to continue...")
+
+    def check_dependencies(self):
+        """Check and optionally install all required dependencies."""
+        try:
+            from dependency_checker import run_dependency_check
+            print()
+            run_dependency_check(auto_mode=False)
+            print()
+            input("Press Enter to continue...")
+        except ImportError as e:
+            self.print_red(f"\nDependency checker module not found: {e}")
+            self.print_yellow("Make sure dependency_checker.py is in the same directory.")
+            input("Press Enter to continue...")
+        except Exception as e:
+            self.print_red(f"\nError running dependency check: {e}")
+            input("Press Enter to continue...")
+
     def toggle_verbose_logging(self):
         """Toggle verbose logging on/off"""
         self.verbose_logging = not self.verbose_logging
@@ -851,6 +884,12 @@ class KlingAutomationUI:
                 selected_path = self.select_file_gui()
                 if selected_path:
                     return selected_path
+                continue
+            elif choice_lower == '6':
+                self.launch_gui()
+                continue
+            elif choice_lower == '7':
+                self.check_dependencies()
                 continue
             elif choice_lower == 'e':
                 self.quick_edit_prompt()

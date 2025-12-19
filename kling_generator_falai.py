@@ -43,7 +43,19 @@ class FalAIKlingGenerator:
 
         # Downloads folder
         self.downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
-        
+
+        # Progress callback for GUI verbose mode
+        self._progress_callback = None
+
+    def set_progress_callback(self, callback):
+        """Set a callback for progress updates (used by GUI verbose mode)."""
+        self._progress_callback = callback
+
+    def _report_progress(self, message: str, level: str = "info"):
+        """Report progress to callback if set."""
+        if self._progress_callback:
+            self._progress_callback(message, level)
+
     def upload_to_freeimage(self, image_path: str) -> Optional[str]:
         """Upload image to freeimage.host"""
         try:
@@ -54,6 +66,7 @@ class FalAIKlingGenerator:
             if img.width > max_size or img.height > max_size:
                 if self.verbose:
                     logger.info(f"Resizing from {img.width}x{img.height}")
+                self._report_progress(f"Resizing from {img.width}x{img.height}", "resize")
                 img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
             # Convert to RGB
@@ -72,7 +85,8 @@ class FalAIKlingGenerator:
             
             if self.verbose:
                 logger.info(f"Uploading {Path(image_path).name} to freeimage.host...")
-            
+            self._report_progress(f"Uploading {Path(image_path).name} to freeimage.host...", "upload")
+
             response = requests.post(
                 "https://freeimage.host/api/1/upload",
                 data={
@@ -90,6 +104,7 @@ class FalAIKlingGenerator:
                     url = result['image']['url']
                     if self.verbose:
                         logger.info(f"✓ Uploaded: {url}")
+                    self._report_progress(f"✓ Uploaded: {url}", "upload")
                     return url
             
             logger.error(f"Upload failed: {response.status_code}")
@@ -282,7 +297,9 @@ class FalAIKlingGenerator:
             if self.verbose:
                 logger.info(f"✓ Task created: {request_id}")
                 logger.info("Waiting for video generation...")
-            
+            self._report_progress(f"✓ Task created: {request_id}", "task")
+            self._report_progress("Waiting for video generation...", "progress")
+
             # Poll for completion with exponential backoff
             # Use the status_url provided by fal.ai (already authenticated)
             max_attempts = 240  # 20 minutes total (increased from 15)
@@ -307,9 +324,11 @@ class FalAIKlingGenerator:
                 attempt += 1
                 
                 # Show progress every minute
-                if self.verbose and attempt % (60 // base_delay) == 0:
+                if attempt % (60 // base_delay) == 0:
                     elapsed_mins = (attempt * base_delay) // 60
-                    logger.info(f"⏳ Still waiting... {elapsed_mins} min elapsed (attempt {attempt}/{max_attempts})")
+                    if self.verbose:
+                        logger.info(f"⏳ Still waiting... {elapsed_mins} min elapsed (attempt {attempt}/{max_attempts})")
+                    self._report_progress(f"⏳ Still waiting... {elapsed_mins} min elapsed", "progress")
                 
                 try:
                     # fal.ai status endpoint requires Authorization header
@@ -406,7 +425,8 @@ class FalAIKlingGenerator:
                         
                         if self.verbose:
                             logger.info(f"✓ Video ready: {video_url}")
-                        
+                        self._report_progress(f"✓ Video ready - downloading...", "download")
+
                         # Download video with retry logic
                         max_download_retries = 3
                         for download_attempt in range(max_download_retries):
@@ -428,13 +448,15 @@ class FalAIKlingGenerator:
                                 with open(output_path, 'wb') as f:
                                     f.write(video_response.content)
                                 
+                                file_size = output_path.stat().st_size / (1024 * 1024)
+                                total_time = attempt * base_delay
                                 if self.verbose:
                                     logger.info(f"✓ Video saved: {output_path}")
-                                    file_size = output_path.stat().st_size / (1024 * 1024)
                                     logger.info(f"✓ File size: {file_size:.2f} MB")
-                                    total_time = attempt * base_delay
                                     logger.info(f"✓ Total generation time: {total_time // 60}m {total_time % 60}s")
-                                
+                                self._report_progress(f"✓ File size: {file_size:.2f} MB", "download")
+                                self._report_progress(f"✓ Total generation time: {total_time // 60}m {total_time % 60}s", "success")
+
                                 return str(output_path)
                             
                             except Exception as download_error:

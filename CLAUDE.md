@@ -35,7 +35,7 @@ pip install requests pillow rich selenium webdriver-manager tkinterdnd2
 | File | Purpose |
 |------|---------|
 | `kling_automation_ui.py` | CLI menu system (`KlingAutomationUI` class) |
-| `kling_generator_falai.py` | fal.ai API integration (`FalAIKlingGenerator` class) |
+| `kling_generator_falai.py` | fal.ai API integration with progress callbacks |
 | `dependency_checker.py` | Checks/installs Python packages and external tools |
 | `kling_config.json` | Persistent configuration (auto-generated) |
 
@@ -53,12 +53,12 @@ Balance tracking uses a persistent Chrome profile (`chrome_profile/`) to save lo
 | Module | Class | Purpose |
 |--------|-------|---------|
 | `main_window.py` | `KlingGUIWindow` | Main Tkinter window, assembles all components |
-| `config_panel.py` | `ConfigPanel` | Model/output/prompt settings widget |
+| `config_panel.py` | `ConfigPanel` | Model/output/prompt settings + verbose toggle |
 | `config_panel.py` | `PromptEditorDialog` | Modal dialog for editing prompts |
 | `queue_manager.py` | `QueueManager` | Thread-safe processing queue with worker thread |
 | `queue_manager.py` | `QueueItem` | Dataclass for queue items with status tracking |
-| `drop_zone.py` | `DropZone` | Drag-and-drop widget (uses tkinterdnd2) |
-| `log_display.py` | `LogDisplay` | Color-coded scrolling log widget |
+| `drop_zone.py` | `DropZone` | Drag-and-drop + click-to-browse widget (tkinterdnd2) |
+| `log_display.py` | `LogDisplay` | Color-coded scrolling log widget with verbose tags |
 | `video_looper.py` | `create_looped_video()` | FFmpeg ping-pong loop effect |
 
 ### Distribution Package (`distribution/`)
@@ -94,7 +94,7 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
 ```json
 {
   "falai_api_key": "",
-  "output_folder": "~/Downloads",
+  "output_folder": "",
   "use_source_folder": true,
   "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
   "model_display_name": "Kling 2.5 Turbo Pro",
@@ -105,11 +105,15 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
   "allow_reprocess": true,
   "reprocess_mode": "increment",
   "verbose_logging": true,
+  "verbose_gui_mode": false,
   "duplicate_detection": true
 }
 ```
 
-**Default Prompts**: Slot 1 = basic head turn, Slot 2 = enhanced lifelike animation (recommended)
+**Configuration Notes**:
+- `output_folder`: Defaults to empty - user picks their own folder (saved between sessions)
+- `verbose_gui_mode`: Enables detailed CLI-like output in GUI log panel
+- **Default Prompts**: Slot 1 = basic head turn, Slot 2 = enhanced lifelike animation (recommended)
 
 ### Key Implementation Details
 
@@ -124,10 +128,42 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
 - Callbacks update UI via `set_callback()`
 - Suppresses all Selenium/WebDriver logging to prevent console spam
 
+**Verbose GUI Mode** (`config_panel.py`, `queue_manager.py`, `kling_generator_falai.py`):
+- Toggle in config panel enables detailed logging
+- Progress callback pattern: generator → queue_manager → log_display
+- Color-coded message levels: upload, task, progress, debug, resize, download, api
+- Displays: image resize info, upload progress, task IDs, polling status, download progress, file sizes, generation times
+
+**Click-to-Browse** (`drop_zone.py`):
+- Drop zone is clickable (in addition to drag-and-drop)
+- Opens file dialog for image selection
+- Supports multi-select with same file type validation
+
+**Log Display Colors** (`log_display.py`):
+```python
+# Standard levels
+"info": "#E0E0E0"       # Light gray
+"success": "#00FF88"    # Bright green
+"error": "#FF6B6B"      # Coral red
+"warning": "#FFD93D"    # Yellow
+
+# Verbose mode levels
+"upload": "#00CED1"     # Dark cyan
+"task": "#87CEEB"       # Sky blue
+"progress": "#FFD700"   # Gold
+"debug": "#808080"      # Gray
+"resize": "#DDA0DD"     # Plum
+"download": "#98FB98"   # Pale green
+"api": "#DA70D6"        # Orchid
+```
+
 **Reprocessing Modes**:
 - `allow_reprocess: false` → Skip existing videos
 - `reprocess_mode: "overwrite"` → Delete and regenerate
 - `reprocess_mode: "increment"` → Save as `_kling_2.mp4`, `_kling_3.mp4`
+
+**Output Folder Fallback**:
+- If custom output folder is empty/invalid and "Use Source Folder" is unchecked, falls back to source folder with warning
 
 **Valid Image Extensions**: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.gif`, `.tiff`, `.tif`
 
@@ -138,3 +174,37 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
 - **Concurrency**: Max 5 parallel generations
 - **Format**: 9:16 aspect ratio, 10 seconds duration
 - **Cost**: ~$0.45-0.70 per 10-second video (varies by model)
+
+### Progress Callback Pattern
+
+The generator supports a progress callback for verbose GUI logging:
+
+```python
+# In queue_manager.py
+def progress_callback(message: str, level: str = "info"):
+    self.log_verbose(message, level)
+
+if config.get("verbose_gui_mode", False):
+    self.generator.set_progress_callback(progress_callback)
+
+# In kling_generator_falai.py
+def set_progress_callback(self, callback):
+    """Set a callback for progress updates (used by GUI verbose mode)."""
+    self._progress_callback = callback
+
+def _report_progress(self, message: str, level: str = "info"):
+    """Report progress to callback if set."""
+    if self._progress_callback:
+        self._progress_callback(message, level)
+
+# Called at key points: resize, upload, task creation, polling, download
+```
+
+### Recent Changes (Dec 2024)
+
+- **Empty Default Output Folder**: No longer pre-fills `~/Downloads` - starts blank, remembers user's choice
+- **Verbose GUI Mode**: Checkbox toggle for detailed CLI-like output in GUI
+- **Color-Coded Log Levels**: 7 additional color tags for verbose messages
+- **Click-to-Browse**: Drop zone is clickable to open file explorer dialog
+- **Progress Callbacks**: Generator reports detailed progress to GUI when verbose mode enabled
+- **Fallback Logic**: Uses source folder when custom output folder is empty/invalid
