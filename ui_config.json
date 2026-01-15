@@ -1,0 +1,45 @@
+{
+  "_comment": "UI Layout Configuration - Edit and reload with F5",
+  
+  "window": {
+    "width": 1100,
+    "height": 1200,
+    "min_width": 800,
+    "min_height": 900
+  },
+  
+  "config_panel": {
+    "prompt_preview_height": 6,
+    "prompt_preview_font_size": 9,
+    "prompt_preview_width": 40,
+    "slot_button_grid": [2, 5],
+    "negative_prompt_height": 3
+  },
+  
+  "drop_zone": {
+    "height": 200
+  },
+  
+  "queue_panel": {
+    "width": 280
+  },
+  
+  "history_panel": {
+    "height": 220,
+    "visible_rows": 6
+  },
+  
+  "sash_positions": {
+    "dropzone": 180,
+    "queue": 300,
+    "log": 380
+  },
+  
+  "debug": {
+    "enabled": true,
+    "show_dimensions": true,
+    "inspector_hotkey": "F12",
+    "reload_hotkey": "F5",
+    "right_click_inspect": true
+  }
+}
