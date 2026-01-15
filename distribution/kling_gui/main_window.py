@@ -8,9 +8,10 @@ import json
 import os
 import sys
 import logging
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
 # Import path utilities
@@ -24,9 +25,12 @@ from .queue_manager import QueueManager, QueueItem
 # Try to import the generator
 try:
     from kling_generator_falai import FalAIKlingGenerator
+
     HAS_GENERATOR = True
 except ImportError:
     HAS_GENERATOR = False
+    if TYPE_CHECKING:
+        from kling_generator_falai import FalAIKlingGenerator
 
 
 # Color palette
@@ -45,13 +49,15 @@ COLORS = {
 }
 
 # Valid image extensions for folder scanning
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif'}
+VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
 
 
 class FolderPreviewDialog(tk.Toplevel):
     """Dialog showing matched files before adding to queue."""
 
-    def __init__(self, parent, files: List[str], folder: str, pattern: str, match_mode: str):
+    def __init__(
+        self, parent, files: List[str], folder: str, pattern: str, match_mode: str
+    ):
         super().__init__(parent)
         self.title("Folder Processing Preview")
         self.result = None  # True = proceed, None = cancel
@@ -70,7 +76,7 @@ class FolderPreviewDialog(tk.Toplevel):
             text=f"Found {len(files)} matching images",
             font=("Segoe UI", 14, "bold"),
             bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"]
+            fg=COLORS["text_light"],
         ).pack(pady=(15, 5))
 
         # Info frame
@@ -83,7 +89,7 @@ class FolderPreviewDialog(tk.Toplevel):
             font=("Segoe UI", 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
-            anchor="w"
+            anchor="w",
         ).pack(fill=tk.X)
 
         mode_text = "exact name" if match_mode == "exact" else "contains"
@@ -93,7 +99,7 @@ class FolderPreviewDialog(tk.Toplevel):
             font=("Segoe UI", 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["accent_blue"],
-            anchor="w"
+            anchor="w",
         ).pack(fill=tk.X)
 
         # File list with scrollbar
@@ -111,7 +117,7 @@ class FolderPreviewDialog(tk.Toplevel):
             selectbackground=COLORS["accent_blue"],
             yscrollcommand=scrollbar.set,
             borderwidth=0,
-            highlightthickness=0
+            highlightthickness=0,
         )
         self.file_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.file_list.yview)
@@ -135,7 +141,7 @@ class FolderPreviewDialog(tk.Toplevel):
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             width=12,
-            command=self._cancel
+            command=self._cancel,
         ).pack(side=tk.RIGHT, padx=5)
 
         tk.Button(
@@ -145,7 +151,7 @@ class FolderPreviewDialog(tk.Toplevel):
             bg=COLORS["btn_green"],
             fg="white",
             width=18,
-            command=self._proceed
+            command=self._proceed,
         ).pack(side=tk.RIGHT, padx=5)
 
         # Center on parent
@@ -168,7 +174,7 @@ class FolderPreviewDialog(tk.Toplevel):
 class KlingGUIWindow:
     """Main GUI window for Kling video generation."""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         """
         Initialize the GUI window.
 
@@ -183,16 +189,18 @@ class KlingGUIWindow:
         else:
             # Relative path - make it relative to app dir
             self.config_path = os.path.join(get_app_dir(), config_path)
-        
+
         self.config = self._load_config()
         # History file in same directory as config
-        self.history_path = os.path.join(os.path.dirname(self.config_path), "kling_history.json")
-        
+        self.history_path = os.path.join(
+            os.path.dirname(self.config_path), "kling_history.json"
+        )
+
         # Set up logging BEFORE anything that might call _log()
         self.logger = self._setup_logging()
-        
+
         self.history: List[dict] = self._load_history()
-        self.generator: Optional[FalAIKlingGenerator] = None
+        self.generator: Optional["FalAIKlingGenerator"] = None
         self.queue_manager: Optional[QueueManager] = None
 
         # Create root window with DnD support if available
@@ -206,10 +214,10 @@ class KlingGUIWindow:
             try:
                 self.root.geometry(saved_geometry)
             except Exception:
-                self.root.geometry("900x1080")
+                self.root.geometry("1100x1200")
         else:
-            self.root.geometry("900x1080")
-        self.root.minsize(700, 900)
+            self.root.geometry("1100x1200")
+        self.root.minsize(800, 900)
 
         # Set up the UI
         self._setup_ui()
@@ -237,7 +245,7 @@ class KlingGUIWindow:
                 log_file,
                 maxBytes=int(self.config.get("log_max_mb", 5) * 1024 * 1024),
                 backupCount=int(self.config.get("log_backups", 3)),
-                encoding="utf-8"
+                encoding="utf-8",
             )
             fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
             handler.setFormatter(fmt)
@@ -271,14 +279,14 @@ class KlingGUIWindow:
             "folder_match_mode": "partial",  # "partial" or "exact"
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
-            "sash_dropzone": 200,   # Height of drop zone pane
-            "sash_queue": 280,      # Width of queue pane
-            "sash_log": 350,        # Height of log pane (before history)
+            "sash_dropzone": 180,  # Height of drop zone pane
+            "sash_queue": 300,  # Width of queue pane
+            "sash_log": 380,  # Height of log pane (before history)
         }
 
         try:
             if os.path.exists(self.config_path):
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                     # Merge with defaults
                     default_config.update(loaded)
@@ -290,7 +298,7 @@ class KlingGUIWindow:
     def _save_config(self):
         """Save configuration to JSON file."""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
             self._log(f"Error saving config: {e}", "error")
@@ -317,23 +325,33 @@ class KlingGUIWindow:
         """Set up the main UI layout with resizable panes."""
         # Style configuration
         style = ttk.Style()
-        style.theme_use('clam')
-        style.configure("TCombobox", fieldbackground=COLORS["bg_input"],
-                       background=COLORS["bg_panel"], foreground=COLORS["text_light"])
+        style.theme_use("clam")
+        style.configure(
+            "TCombobox",
+            fieldbackground=COLORS["bg_input"],
+            background=COLORS["bg_panel"],
+            foreground=COLORS["text_light"],
+        )
 
         # Dark theme for Treeview (PROCESSED VIDEOS section)
-        style.configure("Treeview",
-                       background=COLORS["bg_panel"],
-                       foreground=COLORS["text_light"],
-                       fieldbackground=COLORS["bg_panel"],
-                       borderwidth=0)
-        style.configure("Treeview.Heading",
-                       background=COLORS["bg_input"],
-                       foreground=COLORS["text_light"],
-                       borderwidth=1)
-        style.map("Treeview",
-                  background=[("selected", COLORS["accent_blue"])],
-                  foreground=[("selected", "white")])
+        style.configure(
+            "Treeview",
+            background=COLORS["bg_panel"],
+            foreground=COLORS["text_light"],
+            fieldbackground=COLORS["bg_panel"],
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=COLORS["bg_input"],
+            foreground=COLORS["text_light"],
+            borderwidth=1,
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", COLORS["accent_blue"])],
+            foreground=[("selected", "white")],
+        )
 
         # Dark theme for PanedWindow sash (drag handles)
         style.configure("TPanedwindow", background=COLORS["bg_main"])
@@ -348,9 +366,7 @@ class KlingGUIWindow:
 
         # Config panel at top (not resizable)
         self.config_panel = ConfigPanel(
-            main_frame,
-            config=self.config,
-            on_config_changed=self._on_config_changed
+            main_frame, config=self.config, on_config_changed=self._on_config_changed
         )
         self.config_panel.pack(fill=tk.X, pady=(0, 5))
 
@@ -361,7 +377,7 @@ class KlingGUIWindow:
             bg=COLORS["bg_input"],
             sashwidth=6,
             sashrelief=tk.RAISED,
-            sashpad=1
+            sashpad=1,
         )
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
@@ -370,7 +386,7 @@ class KlingGUIWindow:
         self.drop_zone = DropZone(
             drop_frame,
             on_files_dropped=self._on_files_dropped,
-            on_folder_dropped=self._on_folder_dropped
+            on_folder_dropped=self._on_folder_dropped,
         )
         self.drop_zone.pack(fill=tk.BOTH, expand=True)
         self.main_paned.add(drop_frame, minsize=100)
@@ -382,7 +398,7 @@ class KlingGUIWindow:
             bg=COLORS["bg_input"],
             sashwidth=6,
             sashrelief=tk.RAISED,
-            sashpad=1
+            sashpad=1,
         )
         self.main_paned.add(self.bottom_paned, minsize=200)
 
@@ -398,7 +414,7 @@ class KlingGUIWindow:
             bg=COLORS["bg_input"],
             sashwidth=6,
             sashrelief=tk.RAISED,
-            sashpad=1
+            sashpad=1,
         )
         self.bottom_paned.add(self.right_paned, minsize=200)
 
@@ -427,7 +443,7 @@ class KlingGUIWindow:
             text="🎬 FAL.AI VIDEO GENERATOR - GUI MODE",
             font=("Segoe UI", 12, "bold"),
             bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"]
+            fg=COLORS["text_light"],
         )
         title.pack(side=tk.LEFT, padx=10, pady=8)
 
@@ -438,10 +454,12 @@ class KlingGUIWindow:
             font=("Segoe UI", 9, "underline"),
             bg=COLORS["bg_panel"],
             fg=COLORS["accent_blue"],
-            cursor="hand2"
+            cursor="hand2",
         )
         balance_link.pack(side=tk.RIGHT, padx=10, pady=8)
-        balance_link.bind("<Button-1>", lambda e: os.startfile("https://fal.ai/dashboard"))
+        balance_link.bind(
+            "<Button-1>", lambda e: webbrowser.open("https://fal.ai/dashboard")
+        )
 
         # DnD status
         dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
@@ -451,7 +469,7 @@ class KlingGUIWindow:
             text=dnd_status,
             font=("Segoe UI", 8),
             bg=COLORS["bg_panel"],
-            fg=dnd_color
+            fg=dnd_color,
         )
         dnd_label.pack(side=tk.RIGHT, padx=10, pady=8)
 
@@ -463,7 +481,7 @@ class KlingGUIWindow:
             text="📋 QUEUE (0/50)",
             font=("Segoe UI", 10, "bold"),
             bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"]
+            fg=COLORS["text_light"],
         )
         self.queue_header.pack(fill=tk.X, padx=5, pady=(5, 2))
 
@@ -483,7 +501,7 @@ class KlingGUIWindow:
             selectforeground="white",
             yscrollcommand=scrollbar.set,
             borderwidth=0,
-            highlightthickness=0
+            highlightthickness=0,
         )
         self.queue_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.queue_listbox.yview)
@@ -499,20 +517,29 @@ class KlingGUIWindow:
         header.pack(fill=tk.X, padx=5, pady=(4, 2))
 
         tk.Label(
-            header, text="🎞️ PROCESSED VIDEOS", font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_panel"], fg=COLORS["text_light"]
+            header,
+            text="🎞️ PROCESSED VIDEOS",
+            font=("Segoe UI", 10, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
 
         btn_frame = tk.Frame(header, bg=COLORS["bg_panel"])
         btn_frame.pack(side=tk.RIGHT)
 
-        ttk.Button(btn_frame, text="Open File", command=self._open_selected_file).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Open Folder", command=self._open_selected_folder).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Refresh", command=self._refresh_history_view).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Open File", command=self._open_selected_file).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Button(
+            btn_frame, text="Open Folder", command=self._open_selected_folder
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Refresh", command=self._refresh_history_view).pack(
+            side=tk.LEFT, padx=2
+        )
 
         columns = ("time", "source", "output", "status")
         self.history_tree = ttk.Treeview(
-            panel, columns=columns, show="headings", height=6, selectmode="browse"
+            panel, columns=columns, show="headings", height=8, selectmode="browse"
         )
         for col, text, width in [
             ("time", "Time", 110),
@@ -523,10 +550,14 @@ class KlingGUIWindow:
             self.history_tree.heading(col, text=text)
             self.history_tree.column(col, width=width, anchor=tk.W)
 
-        scrollbar = ttk.Scrollbar(panel, orient="vertical", command=self.history_tree.yview)
+        scrollbar = ttk.Scrollbar(
+            panel, orient="vertical", command=self.history_tree.yview
+        )
         self.history_tree.configure(yscrollcommand=scrollbar.set)
 
-        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=(0, 5))
+        self.history_tree.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=(0, 5)
+        )
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=(0, 5))
 
         self.history_tree.bind("<Double-1>", lambda e: self._open_selected_file())
@@ -547,7 +578,7 @@ class KlingGUIWindow:
                 font=("Segoe UI", 10),
                 bg=COLORS["btn_green"],
                 fg="white",
-                command=self._browse_files
+                command=self._browse_files,
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
@@ -558,7 +589,7 @@ class KlingGUIWindow:
             font=("Segoe UI", 10),
             bg=COLORS["btn_red"],
             fg="white",
-            command=self._on_close
+            command=self._on_close,
         )
         self.close_btn.pack(side=tk.RIGHT, padx=5)
 
@@ -568,7 +599,7 @@ class KlingGUIWindow:
             font=("Segoe UI", 10),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
-            command=self._clear_queue
+            command=self._clear_queue,
         )
         self.clear_btn.pack(side=tk.RIGHT, padx=5)
 
@@ -578,7 +609,7 @@ class KlingGUIWindow:
             font=("Segoe UI", 10),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
-            command=self._retry_failed
+            command=self._retry_failed,
         )
         self.retry_btn.pack(side=tk.RIGHT, padx=5)
 
@@ -588,14 +619,16 @@ class KlingGUIWindow:
             font=("Segoe UI", 10),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
-            command=self._toggle_pause
+            command=self._toggle_pause,
         )
         self.pause_btn.pack(side=tk.RIGHT, padx=5)
 
     def _init_generator(self):
         """Initialize the video generator and queue manager."""
         if not HAS_GENERATOR:
-            self._log("Generator not available - check kling_generator_falai.py", "error")
+            self._log(
+                "Generator not available - check kling_generator_falai.py", "error"
+            )
             return
 
         api_key = self.config.get("falai_api_key", "")
@@ -609,7 +642,7 @@ class KlingGUIWindow:
                 verbose=self.config.get("verbose_logging", True),
                 model_endpoint=self.config.get("current_model"),
                 model_display_name=self.config.get("model_display_name"),
-                prompt_slot=self.config.get("current_prompt_slot", 1)
+                prompt_slot=self.config.get("current_prompt_slot", 1),
             )
 
             self.queue_manager = QueueManager(
@@ -617,7 +650,7 @@ class KlingGUIWindow:
                 config_getter=lambda: self.config,
                 log_callback=self._log_thread_safe,
                 queue_update_callback=self._update_queue_display_thread_safe,
-                processing_complete_callback=self._on_item_complete
+                processing_complete_callback=self._on_item_complete,
             )
 
             self._log("Generator initialized successfully", "success")
@@ -627,7 +660,7 @@ class KlingGUIWindow:
 
     def _log(self, message: str, level: str = "info"):
         """Log a message to the log display."""
-        if hasattr(self, 'log_display'):
+        if hasattr(self, "log_display"):
             self.log_display.log(message, level)
         if self.logger:
             level_map = {
@@ -661,7 +694,7 @@ class KlingGUIWindow:
                     "pending": "⏳",
                     "processing": "🔄",
                     "completed": "✅",
-                    "failed": "❌"
+                    "failed": "❌",
                 }.get(item.status, "?")
 
                 display = f"{status_icon} {item.filename}"
@@ -681,16 +714,21 @@ class KlingGUIWindow:
         self.history_tree.delete(*self.history_tree.get_children())
         for entry in reversed(self.history[-200:]):  # show recent first
             status = entry.get("status", "")
-            tag = "success" if status == "completed" else ("error" if status == "failed" else "")
+            tag = (
+                "success"
+                if status == "completed"
+                else ("error" if status == "failed" else "")
+            )
             self.history_tree.insert(
-                "", tk.END,
+                "",
+                tk.END,
                 values=(
                     entry.get("time", ""),
                     os.path.basename(entry.get("source", "")),
                     entry.get("output", ""),
                     status,
                 ),
-                tags=(tag,)
+                tags=(tag,),
             )
         # color tags
         self.history_tree.tag_configure("success", foreground=COLORS["success"])
@@ -711,11 +749,31 @@ class KlingGUIWindow:
         except Exception:
             return None
 
+    def _open_path_in_explorer(self, path: str):
+        """Open a file or folder in the system's native file explorer.
+
+        Uses platform-specific methods for reliable local file/folder opening.
+        webbrowser.open() is unreliable for local paths on some systems.
+        """
+        import platform
+        import subprocess
+
+        system = platform.system()
+        try:
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", path], check=True)
+            else:  # Linux and others
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self._log(f"Could not open {path}: {e}", "error")
+
     def _open_selected_file(self):
         entry = self._get_selected_history()
         path = entry.get("output") if entry else None
         if path and os.path.exists(path):
-            os.startfile(path)
+            self._open_path_in_explorer(path)
         elif entry and entry.get("output"):
             self._log(f"File not found: {entry['output']}", "warning")
 
@@ -727,7 +785,7 @@ class KlingGUIWindow:
         if path:
             folder = os.path.dirname(path)
             if folder and os.path.exists(folder):
-                os.startfile(folder)
+                self._open_path_in_explorer(folder)
                 return
         self._log("No folder to open for selection", "warning")
 
@@ -743,7 +801,9 @@ class KlingGUIWindow:
             if success:
                 added += 1
             else:
-                self._log(f"Skipped: {os.path.basename(file_path)} - {message}", "warning")
+                self._log(
+                    f"Skipped: {os.path.basename(file_path)} - {message}", "warning"
+                )
 
         if added > 0:
             self._log(f"Added {added} file(s) to queue", "success")
@@ -763,17 +823,17 @@ class KlingGUIWindow:
             pattern = simpledialog.askstring(
                 "Pattern Required",
                 "Enter a filename pattern to filter images (e.g. 'selfie'):",
-                parent=self.root
+                parent=self.root,
             )
-            
+
             if not pattern:
                 self._log("Folder processing cancelled: No pattern provided", "info")
                 return
-            
+
             # Update config and UI
             pattern = pattern.strip()
             self.config["folder_filter_pattern"] = pattern
-            if hasattr(self, 'config_panel'):
+            if hasattr(self, "config_panel"):
                 self.config_panel.folder_pattern_var.set(pattern)
             self._save_config()
 
@@ -788,14 +848,16 @@ class KlingGUIWindow:
                 "No Matches",
                 f"No images found {mode_text} '{pattern}' in:\n{folder_path}\n\n"
                 f"Pattern mode: {match_mode}\n"
-                f"Searched recursively through all subfolders."
+                f"Searched recursively through all subfolders.",
             )
             return
 
         # Show preview dialog
         self._show_folder_preview_dialog(matches, folder_path, pattern, match_mode)
 
-    def _scan_folder_for_images(self, folder_path: str, pattern: str, match_mode: str) -> List[str]:
+    def _scan_folder_for_images(
+        self, folder_path: str, pattern: str, match_mode: str
+    ) -> List[str]:
         """
         Recursively scan folder for images matching pattern.
 
@@ -836,26 +898,40 @@ class KlingGUIWindow:
 
         return sorted(matches)
 
-    def _show_folder_preview_dialog(self, files: List[str], folder: str, pattern: str, match_mode: str):
+    def _show_folder_preview_dialog(
+        self, files: List[str], folder: str, pattern: str, match_mode: str
+    ):
         """Show preview dialog and add files to queue if confirmed."""
         dialog = FolderPreviewDialog(self.root, files, folder, pattern, match_mode)
 
         if dialog.result:
-            # Add all files to queue
-            added = 0
-            skipped = 0
-            for file_path in files:
-                success, msg = self.queue_manager.add_to_queue(file_path)
-                if success:
-                    added += 1
-                else:
-                    skipped += 1
+            if self.queue_manager:
+                # Add all files to queue
+                added = 0
+                skipped = 0
+                for file_path in files:
+                    success, msg = self.queue_manager.add_to_queue(file_path)
+                    if success:
+                        added += 1
+                    else:
+                        skipped += 1
 
-            self._log(f"Added {added} images from folder to queue", "success")
-            if skipped > 0:
-                self._log(f"Skipped {skipped} (already in queue or duplicates)", "info")
+                self._log(f"Added {added} images from folder to queue", "success")
+                if skipped > 0:
+                    self._log(
+                        f"Skipped {skipped} (already in queue or duplicates)", "info"
+                    )
+            else:
+                # Warn user that files weren't added
+                self._log(
+                    "Folder preview confirmed, but items were not added because the "
+                    "queue/generator is not initialized yet.",
+                    "warning",
+                )
 
-    def _on_config_changed(self, new_config: dict, change_description: str = None):
+    def _on_config_changed(
+        self, new_config: dict, change_description: Optional[str] = None
+    ):
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
         self._save_config()
@@ -866,14 +942,21 @@ class KlingGUIWindow:
             if self.queue_manager and self.queue_manager.is_running:
                 # Processing is active - don't update generator mid-run
                 # Changes will apply to the next job (config is already saved)
-                if change_description:
-                    self._log(f"{change_description} (will apply to next job)", "warning")
+                msg = (
+                    f"{change_description} (will apply to next job)"
+                    if change_description
+                    else "Settings changed (will apply to next job)"
+                )
+                self._log(msg, "warning")
                 return
             else:
                 # Safe to update generator
                 self.generator.update_model(
-                    self.config.get("current_model"),
-                    self.config.get("model_display_name")
+                    str(self.config.get("current_model", "")),
+                    str(self.config.get("model_display_name", "")),
+                )
+                self.generator.update_prompt_slot(
+                    int(self.config.get("current_prompt_slot", 1))
                 )
 
         # Log the specific change if description provided
@@ -898,16 +981,24 @@ class KlingGUIWindow:
         self._refresh_history_view()
 
         if status == "completed" and item.output_path:
-            self._log(f"Finished {os.path.basename(item.path)} → {item.output_path}", "success")
+            self._log(
+                f"Finished {os.path.basename(item.path)} → {item.output_path}",
+                "success",
+            )
         elif status == "failed":
-            self._log(f"Failed {os.path.basename(item.path)}: {item.error_message}", "error")
+            self._log(
+                f"Failed {os.path.basename(item.path)}: {item.error_message}", "error"
+            )
 
         # Sync generator with latest config when queue becomes empty
         # This ensures any settings changed during processing take effect for next run
         if self.queue_manager and not self.queue_manager.is_running and self.generator:
             self.generator.update_model(
-                self.config.get("current_model"),
-                self.config.get("model_display_name")
+                str(self.config.get("current_model", "")),
+                str(self.config.get("model_display_name", "")),
+            )
+            self.generator.update_prompt_slot(
+                int(self.config.get("current_prompt_slot", 1))
             )
 
     def _toggle_pause(self):
@@ -952,8 +1043,7 @@ class KlingGUIWindow:
     def _browse_files(self):
         """Open chooser to add files or a folder (fallback for no DnD)."""
         choice = messagebox.askyesnocancel(
-            "Add Items",
-            "Add a folder?\n\nYes = Folder\nNo = Files"
+            "Add Items", "Add a folder?\n\nYes = Folder\nNo = Files"
         )
         if choice is None:
             return
@@ -968,8 +1058,8 @@ class KlingGUIWindow:
             title="Select Images",
             filetypes=[
                 ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tiff *.tif"),
-                ("All files", "*.*")
-            ]
+                ("All files", "*.*"),
+            ],
         )
         if files:
             self._on_files_dropped(list(files))
@@ -977,21 +1067,21 @@ class KlingGUIWindow:
     def _restore_sash_positions(self):
         """Restore saved sash positions for all PanedWindows."""
         try:
-            # Get saved positions from config
-            dropzone_pos = self.config.get("sash_dropzone", 200)
-            queue_pos = self.config.get("sash_queue", 280)
-            log_pos = self.config.get("sash_log", 350)
+            # Get saved positions from config (with new defaults)
+            dropzone_pos = self.config.get("sash_dropzone", 180)
+            queue_pos = self.config.get("sash_queue", 300)
+            log_pos = self.config.get("sash_log", 380)
 
             # Restore main paned (drop zone height)
-            if hasattr(self, 'main_paned'):
+            if hasattr(self, "main_paned"):
                 self.main_paned.sash_place(0, 0, dropzone_pos)
 
             # Restore bottom paned (queue width)
-            if hasattr(self, 'bottom_paned'):
+            if hasattr(self, "bottom_paned"):
                 self.bottom_paned.sash_place(0, queue_pos, 0)
 
             # Restore right paned (log height)
-            if hasattr(self, 'right_paned'):
+            if hasattr(self, "right_paned"):
                 self.right_paned.sash_place(0, 0, log_pos)
 
         except Exception as e:
@@ -1005,27 +1095,33 @@ class KlingGUIWindow:
             self.config["window_geometry"] = self.root.geometry()
 
             # Save sash positions
-            if hasattr(self, 'main_paned'):
+            if hasattr(self, "main_paned"):
                 try:
                     sash_pos = self.main_paned.sash_coord(0)
                     if sash_pos:
-                        self.config["sash_dropzone"] = sash_pos[1]  # Y position for vertical paned
+                        self.config["sash_dropzone"] = sash_pos[
+                            1
+                        ]  # Y position for vertical paned
                 except Exception:
                     pass
 
-            if hasattr(self, 'bottom_paned'):
+            if hasattr(self, "bottom_paned"):
                 try:
                     sash_pos = self.bottom_paned.sash_coord(0)
                     if sash_pos:
-                        self.config["sash_queue"] = sash_pos[0]  # X position for horizontal paned
+                        self.config["sash_queue"] = sash_pos[
+                            0
+                        ]  # X position for horizontal paned
                 except Exception:
                     pass
 
-            if hasattr(self, 'right_paned'):
+            if hasattr(self, "right_paned"):
                 try:
                     sash_pos = self.right_paned.sash_coord(0)
                     if sash_pos:
-                        self.config["sash_log"] = sash_pos[1]  # Y position for vertical paned
+                        self.config["sash_log"] = sash_pos[
+                            1
+                        ]  # Y position for vertical paned
                 except Exception:
                     pass
 
@@ -1037,7 +1133,7 @@ class KlingGUIWindow:
         if self.queue_manager and self.queue_manager.is_running:
             if not messagebox.askyesno(
                 "Confirm Close",
-                "Processing is in progress. Are you sure you want to close?"
+                "Processing is in progress. Are you sure you want to close?",
             ):
                 return
 
@@ -1050,7 +1146,7 @@ class KlingGUIWindow:
 
         # Clean up tkinter variables before destroying root to prevent
         # "main thread is not in main loop" errors on Python 3.14+
-        if hasattr(self, 'config_panel') and self.config_panel:
+        if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.cleanup()
 
         # Process any pending events and quit mainloop before destroy
@@ -1071,48 +1167,50 @@ class KlingGUIWindow:
 def write_crash_log(error_type: str, error_msg: str, traceback_str: str):
     """Write crash information to a log file for debugging."""
     from datetime import datetime
+
     crash_log_path = get_crash_log_path()
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     crash_info = f"""
-{'='*60}
+{"=" * 60}
 CRASH REPORT (GUI) - {timestamp}
-{'='*60}
+{"=" * 60}
 Error Type: {error_type}
 Error Message: {error_msg}
 
 Full Traceback:
 {traceback_str}
-{'='*60}
+{"=" * 60}
 
 """
     try:
         # Append to crash log (keep history)
-        with open(crash_log_path, 'a', encoding='utf-8') as f:
+        with open(crash_log_path, "a", encoding="utf-8") as f:
             f.write(crash_info)
         print(f"\n[Crash log saved to: {crash_log_path}]")
     except Exception as log_error:
         print(f"[Could not write crash log: {log_error}]")
 
 
-def launch_gui(config_path: str = None):
+def launch_gui(config_path: Optional[str] = None):
     """Launch the GUI window with crash handling."""
     import traceback
 
     try:
         window = KlingGUIWindow(config_path=config_path)
+
         window.run()
     except Exception as e:
         tb_str = traceback.format_exc()
 
         # Print full error to console
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("  FATAL ERROR - GUI Crashed")
-        print("="*60)
+        print("=" * 60)
         print(f"\nError: {type(e).__name__}: {e}")
         print("\nFull traceback:")
         print(tb_str)
-        print("="*60)
+        print("=" * 60)
 
         # Write to crash log file
         write_crash_log(type(e).__name__, str(e), tb_str)
@@ -1127,4 +1225,5 @@ if __name__ == "__main__":
     except Exception:
         # Error already printed and logged by launch_gui
         import sys
+
         sys.exit(1)

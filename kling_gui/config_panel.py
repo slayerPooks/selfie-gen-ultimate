@@ -25,6 +25,8 @@ COLORS = {
     "warning": "#FFB347",
     "success": "#64FF64",
     "error": "#FF6464",
+    "text_unsupported": "#666666",
+    "bg_unsupported": "#3A3A3A",
 }
 
 # Minimal fallback - ONLY used when API fails AND no cache exists
@@ -497,10 +499,22 @@ class ConfigPanel(tk.Frame):
             fg=COLORS["text_dim"],
         ).pack(side=tk.LEFT)
 
+        # Slot container for 2-row layout (5 slots per row)
+        slot_container = tk.Frame(row3, bg=COLORS["bg_input"])
+        slot_container.pack(side=tk.LEFT, padx=(5, 0))
+
+        slot_row1 = tk.Frame(slot_container, bg=COLORS["bg_input"])
+        slot_row1.pack(side=tk.TOP)
+
+        slot_row2 = tk.Frame(slot_container, bg=COLORS["bg_input"])
+        slot_row2.pack(side=tk.TOP, pady=(2, 0))
+
         self.slot_var = tk.IntVar(value=1)
         for i in range(1, 11):  # 10 slots
+            # Choose which row based on slot number
+            parent_row = slot_row1 if i <= 5 else slot_row2
             rb = tk.Radiobutton(
-                row3,
+                parent_row,
                 text=str(i),
                 variable=self.slot_var,
                 value=i,
@@ -523,10 +537,10 @@ class ConfigPanel(tk.Frame):
 
         self.prompt_preview = tk.Text(
             preview_container,
-            font=("Segoe UI", 8, "italic"),
+            font=("Segoe UI", 9),
             bg=COLORS["bg_main"],
             fg=COLORS["text_dim"],
-            height=3,  # 3 lines tall
+            height=6,  # 6 lines tall for better visibility
             width=40,
             wrap=tk.WORD,
             relief=tk.FLAT,
@@ -534,6 +548,11 @@ class ConfigPanel(tk.Frame):
             cursor="arrow",
         )
         self.prompt_preview.pack(fill=tk.BOTH, expand=True)
+
+        # Configure tag for bold titles
+        self.prompt_preview.tag_configure(
+            "title", font=("Segoe UI", 9, "bold"), foreground=COLORS["text_light"]
+        )
 
         # Row 4: Loop Video option
         row4 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -1135,8 +1154,8 @@ class ConfigPanel(tk.Frame):
         self.prompt_preview.delete("1.0", tk.END)
 
         if title:
-            # Show title prominently if set
-            self.prompt_preview.insert("1.0", f"📌 {title}\n")
+            # Show title prominently with bold tag
+            self.prompt_preview.insert("1.0", f"📌 {title}\n", "title")
             if prompt:
                 preview = prompt[:150] + "..." if len(prompt) > 150 else prompt
                 self.prompt_preview.insert(tk.END, preview)
@@ -1246,6 +1265,25 @@ class ConfigPanel(tk.Frame):
         Args:
             model_endpoint: The fal.ai model endpoint (e.g., "fal-ai/kling-video/v2.5/pro/image-to-video")
         """
+        # Map UI controls to their corresponding API parameter names
+        # Format: param_name -> (controls_tuple, associated_labels_tuple)
+        param_controls = {
+            "seed": (
+                (self.seed_entry, self.random_seed_checkbox),
+                (),  # No additional labels - "Seed:" label is always visible
+            ),
+            "aspect_ratio": (
+                (self.aspect_ratio_combo,),
+                (),  # "Aspect:" label handled separately in row
+            ),
+            "resolution": (
+                (self.resolution_combo,),
+                (),  # "Resolution:" label handled separately in row
+            ),
+            "camera_fixed": ((self.camera_fixed_checkbox,), ()),
+            "generate_audio": ((self.generate_audio_checkbox,), ()),
+        }
+
         try:
             from model_schema_manager import ModelSchemaManager
 
@@ -1272,45 +1310,35 @@ class ConfigPanel(tk.Frame):
                                 control.config(state="normal")
                             elif isinstance(control, tk.Checkbutton):
                                 control.config(state="normal")
-                        except tk.TclError:
-                            pass
+                        except tk.TclError as e:
+                            logger.debug(f"Could not reset {param_name} control: {e}")
 
-                if hasattr(self, "video_settings_info"):
-                    self.video_settings_info.config(
-                        text="⚠ No API key - showing all options",
-                        fg=COLORS["text_dim"],
-                    )
+                # Update info label
+                if (
+                    hasattr(self, "video_settings_info")
+                    and self.video_settings_info is not None
+                ):
+                    try:
+                        self.video_settings_info.config(
+                            text="(No API key – capabilities unknown)",
+                            fg=COLORS["text_dim"],
+                        )
+                    except tk.TclError as e:
+                        logger.debug(f"Could not update video_settings_info: {e}")
                 return
 
             schema_manager = ModelSchemaManager(api_key)
 
-            # Get all supported parameters for this model
-            supported_params = schema_manager.get_supported_parameters(model_endpoint)
-
-            # Map UI controls to their corresponding API parameter names
-            # Format: param_name -> (controls_tuple, associated_labels_tuple)
-            param_controls = {
-                "seed": (
-                    (self.seed_entry, self.random_seed_checkbox),
-                    (),  # No additional labels - "Seed:" label is always visible
-                ),
-                "aspect_ratio": (
-                    (self.aspect_ratio_combo,),
-                    (),  # "Aspect:" label handled separately in row
-                ),
-                "resolution": (
-                    (self.resolution_combo,),
-                    (),  # "Resolution:" label handled separately in row
-                ),
-                "camera_fixed": ((self.camera_fixed_checkbox,), ()),
-                "generate_audio": ((self.generate_audio_checkbox,), ()),
-            }
+            # Get all supported parameters for this model (defensive handling)
+            supported_params = set(
+                schema_manager.get_supported_parameters(model_endpoint) or []
+            )
 
             # Visual styling for supported vs unsupported
             SUPPORTED_FG = COLORS["text_light"]
-            UNSUPPORTED_FG = "#666666"  # Gray text for disabled
+            UNSUPPORTED_FG = COLORS["text_unsupported"]
             SUPPORTED_BG = COLORS["bg_main"]
-            UNSUPPORTED_BG = "#3A3A3A"  # Slightly darker for disabled
+            UNSUPPORTED_BG = COLORS["bg_unsupported"]
 
             for param_name, (controls, labels) in param_controls.items():
                 supported = param_name in supported_params
@@ -1353,8 +1381,8 @@ class ConfigPanel(tk.Frame):
                     if label is not None:
                         try:
                             label.config(fg=fg_color)
-                        except tk.TclError:
-                            pass
+                        except tk.TclError as e:
+                            logger.debug(f"Could not configure {param_name} label: {e}")
 
             # Update info label to show model capability status
             if hasattr(self, "video_settings_info"):

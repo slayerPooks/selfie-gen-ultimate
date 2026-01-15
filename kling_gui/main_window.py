@@ -8,11 +8,11 @@ import json
 import os
 import sys
 import logging
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, List
-from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
+from datetime import datetime
 
 # Import path utilities
 from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir
@@ -214,10 +214,10 @@ class KlingGUIWindow:
             try:
                 self.root.geometry(saved_geometry)
             except Exception:
-                self.root.geometry("900x1080")
+                self.root.geometry("1100x1200")
         else:
-            self.root.geometry("900x1080")
-        self.root.minsize(700, 900)
+            self.root.geometry("1100x1200")
+        self.root.minsize(800, 900)
 
         # Set up the UI
         self._setup_ui()
@@ -279,9 +279,9 @@ class KlingGUIWindow:
             "folder_match_mode": "partial",  # "partial" or "exact"
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
-            "sash_dropzone": 200,  # Height of drop zone pane
-            "sash_queue": 280,  # Width of queue pane
-            "sash_log": 350,  # Height of log pane (before history)
+            "sash_dropzone": 180,  # Height of drop zone pane
+            "sash_queue": 300,  # Width of queue pane
+            "sash_log": 380,  # Height of log pane (before history)
         }
 
         try:
@@ -458,7 +458,7 @@ class KlingGUIWindow:
         )
         balance_link.pack(side=tk.RIGHT, padx=10, pady=8)
         balance_link.bind(
-            "<Button-1>", lambda e: os.startfile("https://fal.ai/dashboard")
+            "<Button-1>", lambda e: webbrowser.open("https://fal.ai/dashboard")
         )
 
         # DnD status
@@ -539,7 +539,7 @@ class KlingGUIWindow:
 
         columns = ("time", "source", "output", "status")
         self.history_tree = ttk.Treeview(
-            panel, columns=columns, show="headings", height=6, selectmode="browse"
+            panel, columns=columns, show="headings", height=8, selectmode="browse"
         )
         for col, text, width in [
             ("time", "Time", 110),
@@ -749,11 +749,31 @@ class KlingGUIWindow:
         except Exception:
             return None
 
+    def _open_path_in_explorer(self, path: str):
+        """Open a file or folder in the system's native file explorer.
+
+        Uses platform-specific methods for reliable local file/folder opening.
+        webbrowser.open() is unreliable for local paths on some systems.
+        """
+        import platform
+        import subprocess
+
+        system = platform.system()
+        try:
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", path], check=True)
+            else:  # Linux and others
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self._log(f"Could not open {path}: {e}", "error")
+
     def _open_selected_file(self):
         entry = self._get_selected_history()
         path = entry.get("output") if entry else None
         if path and os.path.exists(path):
-            os.startfile(path)
+            self._open_path_in_explorer(path)
         elif entry and entry.get("output"):
             self._log(f"File not found: {entry['output']}", "warning")
 
@@ -765,7 +785,7 @@ class KlingGUIWindow:
         if path:
             folder = os.path.dirname(path)
             if folder and os.path.exists(folder):
-                os.startfile(folder)
+                self._open_path_in_explorer(folder)
                 return
         self._log("No folder to open for selection", "warning")
 
@@ -884,20 +904,30 @@ class KlingGUIWindow:
         """Show preview dialog and add files to queue if confirmed."""
         dialog = FolderPreviewDialog(self.root, files, folder, pattern, match_mode)
 
-        if dialog.result and self.queue_manager:
-            # Add all files to queue
-            added = 0
-            skipped = 0
-            for file_path in files:
-                success, msg = self.queue_manager.add_to_queue(file_path)
-                if success:
-                    added += 1
-                else:
-                    skipped += 1
+        if dialog.result:
+            if self.queue_manager:
+                # Add all files to queue
+                added = 0
+                skipped = 0
+                for file_path in files:
+                    success, msg = self.queue_manager.add_to_queue(file_path)
+                    if success:
+                        added += 1
+                    else:
+                        skipped += 1
 
-            self._log(f"Added {added} images from folder to queue", "success")
-            if skipped > 0:
-                self._log(f"Skipped {skipped} (already in queue or duplicates)", "info")
+                self._log(f"Added {added} images from folder to queue", "success")
+                if skipped > 0:
+                    self._log(
+                        f"Skipped {skipped} (already in queue or duplicates)", "info"
+                    )
+            else:
+                # Warn user that files weren't added
+                self._log(
+                    "Folder preview confirmed, but items were not added because the "
+                    "queue/generator is not initialized yet.",
+                    "warning",
+                )
 
     def _on_config_changed(
         self, new_config: dict, change_description: Optional[str] = None
@@ -967,6 +997,9 @@ class KlingGUIWindow:
                 str(self.config.get("current_model", "")),
                 str(self.config.get("model_display_name", "")),
             )
+            self.generator.update_prompt_slot(
+                int(self.config.get("current_prompt_slot", 1))
+            )
 
     def _toggle_pause(self):
         """Toggle pause/resume."""
@@ -1034,10 +1067,10 @@ class KlingGUIWindow:
     def _restore_sash_positions(self):
         """Restore saved sash positions for all PanedWindows."""
         try:
-            # Get saved positions from config
-            dropzone_pos = self.config.get("sash_dropzone", 200)
-            queue_pos = self.config.get("sash_queue", 280)
-            log_pos = self.config.get("sash_log", 350)
+            # Get saved positions from config (with new defaults)
+            dropzone_pos = self.config.get("sash_dropzone", 180)
+            queue_pos = self.config.get("sash_queue", 300)
+            log_pos = self.config.get("sash_log", 380)
 
             # Restore main paned (drop zone height)
             if hasattr(self, "main_paned"):

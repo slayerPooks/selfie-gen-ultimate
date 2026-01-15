@@ -517,7 +517,7 @@ class KlingAutomationUI:
         )
         model_name = self.config.get("model_display_name", "Kling 2.1 Professional")
 
-        # Show prompt slots status
+        # Show prompt slots status (10 slots)
         saved_prompts = self.config.get("saved_prompts", {})
         slots_status = []
         for i in range(1, 11):
