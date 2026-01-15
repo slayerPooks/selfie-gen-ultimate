@@ -226,30 +226,8 @@ class ModelFetcher:
                         break
 
                 if all_models:
-                    # Sort models: Kling first, then other popular models, then rest alphabetically
-                    def sort_key(m):
-                        name_lower = m["name"].lower()
-                        endpoint_lower = m["endpoint"].lower()
-                        # Priority tiers
-                        if "kling" in name_lower or "kling" in endpoint_lower:
-                            # Further sort Kling by version (higher versions first)
-                            if "v2.6" in endpoint_lower:
-                                return (0, 0, name_lower)
-                            elif "v2.5" in endpoint_lower:
-                                if "turbo" in endpoint_lower:
-                                    return (0, 1, name_lower)
-                                else:
-                                    return (0, 2, name_lower)
-                            else:
-                                return (0, 9, name_lower)
-                        elif "veo" in name_lower or "sora" in name_lower:
-                            return (1, 0, name_lower)
-                        elif "ltx" in name_lower or "pixverse" in name_lower:
-                            return (2, 0, name_lower)
-                        else:
-                            return (3, 0, name_lower)
-
-                    all_models.sort(key=sort_key)
+                    # Sort models alphabetically by display name
+                    all_models.sort(key=lambda m: m["name"].lower())
                     callback(all_models, None)
                 else:
                     callback([], "No models found")
@@ -287,7 +265,7 @@ class ConfigPanel(tk.Frame):
         self,
         parent,
         config: dict,
-        on_config_changed: Callable[[dict, Optional[str]], None],
+        on_config_changed: Callable[..., None],  # Flexible signature for compatibility
         **kwargs,
     ):
         """
@@ -302,8 +280,53 @@ class ConfigPanel(tk.Frame):
         self.config = config
         self.on_config_changed = on_config_changed
 
+        # Configure dark theme for ttk Combobox widgets
+        self._setup_combobox_style()
+
         self._setup_ui()
         self._load_config()
+
+    def _setup_combobox_style(self):
+        """Configure dark theme styling for ttk Combobox widgets."""
+        style = ttk.Style(self)
+
+        # Dark theme for all Combobox widgets in this panel
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=COLORS["bg_main"],
+            background=COLORS["bg_input"],
+            foreground=COLORS["text_light"],
+            arrowcolor=COLORS["text_light"],
+            borderwidth=0,
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[
+                ("readonly", COLORS["bg_main"]),
+                ("disabled", COLORS["bg_panel"]),
+            ],
+            foreground=[
+                ("readonly", COLORS["text_light"]),
+                ("disabled", COLORS["text_dim"]),
+            ],
+            selectbackground=[("readonly", COLORS["accent_blue"])],
+            selectforeground=[("readonly", "#FFFFFF")],
+            arrowcolor=[
+                ("disabled", COLORS["text_dim"]),
+            ],
+        )
+
+        # Configure the dropdown listbox colors (affects all comboboxes)
+        try:
+            root = self.winfo_toplevel()
+            root.option_add("*TCombobox*Listbox.background", COLORS["bg_main"])
+            root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
+            root.option_add(
+                "*TCombobox*Listbox.selectBackground", COLORS["accent_blue"]
+            )
+            root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        except tk.TclError:
+            pass  # Ignore if can't set listbox options
 
     def _setup_ui(self):
         """Set up the configuration UI."""
@@ -363,15 +386,6 @@ class ConfigPanel(tk.Frame):
             fg=COLORS["text_dim"],
         )
         self.duration_label.pack(side=tk.TOP, anchor="w")
-
-        self.price_label = tk.Label(
-            info_frame,
-            text="$0.07/sec",
-            font=("Segoe UI", 9, "italic"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["accent_blue"],
-        )
-        self.price_label.pack(side=tk.TOP, anchor="w")
 
         # Row 2: Output mode
         row2 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -503,20 +517,23 @@ class ConfigPanel(tk.Frame):
             )
             rb.pack(side=tk.LEFT, padx=1)
 
-        # Prompt preview (recessed look)
-        preview_container = tk.Frame(row3, bg=COLORS["bg_main"], padx=10)
-        preview_container.pack(side=tk.LEFT, padx=(15, 0), fill=tk.X, expand=True)
+        # Prompt preview (multi-line, recessed look)
+        preview_container = tk.Frame(row3, bg=COLORS["bg_main"], padx=6, pady=4)
+        preview_container.pack(side=tk.LEFT, padx=(15, 0), fill=tk.BOTH, expand=True)
 
-        self.prompt_preview = tk.Label(
+        self.prompt_preview = tk.Text(
             preview_container,
-            text="",
             font=("Segoe UI", 8, "italic"),
             bg=COLORS["bg_main"],
             fg=COLORS["text_dim"],
-            anchor="w",
-            pady=4,
+            height=3,  # 3 lines tall
+            width=40,
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            state=tk.DISABLED,  # Read-only
+            cursor="arrow",
         )
-        self.prompt_preview.pack(fill=tk.X)
+        self.prompt_preview.pack(fill=tk.BOTH, expand=True)
 
         # Row 4: Loop Video option
         row4 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -768,6 +785,7 @@ class ConfigPanel(tk.Frame):
             state="readonly",
             width=6,
             font=("Segoe UI", 8),
+            style="Dark.TCombobox",
         )
         self.aspect_ratio_combo.pack(side=tk.LEFT, padx=(0, 20))
         self.aspect_ratio_combo.bind(
@@ -790,6 +808,7 @@ class ConfigPanel(tk.Frame):
             state="readonly",
             width=5,
             font=("Segoe UI", 8),
+            style="Dark.TCombobox",
         )
         self.resolution_combo.pack(side=tk.LEFT, padx=(0, 20))
         self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_changed)
@@ -1104,17 +1123,31 @@ class ConfigPanel(tk.Frame):
         self._notify_change(f"Prompt slot changed to {slot}")
 
     def _update_prompt_preview(self):
-        """Update the prompt preview label."""
+        """Update the prompt preview text widget."""
         slot = self.slot_var.get()
         saved_prompts = self.config.get("saved_prompts", {})
+        saved_titles = self.config.get("prompt_titles", {})
         prompt = saved_prompts.get(str(slot), "")
+        title = saved_titles.get(str(slot), "")
 
-        if prompt:
-            # Truncate for preview
-            preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
-            self.prompt_preview.config(text=f"  ({preview})")
+        # Enable editing, update text, then disable again
+        self.prompt_preview.config(state=tk.NORMAL)
+        self.prompt_preview.delete("1.0", tk.END)
+
+        if title:
+            # Show title prominently if set
+            self.prompt_preview.insert("1.0", f"📌 {title}\n")
+            if prompt:
+                preview = prompt[:150] + "..." if len(prompt) > 150 else prompt
+                self.prompt_preview.insert(tk.END, preview)
+        elif prompt:
+            # Show more text - up to 200 chars for better visibility
+            preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
+            self.prompt_preview.insert("1.0", preview)
         else:
-            self.prompt_preview.config(text="  (empty)")
+            self.prompt_preview.insert("1.0", "(empty)")
+
+        self.prompt_preview.config(state=tk.DISABLED)
 
     def _show_prompt_editor(self):
         """Show the prompt editor dialog."""
@@ -1133,6 +1166,10 @@ class ConfigPanel(tk.Frame):
             # Update negative prompts
             if "all_negative_prompts" in dialog.result:
                 self.config["negative_prompts"] = dialog.result["all_negative_prompts"]
+
+            # Update slot titles
+            if "all_titles" in dialog.result:
+                self.config["prompt_titles"] = dialog.result["all_titles"]
 
             # Persist capability cache
             if "model_capabilities" in dialog.result:
@@ -1211,11 +1248,38 @@ class ConfigPanel(tk.Frame):
         """
         try:
             from model_schema_manager import ModelSchemaManager
-            import os
 
             api_key = os.getenv("FAL_KEY") or self.config.get("falai_api_key", "")
             if not api_key:
                 logger.warning("No API key available for schema lookup")
+                # Apply conservative default: enable all controls with unknown status
+                param_controls = {
+                    "seed": ((self.seed_entry, self.random_seed_checkbox), ()),
+                    "aspect_ratio": ((self.aspect_ratio_combo,), ()),
+                    "resolution": ((self.resolution_combo,), ()),
+                    "camera_fixed": ((self.camera_fixed_checkbox,), ()),
+                    "generate_audio": ((self.generate_audio_checkbox,), ()),
+                }
+
+                for param_name, (controls, labels) in param_controls.items():
+                    for control in controls:
+                        if control is None:
+                            continue
+                        try:
+                            if isinstance(control, ttk.Combobox):
+                                control.config(state="readonly")
+                            elif isinstance(control, tk.Entry):
+                                control.config(state="normal")
+                            elif isinstance(control, tk.Checkbutton):
+                                control.config(state="normal")
+                        except tk.TclError:
+                            pass
+
+                if hasattr(self, "video_settings_info"):
+                    self.video_settings_info.config(
+                        text="⚠ No API key - showing all options",
+                        fg=COLORS["text_dim"],
+                    )
                 return
 
             schema_manager = ModelSchemaManager(api_key)
@@ -1347,17 +1411,19 @@ class PromptEditorDialog(tk.Toplevel):
         self.model_combo: Optional[ttk.Combobox] = None
         self.custom_entry: Optional[tk.Entry] = None
         self.neg_var: Optional[tk.StringVar] = None
+        self.title_var: Optional[tk.StringVar] = None
+        self.title_entry: Optional[tk.Entry] = None
 
         # IMPORTANT: Make a deep copy so cancel doesn't affect original config
-        original_prompts = config.get("saved_prompts", {"1": "", "2": "", "3": ""})
-        original_negative_prompts = config.get(
-            "negative_prompts", {"1": "", "2": "", "3": ""}
-        )
+        original_prompts = config.get("saved_prompts", {})
+        original_negative_prompts = config.get("negative_prompts", {})
+        original_titles = config.get("prompt_titles", {})
         self.capabilities = config.get("model_capabilities", {})
         self.saved_prompts = {k: (v if v else "") for k, v in original_prompts.items()}
         self.saved_negative_prompts = {
             k: (v if v else "") for k, v in original_negative_prompts.items()
         }
+        self.saved_titles = {k: (v if v else "") for k, v in original_titles.items()}
 
         # Model list - start with cached/fallback, then fetch fresh
         self.models = ModelFetcher.get_cached_or_fallback(config)
@@ -1467,6 +1533,46 @@ class PromptEditorDialog(tk.Toplevel):
             )
             rb.pack(side=tk.LEFT, padx=4)
 
+        # Row 1.5: Title field for current slot
+        title_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
+        title_row.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(
+            title_row,
+            text="Slot Title:",
+            font=("Segoe UI", 10, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            width=12,
+            anchor="w",
+        ).pack(side=tk.LEFT)
+
+        current_slot = self.config.get("current_prompt_slot", 1)
+        self.title_var = tk.StringVar(
+            value=self.saved_titles.get(str(current_slot), "")
+        )
+        self.title_entry = tk.Entry(
+            title_row,
+            textvariable=self.title_var,
+            font=("Segoe UI", 10),
+            bg=COLORS["bg_main"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            width=40,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+        )
+        self.title_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        tk.Label(
+            title_row,
+            text="(optional - for easy identification)",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_dim"],
+        ).pack(side=tk.LEFT, padx=5)
+
         # Row 2: Model Selection
         model_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
         model_row.pack(fill=tk.X, pady=(0, 5))
@@ -1571,13 +1677,13 @@ class PromptEditorDialog(tk.Toplevel):
         self.neg_badge = tk.Label(
             neg_row,
             text="Checking",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=COLORS.get("warning", "#FFB347"),
-            fg="black",
-            padx=6,
-            pady=2,
+            fg="#1a1a1a",
+            padx=8,
+            pady=3,
         )
-        self.neg_badge.pack(side=tk.LEFT, padx=4)
+        self.neg_badge.pack(side=tk.LEFT, padx=6)
 
         self.neg_status = tk.Label(
             neg_row,
@@ -1774,13 +1880,19 @@ class PromptEditorDialog(tk.Toplevel):
     def _on_slot_changed(self):
         """Handle slot selection change - save current and load new slot's prompt."""
         # Guard: ensure UI widgets are initialized before accessing them
-        if not self.text or not self.prompt_label or not self.neg_var:
+        if (
+            not self.text
+            or not self.prompt_label
+            or not self.neg_var
+            or not self.title_var
+        ):
             return
 
         # Save current slot's text before switching
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
         self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
+        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
 
         # Switch to new slot
         new_slot = self.slot_var.get()
@@ -1790,14 +1902,16 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _load_prompt_for_slot(self, slot: int):
         """Load prompt text for the specified slot."""
-        if not self.text or not self.neg_var:
+        if not self.text or not self.neg_var or not self.title_var:
             return
 
         prompt = self.saved_prompts.get(str(slot), "") or ""
         neg_prompt = self.saved_negative_prompts.get(str(slot), "") or ""
+        title = self.saved_titles.get(str(slot), "") or ""
         self.text.delete("1.0", tk.END)
         self.text.insert("1.0", prompt)
         self.neg_var.set(neg_prompt)
+        self.title_var.set(title)
         self._update_char_count()
 
     def _on_model_changed(self, event=None):
@@ -1955,14 +2069,14 @@ class PromptEditorDialog(tk.Toplevel):
         if supported:
             self.neg_entry.config(state="normal")
             self.neg_status.config(text="Supported by model", fg=COLORS["success"])
-            self.neg_badge.config(text="Supported", bg=COLORS["success"], fg="black")
+            self.neg_badge.config(text="✓ Supported", bg="#2E7D32", fg="#ffffff")
         else:
             self.neg_entry.delete(0, tk.END)
             self.neg_entry.config(state="disabled")
             self.neg_status.config(
                 text="Not supported by this model", fg=COLORS["text_dim"]
             )
-            self.neg_badge.config(text="Unsupported", bg=COLORS["error"], fg="white")
+            self.neg_badge.config(text="✗ Unsupported", bg="#C62828", fg="#ffffff")
 
     def _update_models(self, models: list, error: str):
         """Update model dropdown with fetched models."""
@@ -2031,13 +2145,14 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _save(self):
         """Save and close with all settings."""
-        if not self.text or not self.neg_var:
+        if not self.text or not self.neg_var or not self.title_var:
             return
 
         # Save current slot's text to local dict
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
         self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
+        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
 
         model = self._get_selected_model()
         self.result = {
@@ -2048,6 +2163,7 @@ class PromptEditorDialog(tk.Toplevel):
             "duration": model["duration"],
             "all_prompts": self.saved_prompts.copy(),  # Include all edited prompts
             "all_negative_prompts": self.saved_negative_prompts.copy(),
+            "all_titles": self.saved_titles.copy(),  # Include all slot titles
             "model_capabilities": self.capabilities,
         }
         self.destroy()

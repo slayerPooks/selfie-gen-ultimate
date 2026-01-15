@@ -17,6 +17,17 @@ except ImportError:
     HAS_DND = False
 
 
+def create_dnd_root():
+    """Create a TkinterDnD root window if available, otherwise regular Tk.
+
+    This is a module-level function for easy import by main_window.py.
+    """
+    if HAS_DND:
+        return TkinterDnD.Tk()
+    else:
+        return tk.Tk()
+
+
 # Color palette
 COLORS = {
     "bg_main": "#2D2D30",
@@ -356,10 +367,6 @@ class DropZone(tk.Frame):
 
         return True, "file"
 
-    @staticmethod
-    def create_dnd_root():
-        """Create a TkinterDnD root window if available, otherwise regular Tk."""
-        if HAS_DND:
-            return TkinterDnD.Tk()
-        else:
-            return tk.Tk()
+
+# Backward compatibility alias for code that calls DropZone.create_dnd_root()
+DropZone.create_dnd_root = staticmethod(create_dnd_root)

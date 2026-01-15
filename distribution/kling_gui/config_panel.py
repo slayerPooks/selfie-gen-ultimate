@@ -226,30 +226,8 @@ class ModelFetcher:
                         break
 
                 if all_models:
-                    # Sort models: Kling first, then other popular models, then rest alphabetically
-                    def sort_key(m):
-                        name_lower = m["name"].lower()
-                        endpoint_lower = m["endpoint"].lower()
-                        # Priority tiers
-                        if "kling" in name_lower or "kling" in endpoint_lower:
-                            # Further sort Kling by version (higher versions first)
-                            if "v2.6" in endpoint_lower:
-                                return (0, 0, name_lower)
-                            elif "v2.5" in endpoint_lower:
-                                if "turbo" in endpoint_lower:
-                                    return (0, 1, name_lower)
-                                else:
-                                    return (0, 2, name_lower)
-                            else:
-                                return (0, 9, name_lower)
-                        elif "veo" in name_lower or "sora" in name_lower:
-                            return (1, 0, name_lower)
-                        elif "ltx" in name_lower or "pixverse" in name_lower:
-                            return (2, 0, name_lower)
-                        else:
-                            return (3, 0, name_lower)
-
-                    all_models.sort(key=sort_key)
+                    # Sort models alphabetically by display name
+                    all_models.sort(key=lambda m: m["name"].lower())
                     callback(all_models, None)
                 else:
                     callback([], "No models found")
@@ -284,7 +262,11 @@ class ConfigPanel(tk.Frame):
     """Configuration panel for model, output, and prompt settings."""
 
     def __init__(
-        self, parent, config: dict, on_config_changed: Callable[[dict], None], **kwargs
+        self,
+        parent,
+        config: dict,
+        on_config_changed: Callable[..., None],  # Flexible signature for compatibility
+        **kwargs,
     ):
         """
         Initialize the config panel.
@@ -298,8 +280,53 @@ class ConfigPanel(tk.Frame):
         self.config = config
         self.on_config_changed = on_config_changed
 
+        # Configure dark theme for ttk Combobox widgets
+        self._setup_combobox_style()
+
         self._setup_ui()
         self._load_config()
+
+    def _setup_combobox_style(self):
+        """Configure dark theme styling for ttk Combobox widgets."""
+        style = ttk.Style(self)
+
+        # Dark theme for all Combobox widgets in this panel
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=COLORS["bg_main"],
+            background=COLORS["bg_input"],
+            foreground=COLORS["text_light"],
+            arrowcolor=COLORS["text_light"],
+            borderwidth=0,
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[
+                ("readonly", COLORS["bg_main"]),
+                ("disabled", COLORS["bg_panel"]),
+            ],
+            foreground=[
+                ("readonly", COLORS["text_light"]),
+                ("disabled", COLORS["text_dim"]),
+            ],
+            selectbackground=[("readonly", COLORS["accent_blue"])],
+            selectforeground=[("readonly", "#FFFFFF")],
+            arrowcolor=[
+                ("disabled", COLORS["text_dim"]),
+            ],
+        )
+
+        # Configure the dropdown listbox colors (affects all comboboxes)
+        try:
+            root = self.winfo_toplevel()
+            root.option_add("*TCombobox*Listbox.background", COLORS["bg_main"])
+            root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
+            root.option_add(
+                "*TCombobox*Listbox.selectBackground", COLORS["accent_blue"]
+            )
+            root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        except tk.TclError:
+            pass  # Ignore if can't set listbox options
 
     def _setup_ui(self):
         """Set up the configuration UI."""
@@ -359,15 +386,6 @@ class ConfigPanel(tk.Frame):
             fg=COLORS["text_dim"],
         )
         self.duration_label.pack(side=tk.TOP, anchor="w")
-
-        self.price_label = tk.Label(
-            info_frame,
-            text="$0.07/sec",
-            font=("Segoe UI", 9, "italic"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["accent_blue"],
-        )
-        self.price_label.pack(side=tk.TOP, anchor="w")
 
         # Row 2: Output mode
         row2 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -499,20 +517,23 @@ class ConfigPanel(tk.Frame):
             )
             rb.pack(side=tk.LEFT, padx=1)
 
-        # Prompt preview (recessed look)
-        preview_container = tk.Frame(row3, bg=COLORS["bg_main"], padx=10)
-        preview_container.pack(side=tk.LEFT, padx=(15, 0), fill=tk.X, expand=True)
+        # Prompt preview (multi-line, recessed look)
+        preview_container = tk.Frame(row3, bg=COLORS["bg_main"], padx=6, pady=4)
+        preview_container.pack(side=tk.LEFT, padx=(15, 0), fill=tk.BOTH, expand=True)
 
-        self.prompt_preview = tk.Label(
+        self.prompt_preview = tk.Text(
             preview_container,
-            text="",
             font=("Segoe UI", 8, "italic"),
             bg=COLORS["bg_main"],
             fg=COLORS["text_dim"],
-            anchor="w",
-            pady=4,
+            height=3,  # 3 lines tall
+            width=40,
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            state=tk.DISABLED,  # Read-only
+            cursor="arrow",
         )
-        self.prompt_preview.pack(fill=tk.X)
+        self.prompt_preview.pack(fill=tk.BOTH, expand=True)
 
         # Row 4: Loop Video option
         row4 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -764,6 +785,7 @@ class ConfigPanel(tk.Frame):
             state="readonly",
             width=6,
             font=("Segoe UI", 8),
+            style="Dark.TCombobox",
         )
         self.aspect_ratio_combo.pack(side=tk.LEFT, padx=(0, 20))
         self.aspect_ratio_combo.bind(
@@ -786,6 +808,7 @@ class ConfigPanel(tk.Frame):
             state="readonly",
             width=5,
             font=("Segoe UI", 8),
+            style="Dark.TCombobox",
         )
         self.resolution_combo.pack(side=tk.LEFT, padx=(0, 20))
         self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_changed)
@@ -934,6 +957,12 @@ class ConfigPanel(tk.Frame):
         # Additional options
         self.camera_fixed_var.set(self.config.get("camera_fixed", False))
         self.generate_audio_var.set(self.config.get("generate_audio", False))
+
+        # Update parameter visibility based on current model
+        current_model = self.config.get(
+            "current_model", "fal-ai/kling-video/v2.1/pro/image-to-video"
+        )
+        self.update_parameter_visibility(current_model)
 
     def _check_ffmpeg_status(self):
         """Check if FFmpeg is available and update UI."""
@@ -1094,17 +1123,31 @@ class ConfigPanel(tk.Frame):
         self._notify_change(f"Prompt slot changed to {slot}")
 
     def _update_prompt_preview(self):
-        """Update the prompt preview label."""
+        """Update the prompt preview text widget."""
         slot = self.slot_var.get()
         saved_prompts = self.config.get("saved_prompts", {})
+        saved_titles = self.config.get("prompt_titles", {})
         prompt = saved_prompts.get(str(slot), "")
+        title = saved_titles.get(str(slot), "")
 
-        if prompt:
-            # Truncate for preview
-            preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
-            self.prompt_preview.config(text=f"  ({preview})")
+        # Enable editing, update text, then disable again
+        self.prompt_preview.config(state=tk.NORMAL)
+        self.prompt_preview.delete("1.0", tk.END)
+
+        if title:
+            # Show title prominently if set
+            self.prompt_preview.insert("1.0", f"📌 {title}\n")
+            if prompt:
+                preview = prompt[:150] + "..." if len(prompt) > 150 else prompt
+                self.prompt_preview.insert(tk.END, preview)
+        elif prompt:
+            # Show more text - up to 200 chars for better visibility
+            preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
+            self.prompt_preview.insert("1.0", preview)
         else:
-            self.prompt_preview.config(text="  (empty)")
+            self.prompt_preview.insert("1.0", "(empty)")
+
+        self.prompt_preview.config(state=tk.DISABLED)
 
     def _show_prompt_editor(self):
         """Show the prompt editor dialog."""
@@ -1124,6 +1167,10 @@ class ConfigPanel(tk.Frame):
             if "all_negative_prompts" in dialog.result:
                 self.config["negative_prompts"] = dialog.result["all_negative_prompts"]
 
+            # Update slot titles
+            if "all_titles" in dialog.result:
+                self.config["prompt_titles"] = dialog.result["all_titles"]
+
             # Persist capability cache
             if "model_capabilities" in dialog.result:
                 self.config["model_capabilities"] = dialog.result["model_capabilities"]
@@ -1136,6 +1183,9 @@ class ConfigPanel(tk.Frame):
             self.config["current_model"] = dialog.result["model_endpoint"]
             self.config["model_display_name"] = dialog.result["model_name"]
             self.model_label.config(text=dialog.result["model_name"])
+
+            # Update parameter visibility based on new model's capabilities
+            self.update_parameter_visibility(dialog.result["model_endpoint"])
 
             # Update duration based on model
             self.config["video_duration"] = dialog.result["duration"]
@@ -1186,6 +1236,158 @@ class ConfigPanel(tk.Frame):
                 except Exception:
                     pass
 
+    def update_parameter_visibility(self, model_endpoint: str):
+        """Update visibility of parameter controls based on model capabilities.
+
+        Uses ModelSchemaManager to determine which parameters the selected model
+        supports. Controls for unsupported parameters are visually disabled with
+        grayed-out styling to indicate they won't be sent to the API.
+
+        Args:
+            model_endpoint: The fal.ai model endpoint (e.g., "fal-ai/kling-video/v2.5/pro/image-to-video")
+        """
+        try:
+            from model_schema_manager import ModelSchemaManager
+
+            api_key = os.getenv("FAL_KEY") or self.config.get("falai_api_key", "")
+            if not api_key:
+                logger.warning("No API key available for schema lookup")
+                # Apply conservative default: enable all controls with unknown status
+                param_controls = {
+                    "seed": ((self.seed_entry, self.random_seed_checkbox), ()),
+                    "aspect_ratio": ((self.aspect_ratio_combo,), ()),
+                    "resolution": ((self.resolution_combo,), ()),
+                    "camera_fixed": ((self.camera_fixed_checkbox,), ()),
+                    "generate_audio": ((self.generate_audio_checkbox,), ()),
+                }
+
+                for param_name, (controls, labels) in param_controls.items():
+                    for control in controls:
+                        if control is None:
+                            continue
+                        try:
+                            if isinstance(control, ttk.Combobox):
+                                control.config(state="readonly")
+                            elif isinstance(control, tk.Entry):
+                                control.config(state="normal")
+                            elif isinstance(control, tk.Checkbutton):
+                                control.config(state="normal")
+                        except tk.TclError:
+                            pass
+
+                if hasattr(self, "video_settings_info"):
+                    self.video_settings_info.config(
+                        text="⚠ No API key - showing all options",
+                        fg=COLORS["text_dim"],
+                    )
+                return
+
+            schema_manager = ModelSchemaManager(api_key)
+
+            # Get all supported parameters for this model
+            supported_params = schema_manager.get_supported_parameters(model_endpoint)
+
+            # Map UI controls to their corresponding API parameter names
+            # Format: param_name -> (controls_tuple, associated_labels_tuple)
+            param_controls = {
+                "seed": (
+                    (self.seed_entry, self.random_seed_checkbox),
+                    (),  # No additional labels - "Seed:" label is always visible
+                ),
+                "aspect_ratio": (
+                    (self.aspect_ratio_combo,),
+                    (),  # "Aspect:" label handled separately in row
+                ),
+                "resolution": (
+                    (self.resolution_combo,),
+                    (),  # "Resolution:" label handled separately in row
+                ),
+                "camera_fixed": ((self.camera_fixed_checkbox,), ()),
+                "generate_audio": ((self.generate_audio_checkbox,), ()),
+            }
+
+            # Visual styling for supported vs unsupported
+            SUPPORTED_FG = COLORS["text_light"]
+            UNSUPPORTED_FG = "#666666"  # Gray text for disabled
+            SUPPORTED_BG = COLORS["bg_main"]
+            UNSUPPORTED_BG = "#3A3A3A"  # Slightly darker for disabled
+
+            for param_name, (controls, labels) in param_controls.items():
+                supported = param_name in supported_params
+                state = "normal" if supported else "disabled"
+                fg_color = SUPPORTED_FG if supported else UNSUPPORTED_FG
+                bg_color = SUPPORTED_BG if supported else UNSUPPORTED_BG
+
+                for control in controls:
+                    if control is None:
+                        continue
+                    try:
+                        # Handle different widget types
+                        if isinstance(control, ttk.Combobox):
+                            # Combobox uses state only
+                            control.config(
+                                state="readonly" if supported else "disabled"
+                            )
+                        elif isinstance(control, tk.Entry):
+                            control.config(
+                                state=state,
+                                fg=fg_color,
+                                bg=bg_color if state == "normal" else UNSUPPORTED_BG,
+                                disabledforeground=UNSUPPORTED_FG,
+                                disabledbackground=UNSUPPORTED_BG,
+                            )
+                        elif isinstance(control, tk.Checkbutton):
+                            control.config(
+                                state=state,
+                                fg=fg_color,
+                                disabledforeground=UNSUPPORTED_FG,
+                            )
+                        else:
+                            # Generic fallback
+                            control.config(state=state)
+                    except tk.TclError as e:
+                        logger.debug(f"Could not configure {param_name} control: {e}")
+
+                # Update associated labels
+                for label in labels:
+                    if label is not None:
+                        try:
+                            label.config(fg=fg_color)
+                        except tk.TclError:
+                            pass
+
+            # Update info label to show model capability status
+            if hasattr(self, "video_settings_info"):
+                key_params = {
+                    "seed",
+                    "aspect_ratio",
+                    "resolution",
+                    "camera_fixed",
+                    "generate_audio",
+                }
+                supported_count = len(key_params & supported_params)
+
+                if supported_count == len(key_params):
+                    status_text = "All params supported"
+                    status_color = COLORS["success"]
+                elif supported_count == 0:
+                    status_text = "Limited params"
+                    status_color = COLORS["warning"]
+                else:
+                    status_text = f"{supported_count}/{len(key_params)} params"
+                    status_color = COLORS["text_dim"]
+
+                self.video_settings_info.config(
+                    text=f"({status_text})", fg=status_color
+                )
+
+            logger.debug(
+                f"Updated parameter visibility for {model_endpoint}: {len(supported_params)} supported"
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to update parameter visibility: {e}")
+
 
 class PromptEditorDialog(tk.Toplevel):
     """Modal dialog for editing prompts with slot and model selection."""
@@ -1196,22 +1398,32 @@ class PromptEditorDialog(tk.Toplevel):
         self.result = None
         self.config = config
         # Pre-set attributes so event callbacks remain safe even if UI setup aborts early
-        self.text = None
-        self.custom_status = None
-        self.prompt_label = None
-        self.duration_label = None
-        self.neg_badge = None
-        self.neg_status = None
+        self.text: Optional[tk.Text] = None
+        self.custom_status: Optional[tk.Label] = None
+        self.prompt_label: Optional[tk.Label] = None
+        self.duration_label: Optional[tk.Label] = None
+        self.neg_badge: Optional[tk.Label] = None
+        self.neg_status: Optional[tk.Label] = None
+        self.neg_entry: Optional[tk.Entry] = None
+        self.char_count: Optional[tk.Label] = None
+        self.refresh_btn: Optional[tk.Button] = None
+        self.model_status: Optional[tk.Label] = None
+        self.model_combo: Optional[ttk.Combobox] = None
+        self.custom_entry: Optional[tk.Entry] = None
+        self.neg_var: Optional[tk.StringVar] = None
+        self.title_var: Optional[tk.StringVar] = None
+        self.title_entry: Optional[tk.Entry] = None
+
         # IMPORTANT: Make a deep copy so cancel doesn't affect original config
-        original_prompts = config.get("saved_prompts", {"1": "", "2": "", "3": ""})
-        original_negative_prompts = config.get(
-            "negative_prompts", {"1": "", "2": "", "3": ""}
-        )
+        original_prompts = config.get("saved_prompts", {})
+        original_negative_prompts = config.get("negative_prompts", {})
+        original_titles = config.get("prompt_titles", {})
         self.capabilities = config.get("model_capabilities", {})
         self.saved_prompts = {k: (v if v else "") for k, v in original_prompts.items()}
         self.saved_negative_prompts = {
             k: (v if v else "") for k, v in original_negative_prompts.items()
         }
+        self.saved_titles = {k: (v if v else "") for k, v in original_titles.items()}
 
         # Model list - start with cached/fallback, then fetch fresh
         self.models = ModelFetcher.get_cached_or_fallback(config)
@@ -1321,6 +1533,46 @@ class PromptEditorDialog(tk.Toplevel):
             )
             rb.pack(side=tk.LEFT, padx=4)
 
+        # Row 1.5: Title field for current slot
+        title_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
+        title_row.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(
+            title_row,
+            text="Slot Title:",
+            font=("Segoe UI", 10, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            width=12,
+            anchor="w",
+        ).pack(side=tk.LEFT)
+
+        current_slot = self.config.get("current_prompt_slot", 1)
+        self.title_var = tk.StringVar(
+            value=self.saved_titles.get(str(current_slot), "")
+        )
+        self.title_entry = tk.Entry(
+            title_row,
+            textvariable=self.title_var,
+            font=("Segoe UI", 10),
+            bg=COLORS["bg_main"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            width=40,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+        )
+        self.title_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        tk.Label(
+            title_row,
+            text="(optional - for easy identification)",
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_dim"],
+        ).pack(side=tk.LEFT, padx=5)
+
         # Row 2: Model Selection
         model_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
         model_row.pack(fill=tk.X, pady=(0, 5))
@@ -1425,13 +1677,13 @@ class PromptEditorDialog(tk.Toplevel):
         self.neg_badge = tk.Label(
             neg_row,
             text="Checking",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=COLORS.get("warning", "#FFB347"),
-            fg="black",
-            padx=6,
-            pady=2,
+            fg="#1a1a1a",
+            padx=8,
+            pady=3,
         )
-        self.neg_badge.pack(side=tk.LEFT, padx=4)
+        self.neg_badge.pack(side=tk.LEFT, padx=6)
 
         self.neg_status = tk.Label(
             neg_row,
@@ -1502,11 +1754,15 @@ class PromptEditorDialog(tk.Toplevel):
         self.custom_entry.config(fg=COLORS["text_dim"])
 
         def on_custom_focus_in(e):
+            if not self.custom_entry:
+                return
             if self.custom_entry.get() == "fal-ai/kling-video/v2.5/pro/image-to-video":
                 self.custom_entry.delete(0, tk.END)
                 self.custom_entry.config(fg=COLORS["text_light"])
 
         def on_custom_focus_out(e):
+            if not self.custom_entry:
+                return
             if not self.custom_entry.get().strip():
                 self.custom_entry.insert(
                     0, "fal-ai/kling-video/v2.5/pro/image-to-video"
@@ -1624,13 +1880,19 @@ class PromptEditorDialog(tk.Toplevel):
     def _on_slot_changed(self):
         """Handle slot selection change - save current and load new slot's prompt."""
         # Guard: ensure UI widgets are initialized before accessing them
-        if not getattr(self, "text", None) or not getattr(self, "prompt_label", None):
+        if (
+            not self.text
+            or not self.prompt_label
+            or not self.neg_var
+            or not self.title_var
+        ):
             return
 
         # Save current slot's text before switching
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
         self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
+        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
 
         # Switch to new slot
         new_slot = self.slot_var.get()
@@ -1640,19 +1902,22 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _load_prompt_for_slot(self, slot: int):
         """Load prompt text for the specified slot."""
+        if not self.text or not self.neg_var or not self.title_var:
+            return
+
         prompt = self.saved_prompts.get(str(slot), "") or ""
         neg_prompt = self.saved_negative_prompts.get(str(slot), "") or ""
+        title = self.saved_titles.get(str(slot), "") or ""
         self.text.delete("1.0", tk.END)
         self.text.insert("1.0", prompt)
         self.neg_var.set(neg_prompt)
+        self.title_var.set(title)
         self._update_char_count()
 
     def _on_model_changed(self, event=None):
         """Handle model selection change."""
         # Guard: ensure UI widgets are initialized before accessing them
-        if not getattr(self, "custom_status", None) or not getattr(
-            self, "duration_label", None
-        ):
+        if not self.custom_status or not self.duration_label:
             return
 
         model_name = self.model_var.get()
@@ -1666,6 +1931,14 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _use_custom_endpoint(self):
         """Use the custom endpoint from the entry field."""
+        if (
+            not self.custom_entry
+            or not self.custom_status
+            or not self.model_combo
+            or not self.duration_label
+        ):
+            return
+
         custom_endpoint = self.custom_entry.get().strip()
         placeholder = "fal-ai/kling-video/v2.5/pro/image-to-video"
 
@@ -1715,6 +1988,9 @@ class PromptEditorDialog(tk.Toplevel):
         if self.is_loading_models:
             return
 
+        if not self.refresh_btn or not self.model_status:
+            return
+
         api_key = self.config.get("falai_api_key", "")
         if not api_key:
             self.model_status.config(text="(No API key)", fg="#FF6464")
@@ -1736,6 +2012,9 @@ class PromptEditorDialog(tk.Toplevel):
         cached = self.capabilities.get(endpoint_id)
         if cached is not None:
             self._apply_negative_support(cached)
+            return
+
+        if not self.neg_status or not self.neg_badge or not self.neg_entry:
             return
 
         self.neg_status.config(text="Checking support...", fg=COLORS["text_dim"])
@@ -1784,22 +2063,33 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _apply_negative_support(self, supported: bool):
         """Enable/disable negative prompt entry based on support."""
+        if not self.neg_entry or not self.neg_status or not self.neg_badge:
+            return
+
         if supported:
             self.neg_entry.config(state="normal")
             self.neg_status.config(text="Supported by model", fg=COLORS["success"])
-            self.neg_badge.config(text="Supported", bg=COLORS["success"], fg="black")
+            self.neg_badge.config(text="✓ Supported", bg="#2E7D32", fg="#ffffff")
         else:
             self.neg_entry.delete(0, tk.END)
             self.neg_entry.config(state="disabled")
             self.neg_status.config(
                 text="Not supported by this model", fg=COLORS["text_dim"]
             )
-            self.neg_badge.config(text="Unsupported", bg=COLORS["error"], fg="white")
+            self.neg_badge.config(text="✗ Unsupported", bg="#C62828", fg="#ffffff")
 
     def _update_models(self, models: list, error: str):
         """Update model dropdown with fetched models."""
         # Safety check: dialog may have been closed before callback fired
         if not self.winfo_exists():
+            return
+
+        if (
+            not self.refresh_btn
+            or not self.model_status
+            or not self.model_combo
+            or not self.duration_label
+        ):
             return
 
         self.is_loading_models = False
@@ -1837,6 +2127,8 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _update_char_count(self, event=None):
         """Update character count label."""
+        if not self.text or not self.char_count:
+            return
         text = self.text.get("1.0", tk.END).strip()
         self.char_count.config(text=f"{len(text)} chars")
 
@@ -1853,10 +2145,14 @@ class PromptEditorDialog(tk.Toplevel):
 
     def _save(self):
         """Save and close with all settings."""
+        if not self.text or not self.neg_var or not self.title_var:
+            return
+
         # Save current slot's text to local dict
         current_text = self.text.get("1.0", tk.END).strip()
         self.saved_prompts[str(self.current_slot)] = current_text
         self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
+        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
 
         model = self._get_selected_model()
         self.result = {
@@ -1867,6 +2163,7 @@ class PromptEditorDialog(tk.Toplevel):
             "duration": model["duration"],
             "all_prompts": self.saved_prompts.copy(),  # Include all edited prompts
             "all_negative_prompts": self.saved_negative_prompts.copy(),
+            "all_titles": self.saved_titles.copy(),  # Include all slot titles
             "model_capabilities": self.capabilities,
         }
         self.destroy()

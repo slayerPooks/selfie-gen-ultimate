@@ -520,8 +520,9 @@ class KlingAutomationUI:
         # Show prompt slots status
         saved_prompts = self.config.get("saved_prompts", {})
         slots_status = []
-        for i in ["1", "2", "3"]:
-            if saved_prompts.get(i):
+        for i in range(1, 11):
+            slot_key = str(i)
+            if saved_prompts.get(slot_key):
                 slots_status.append(f"\033[92m{i}\033[0m")
             else:
                 slots_status.append(f"\033[90m{i}\033[0m")
@@ -1004,9 +1005,10 @@ class KlingAutomationUI:
         # Show all slots
         print("\033[93mSaved Prompts:\033[0m")
         saved_prompts = self.config.get("saved_prompts", {})
-        for i in ["1", "2", "3"]:
-            prompt = saved_prompts.get(i)
-            active = " \033[92m(ACTIVE)\033[0m" if i == current_slot else ""
+        for i in range(1, 11):
+            slot_key = str(i)
+            prompt = saved_prompts.get(slot_key)
+            active = " \033[92m(ACTIVE)\033[0m" if slot_key == current_slot else ""
             if prompt:
                 preview = prompt[:50] + "..." if len(prompt) > 50 else prompt
                 print(f"  [{i}] {preview}{active}")
@@ -1138,9 +1140,10 @@ class KlingAutomationUI:
         current_slot = self.config.get("current_prompt_slot", 1)
 
         print("\033[93mSaved Prompts:\033[0m")
-        for i in ["1", "2", "3"]:
-            prompt = saved_prompts.get(i)
-            active = " \033[92m◄ ACTIVE\033[0m" if str(i) == str(current_slot) else ""
+        for i in range(1, 11):
+            slot_key = str(i)
+            prompt = saved_prompts.get(slot_key)
+            active = " \033[92m◄ ACTIVE\033[0m" if slot_key == str(current_slot) else ""
             if prompt:
                 preview = prompt[:60] + "..." if len(prompt) > 60 else prompt
                 print(f"  [\033[96m{i}\033[0m] {preview}{active}")
@@ -1148,8 +1151,8 @@ class KlingAutomationUI:
                 print(f"  [\033[90m{i}\033[0m] \033[90m(empty)\033[0m{active}")
         print()
 
-        choice = input("\033[92mSelect slot (1-3) or Enter to cancel: \033[0m").strip()
-        if choice in ["1", "2", "3"]:
+        choice = input("\033[92mSelect slot (1-10) or Enter to cancel: \033[0m").strip()
+        if choice.isdigit() and 1 <= int(choice) <= 10:
             self.config["current_prompt_slot"] = int(choice)
             self.save_config()
             prompt = saved_prompts.get(choice)
