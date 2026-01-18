@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import logging
+from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -50,6 +51,20 @@ COLORS = {
 
 # Valid image extensions for folder scanning
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+
+
+UI_CONFIG_DEFAULTS = {
+    "window": {"width": 1100, "height": 1200, "min_width": 800, "min_height": 900},
+    "config_panel": {
+        "prompt_preview_height": 6,
+        "prompt_preview_font_size": 9,
+        "negative_prompt_height": 1,
+    },
+    "drop_zone": {"height": 180},
+    "queue_panel": {"width": 300},
+    "history_panel": {"height": 220, "visible_rows": 8},
+    "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
+}
 
 
 class FolderPreviewDialog(tk.Toplevel):
@@ -191,6 +206,10 @@ class KlingGUIWindow:
             self.config_path = os.path.join(get_app_dir(), config_path)
 
         self.config = self._load_config()
+        self.ui_config_path = os.path.join(get_app_dir(), "ui_config.json")
+        self.ui_config = self._load_ui_config()
+        self.edit_mode = False
+        self.dimension_labels = {}
         # History file in same directory as config
         self.history_path = os.path.join(
             os.path.dirname(self.config_path), "kling_history.json"
@@ -209,21 +228,34 @@ class KlingGUIWindow:
         self.root.configure(bg=COLORS["bg_main"])
 
         # Restore window geometry or use defaults
+        window_config = self.ui_config.get("window", {})
+        try:
+            window_width = int(window_config.get("width", 1100))
+            window_height = int(window_config.get("height", 1200))
+            min_width = int(window_config.get("min_width", 800))
+            min_height = int(window_config.get("min_height", 900))
+        except (TypeError, ValueError):
+            window_width, window_height, min_width, min_height = 1100, 1200, 800, 900
+
         saved_geometry = self.config.get("window_geometry", "")
         if saved_geometry:
             try:
                 self.root.geometry(saved_geometry)
             except Exception:
-                self.root.geometry("1100x1200")
+                self.root.geometry(f"{window_width}x{window_height}")
         else:
-            self.root.geometry("1100x1200")
-        self.root.minsize(800, 900)
+            self.root.geometry(f"{window_width}x{window_height}")
+        self.root.minsize(min_width, min_height)
 
         # Set up the UI
         self._setup_ui()
 
         # Restore sash positions after UI is built (delayed to ensure widgets are ready)
         self.root.after(100, self._restore_sash_positions)
+        self.root.after(150, self._apply_ui_config)
+
+        # Enable debug hotkeys/inspector if configured
+        self._setup_debug_hotkeys()
 
         # Initialize generator and queue manager
         self._init_generator()
@@ -294,6 +326,28 @@ class KlingGUIWindow:
             print(f"Warning: Could not load config: {e}")
 
         return default_config
+
+    def _merge_ui_config(self, base: dict, updates: dict) -> dict:
+        """Deep-merge UI config dictionaries."""
+        for key, value in updates.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                self._merge_ui_config(base[key], value)
+            else:
+                base[key] = value
+        return base
+
+    def _load_ui_config(self) -> dict:
+        """Load UI layout configuration from ui_config.json."""
+        config = deepcopy(UI_CONFIG_DEFAULTS)
+        try:
+            if self.ui_config_path and os.path.exists(self.ui_config_path):
+                with open(self.ui_config_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        self._merge_ui_config(config, loaded)
+        except Exception as e:
+            print(f"Warning: Could not load UI config: {e}")
+        return config
 
     def _save_config(self):
         """Save configuration to JSON file."""
@@ -431,6 +485,566 @@ class KlingGUIWindow:
 
         # Control buttons at bottom
         self._setup_controls()
+
+    def _apply_ui_config(self):
+        """Apply UI layout configuration to existing widgets."""
+        if not hasattr(self, "root"):
+            return
+
+        window_config = self.ui_config.get("window", {})
+        try:
+            width = int(window_config.get("width", 1100))
+            height = int(window_config.get("height", 1200))
+            min_width = int(window_config.get("min_width", 800))
+            min_height = int(window_config.get("min_height", 900))
+        except (TypeError, ValueError):
+            width, height, min_width, min_height = 1100, 1200, 800, 900
+
+        try:
+            self.root.minsize(min_width, min_height)
+        except Exception:
+            pass
+
+        try:
+            current_geom = self.root.geometry()
+            x_pos = None
+            y_pos = None
+            if "+" in current_geom:
+                parts = current_geom.split("+")
+                if len(parts) >= 3:
+                    x_pos = parts[1]
+                    y_pos = parts[2]
+            if x_pos is not None and y_pos is not None:
+                self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+            else:
+                self.root.geometry(f"{width}x{height}")
+        except Exception:
+            pass
+
+        if hasattr(self, "config_panel") and hasattr(self.config_panel, "apply_ui_config"):
+            self.config_panel.apply_ui_config(self.ui_config)
+
+        try:
+            drop_height = int(self.ui_config.get("drop_zone", {}).get("height", 180))
+            queue_width = int(self.ui_config.get("queue_panel", {}).get("width", 300))
+            history_height = int(
+                self.ui_config.get("history_panel", {}).get("height", 220)
+            )
+        except (TypeError, ValueError):
+            drop_height, queue_width, history_height = 180, 300, 220
+
+        sash_positions = self.ui_config.get("sash_positions", {})
+        log_sash_y = None
+        try:
+            if "dropzone" in sash_positions:
+                drop_value = sash_positions.get("dropzone")
+                if isinstance(drop_value, (list, tuple)) and len(drop_value) >= 2:
+                    drop_height = int(drop_value[1])
+                else:
+                    drop_height = int(drop_value)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            if "queue" in sash_positions:
+                queue_value = sash_positions.get("queue")
+                if isinstance(queue_value, (list, tuple)) and len(queue_value) >= 1:
+                    queue_width = int(queue_value[0])
+                else:
+                    queue_width = int(queue_value)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            if "log" in sash_positions:
+                log_value = sash_positions.get("log")
+                if isinstance(log_value, (list, tuple)) and len(log_value) >= 2:
+                    log_sash_y = int(log_value[1])
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            visible_rows = int(
+                self.ui_config.get("history_panel", {}).get("visible_rows", 8)
+            )
+        except (TypeError, ValueError):
+            visible_rows = 8
+
+        self.root.update_idletasks()
+
+        if hasattr(self, "main_paned"):
+            try:
+                self.main_paned.sash_place(0, 0, drop_height)
+            except Exception:
+                pass
+
+        if hasattr(self, "bottom_paned"):
+            try:
+                self.bottom_paned.sash_place(0, queue_width, 0)
+            except Exception:
+                pass
+
+        if hasattr(self, "right_paned"):
+            try:
+                total_height = self.right_paned.winfo_height()
+                if total_height > 0:
+                    if log_sash_y is not None:
+                        self.right_paned.sash_place(0, 0, log_sash_y)
+                    else:
+                        log_height = max(50, total_height - history_height)
+                        self.right_paned.sash_place(0, 0, log_height)
+            except Exception:
+                pass
+
+        if hasattr(self, "history_tree"):
+            try:
+                self.history_tree.config(height=max(1, visible_rows))
+            except Exception:
+                pass
+
+    def _setup_debug_hotkeys(self):
+        """Bind debug hotkeys and inspector, when enabled in ui_config.json."""
+        debug_config = self.ui_config.get("debug", {})
+        self._debug_enabled = bool(debug_config.get("enabled", False))
+        if not self._debug_enabled:
+            return
+
+        inspector_hotkey = debug_config.get("inspector_hotkey", "F12")
+        reload_hotkey = debug_config.get("reload_hotkey", "F5")
+
+        try:
+            # Unbind existing hotkeys to prevent duplication on reload
+            self.root.unbind(f"<{inspector_hotkey}>")
+            self.root.unbind(f"<{reload_hotkey}>")
+            self.root.unbind("<Control-e>")
+            self.root.unbind("<Control-s>")
+            # Note: bind_all can't be easily unbound without tracking, 
+            # but Button-3 with add="+" won't cause issues
+            
+            # Rebind hotkeys
+            self.root.bind(
+                f"<{inspector_hotkey}>", lambda e: self._dump_widget_tree()
+            )
+            self.root.bind(f"<{reload_hotkey}>", lambda e: self._hot_reload_ui())
+            self.root.bind_all("<Button-3>", self._inspect_widget, add="+")
+            self.root.bind("<Control-e>", lambda e: self._toggle_edit_mode())
+            self.root.bind("<Control-s>", lambda e: self._export_current_layout())
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "main_paned"):
+                self.main_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
+            if hasattr(self, "bottom_paned"):
+                self.bottom_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
+            if hasattr(self, "right_paned"):
+                self.right_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
+        except Exception:
+            pass
+
+        self._log(
+            "UI debug hotkeys enabled (F12 tree, F5 reload, Ctrl+E edit, Ctrl+S export)",
+            "info",
+        )
+
+    def _dump_widget_tree(self, widget=None, indent=0):
+        """Print widget hierarchy with sizes."""
+        if not getattr(self, "_debug_enabled", False):
+            return
+        if widget is None:
+            widget = self.root
+            print("\n=== WIDGET TREE ===")
+
+        name = str(widget)
+        size = f"{widget.winfo_width()}x{widget.winfo_height()}"
+        req = f"{widget.winfo_reqwidth()}x{widget.winfo_reqheight()}"
+        manager = widget.winfo_manager()
+        print(
+            "  " * indent
+            + f"{widget.__class__.__name__} {name} - {size} (req {req}) [{manager}]"
+        )
+
+        try:
+            if manager == "pack":
+                print("  " * (indent + 1) + f"pack: {widget.pack_info()}")
+            elif manager == "grid":
+                print("  " * (indent + 1) + f"grid: {widget.grid_info()}")
+            elif manager == "place":
+                print("  " * (indent + 1) + f"place: {widget.place_info()}")
+        except Exception:
+            pass
+
+        for child in widget.winfo_children():
+            self._dump_widget_tree(child, indent + 1)
+
+    def _inspect_widget(self, event):
+        """Right-click inspector."""
+        if not getattr(self, "_debug_enabled", False):
+            return
+
+        w = event.widget
+        self._flash_widget_border(w)
+        widget_path = self._get_widget_path(w)
+
+        info_lines = [
+            f"Path: {widget_path}",
+            f"Class: {w.__class__.__name__} {str(w)}",
+            f"Size: {w.winfo_width()} x {w.winfo_height()} (req {w.winfo_reqwidth()} x {w.winfo_reqheight()})",
+            f"Position: ({w.winfo_x()}, {w.winfo_y()}) in parent",
+            f"Screen: ({w.winfo_rootx()}, {w.winfo_rooty()})",
+            f"Manager: {w.winfo_manager()}",
+        ]
+
+        try:
+            manager = w.winfo_manager()
+            if manager == "pack":
+                info_lines.append(f"Pack: {w.pack_info()}")
+            elif manager == "grid":
+                info_lines.append(f"Grid: {w.grid_info()}")
+            elif manager == "place":
+                info_lines.append(f"Place: {w.place_info()}")
+        except Exception:
+            pass
+
+        print("\n=== WIDGET INSPECTOR ===")
+        for line in info_lines:
+            print(line)
+
+        self._show_inspector_popup(info_lines, event.x_root, event.y_root)
+
+    def _get_widget_path(self, widget) -> str:
+        """Get full widget hierarchy path."""
+        path = []
+        current = widget
+        while current is not None:
+            name = current.__class__.__name__
+            if hasattr(current, "_name"):
+                name = f"{name}({current._name})"
+            path.insert(0, name)
+            current = current.master if hasattr(current, "master") else None
+        return " -> ".join(path)
+
+    def _flash_widget_border(self, widget):
+        """Flash a red border around a widget to highlight it."""
+        try:
+            original_thickness = widget.cget("highlightthickness")
+            original_color = widget.cget("highlightbackground")
+            widget.config(highlightthickness=3, highlightbackground="#FF4040")
+
+            def restore():
+                widget.config(
+                    highlightthickness=original_thickness,
+                    highlightbackground=original_color,
+                )
+
+            self.root.after(400, restore)
+        except Exception:
+            pass
+
+    def _toggle_edit_mode(self):
+        """Ctrl+E: Toggle layout edit mode."""
+        self.edit_mode = not self.edit_mode
+        if self.edit_mode:
+            self._log("LAYOUT EDIT MODE - Drag panels, Ctrl+S to export", "warning")
+            self._show_all_dimensions()
+        else:
+            self._log("Edit mode disabled", "info")
+            self._hide_dimension_overlays()
+
+    def _show_all_dimensions(self):
+        """Show dimension overlays on major widgets."""
+        self._hide_dimension_overlays()
+        widgets_to_track = [
+            ("Window", self.root),
+            ("Config Panel", self.config_panel if hasattr(self, "config_panel") else None),
+            ("Drop Zone", self.drop_zone if hasattr(self, "drop_zone") else None),
+            ("Queue Panel", self.queue_frame if hasattr(self, "queue_frame") else None),
+            ("Log Display", self.log_display if hasattr(self, "log_display") else None),
+            (
+                "History Panel",
+                self.history_frame if hasattr(self, "history_frame") else None,
+            ),
+        ]
+
+        print("\n" + "=" * 50)
+        print("CURRENT LAYOUT DIMENSIONS")
+        print("=" * 50)
+
+        for name, widget in widgets_to_track:
+            if not widget:
+                continue
+            width = widget.winfo_width()
+            height = widget.winfo_height()
+            print(f"{name:20} {width:4} x {height:4}")
+
+            label = tk.Label(
+                widget,
+                text=f"{width}x{height}",
+                font=("Segoe UI", 9, "bold"),
+                bg="#E53935",
+                fg="white",
+                padx=4,
+                pady=2,
+            )
+            label.place(relx=1.0, rely=0.0, anchor="ne")
+            self.dimension_labels[name] = label
+
+        self._print_sash_positions()
+        print("=" * 50 + "\n")
+
+    def _hide_dimension_overlays(self):
+        """Remove all dimension overlay labels."""
+        for label in self.dimension_labels.values():
+            try:
+                label.destroy()
+            except Exception:
+                pass
+        self.dimension_labels.clear()
+
+    def _on_sash_drag(self, event):
+        """Update dimension display during sash drag."""
+        if not self.edit_mode:
+            return
+
+        if getattr(self, "_sash_update_pending", False):
+            return
+
+        self._sash_update_pending = True
+
+        def update():
+            self._print_sash_positions()
+            self._update_dimension_overlays()
+            self._sash_update_pending = False
+
+        self.root.after(100, update)
+
+    def _update_dimension_overlays(self):
+        """Refresh overlay labels with current sizes."""
+        if not self.edit_mode:
+            return
+
+        mapping = {
+            "Window": self.root,
+            "Config Panel": getattr(self, "config_panel", None),
+            "Drop Zone": getattr(self, "drop_zone", None),
+            "Queue Panel": getattr(self, "queue_frame", None),
+            "Log Display": getattr(self, "log_display", None),
+            "History Panel": getattr(self, "history_frame", None),
+        }
+
+        for name, widget in mapping.items():
+            if not widget:
+                continue
+            label = self.dimension_labels.get(name)
+            if not label:
+                continue
+            label.config(text=f"{widget.winfo_width()}x{widget.winfo_height()}")
+
+    def _print_sash_positions(self):
+        """Print current sash positions."""
+        positions = {}
+        try:
+            if hasattr(self, "main_paned"):
+                positions["dropzone_sash"] = self.main_paned.sash_coord(0)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "bottom_paned"):
+                positions["queue_sash"] = self.bottom_paned.sash_coord(0)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "right_paned"):
+                positions["log_sash"] = self.right_paned.sash_coord(0)
+        except Exception:
+            pass
+
+        if positions:
+            self._show_sash_toast(positions)
+
+    def _show_sash_toast(self, positions: dict):
+        """Show a short-lived overlay with current sash positions."""
+        if not self.edit_mode:
+            return
+
+        try:
+            if hasattr(self, "_sash_toast") and self._sash_toast.winfo_exists():
+                self._sash_toast.destroy()
+        except Exception:
+            pass
+
+        try:
+            popup = tk.Toplevel(self.root)
+            popup.overrideredirect(True)
+            popup.attributes("-topmost", True)
+            try:
+                popup.attributes("-alpha", 0.85)
+            except Exception:
+                pass
+
+            text = (
+                f"Drop: {positions.get('dropzone_sash', '')}  |  "
+                f"Queue: {positions.get('queue_sash', '')}  |  "
+                f"Log: {positions.get('log_sash', '')}"
+            )
+
+            frame = tk.Frame(popup, bg="#202225", bd=1, relief=tk.SOLID)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            label = tk.Label(
+                frame,
+                text=text,
+                font=("Consolas", 9, "bold"),
+                bg="#202225",
+                fg="#F2F2F2",
+                padx=10,
+                pady=6,
+            )
+            label.pack()
+
+            self.root.update_idletasks()
+            popup.update_idletasks()
+
+            root_x = self.root.winfo_rootx()
+            root_y = self.root.winfo_rooty()
+            root_w = self.root.winfo_width()
+            root_h = self.root.winfo_height()
+            toast_w = popup.winfo_reqwidth()
+            toast_h = popup.winfo_reqheight()
+
+            margin = 12
+            x = root_x + max(0, root_w - toast_w - margin)
+            y = root_y + max(0, root_h - toast_h - margin)
+            popup.geometry(f"+{x}+{y}")
+
+            popup.after(1000, popup.destroy)
+            self._sash_toast = popup
+        except Exception:
+            pass
+
+    def _export_current_layout(self):
+        """Ctrl+S: Export current layout to JSON."""
+        try:
+            layout = {
+                "_comment": "Exported layout - copy values to ui_config.json",
+                "window": {
+                    "width": self.root.winfo_width(),
+                    "height": self.root.winfo_height(),
+                    "min_width": self.root.winfo_width(),
+                    "min_height": self.root.winfo_height(),
+                },
+                "config_panel": {
+                    "prompt_preview_height": (
+                        int(self.config_panel.prompt_preview.cget("height"))
+                        if hasattr(self, "config_panel")
+                        and hasattr(self.config_panel, "prompt_preview")
+                        else 0
+                    ),
+                    "prompt_preview_font_size": 9,
+                    "negative_prompt_height": 1,
+                    "prompt_preview_width": (
+                        self.config_panel.prompt_preview_container.winfo_width()
+                        if hasattr(self, "config_panel")
+                        and hasattr(self.config_panel, "prompt_preview_container")
+                        else 0
+                    ),
+                    "prompt_preview_right_pad": 0,
+                    "prompt_preview_offset_x": 16,
+                },
+                "drop_zone": {
+                    "height": self.drop_zone.winfo_height()
+                    if hasattr(self, "drop_zone")
+                    else 0
+                },
+                "queue_panel": {
+                    "width": self.queue_frame.winfo_width()
+                    if hasattr(self, "queue_frame")
+                    else 0
+                },
+                "history_panel": {
+                    "height": self.history_frame.winfo_height()
+                    if hasattr(self, "history_frame")
+                    else 0,
+                    "visible_rows": (
+                        int(self.history_tree.cget("height"))
+                        if hasattr(self, "history_tree")
+                        else 0
+                    ),
+                },
+                "sash_positions": {},
+            }
+
+            try:
+                if hasattr(self, "main_paned"):
+                    layout["sash_positions"]["dropzone"] = self.main_paned.sash_coord(0)
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self, "bottom_paned"):
+                    layout["sash_positions"]["queue"] = self.bottom_paned.sash_coord(0)
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self, "right_paned"):
+                    layout["sash_positions"]["log"] = self.right_paned.sash_coord(0)
+            except Exception:
+                pass
+
+            export_path = Path("ui_config_exported.json")
+            with open(export_path, "w", encoding="utf-8") as f:
+                json.dump(layout, f, indent=2)
+
+            self._log(
+                f"Layout exported to {export_path.name}",
+                "success",
+            )
+            print(f"\nExported to: {export_path.absolute()}")
+            print(json.dumps(layout, indent=2))
+        except Exception as e:
+            self._log(f"Export failed: {e}", "error")
+
+    def _show_inspector_popup(self, lines: List[str], x: int, y: int):
+        """Show an on-screen tooltip with widget details."""
+        try:
+            if hasattr(self, "_inspector_popup") and self._inspector_popup.winfo_exists():
+                self._inspector_popup.destroy()
+        except Exception:
+            pass
+
+        try:
+            popup = tk.Toplevel(self.root)
+            popup.overrideredirect(True)
+            popup.attributes("-topmost", True)
+
+            frame = tk.Frame(popup, bg=COLORS["bg_panel"], bd=1, relief=tk.SOLID)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            for line in lines:
+                tk.Label(
+                    frame,
+                    text=line,
+                    font=("Consolas", 8),
+                    bg=COLORS["bg_panel"],
+                    fg=COLORS["text_light"],
+                    anchor="w",
+                ).pack(fill=tk.X, padx=6, pady=1)
+
+            popup.geometry(f"+{x + 10}+{y + 10}")
+            popup.after(2000, popup.destroy)
+            self._inspector_popup = popup
+        except Exception:
+            pass
+
+    def _hot_reload_ui(self):
+        """F5 to reload UI config."""
+        self.ui_config = self._load_ui_config()
+        self._apply_ui_config()
+        self._setup_debug_hotkeys()
+        self._log("UI reloaded from ui_config.json", "success")
 
     def _setup_header(self):
         """Set up the header bar."""

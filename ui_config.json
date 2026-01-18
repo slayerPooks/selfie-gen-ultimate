@@ -1,0 +1,46 @@
+{
+  "_comment": "Exported layout - copy values to ui_config.json",
+  "window": {
+    "width": 1003,
+    "height": 1270,
+    "min_width": 1003,
+    "min_height": 1270
+  },
+  "config_panel": {
+    "prompt_preview_height": 16,
+    "prompt_preview_font_size": 8,
+    "negative_prompt_height": 0,
+    "prompt_preview_width": 0,
+    "prompt_preview_right_pad": 20,
+    "prompt_preview_offset_x": 12
+  },
+  "drop_zone": {
+    "height": 190
+  },
+  "queue_panel": {
+    "width": 236
+  },
+  "history_panel": {
+    "height": 220,
+    "visible_rows": 6
+  },
+  "debug": {
+    "enabled": true,
+    "inspector_hotkey": "F12",
+    "reload_hotkey": "F5"
+  },
+  "sash_positions": {
+    "dropzone": [
+      1,
+      200
+    ],
+    "queue": [
+      238,
+      1
+    ],
+    "log": [
+      1,
+      228
+    ]
+  }
+}

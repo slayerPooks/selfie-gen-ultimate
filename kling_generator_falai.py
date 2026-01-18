@@ -10,6 +10,8 @@ import io
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import traceback
+from datetime import datetime
 
 from model_schema_manager import ModelSchemaManager
 
@@ -155,17 +157,128 @@ class FalAIKlingGenerator:
                     return clean
             return "video"
 
-    def get_output_filename(self, image_stem: str) -> str:
-        """Generate the output filename with model and prompt slot.
+    def sanitize_prompt_description(self, prompt_text: str, max_length: int = 35) -> str:
+        """Extract a clean filename-safe description from prompt text.
+
+        Takes first 3-5 meaningful words, removes special chars,
+        converts spaces to underscores.
 
         Args:
-            image_stem: The image filename without extension (e.g., 'selfie')
+            prompt_text: The full prompt text to extract from
+            max_length: Maximum length for the resulting description (default 35)
 
         Returns:
-            Filename like 'selfie_kling_k25turbo_p2.mp4'
+            Cleaned filename-safe string like "Generate_lifelike_video_animation"
+
+        Examples:
+            "Generate a lifelike video animation..." → "Generate_lifelike_video_animation"
+            "Turn head to the right slowly..." → "Turn_head_right_slowly"
+            "Framing: medium shot, head and upper torso visible" → "medium_shot_head_upper_torso"
         """
-        model_short = self.get_model_short_name()
-        return f"{image_stem}_kling_{model_short}_p{self.prompt_slot}.mp4"
+        if not prompt_text:
+            return "prompt"
+
+        # Take first sentence or first 100 chars
+        text = prompt_text[:100].split('.')[0].strip()
+
+        # Remove common formatting prefixes
+        prefixes_to_remove = [
+            "Framing:", "Camera:", "Subject:", "Action:", "Movement:",
+            "Generate", "Create", "Make", "The subject should", "This should"
+        ]
+        for prefix in prefixes_to_remove:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+
+        # Split into words
+        words = text.split()
+
+        # Filter out common filler words
+        filler_words = {'a', 'an', 'the', 'with', 'from', 'to', 'and', 'or', 'of', 'in', 'on', 'at', 'by'}
+        meaningful_words = [w for w in words if w.lower() not in filler_words]
+
+        # Take first 3-5 meaningful words (or all if less)
+        selected_words = meaningful_words[:5] if len(meaningful_words) >= 3 else words[:5]
+
+        # Join with underscores
+        description = '_'.join(selected_words)
+
+        # Remove special characters except underscores and dashes
+        description = ''.join(c if c.isalnum() or c in ('_', '-') else '' for c in description)
+
+        # Truncate to max length
+        if len(description) > max_length:
+            description = description[:max_length].rstrip('_-')
+
+        return description if description else "prompt"
+
+    def get_output_filename(
+        self,
+        image_stem: str,
+        config: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None
+    ) -> str:
+        """Generate enhanced filename with model, prompt info, and date.
+
+        Format: {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
+
+        Args:
+            image_stem: Image filename without extension (e.g., 'selfie')
+            config: Config dict containing prompt_titles and saved_prompts
+            timestamp: Generation start time (defaults to now)
+
+        Returns:
+            Filename like: Selfie-Kling_V2.5_Turbo_Pro-Left_Right_1-2-3-4-5-6-p3-2026-01-17.mp4
+
+        Examples:
+            With prompt shorthand:
+                "Selfie-Kling_V2.5_Turbo_Pro-Left_Right_1-2-3-4-5-6-p3-2026-01-17.mp4"
+            Without shorthand (fallback to prompt text extraction):
+                "Portrait-Kling_V2.5_Turbo_Pro-Turn_head_right_slowly-p1-2026-01-17.mp4"
+        """
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        # Default config if not provided
+        if config is None:
+            config = {}
+            logger.debug(" get_output_filename called with config=None, using empty dict")
+
+        logger.debug(f" get_output_filename inputs:")
+        logger.info(f"  image_stem: {image_stem}")
+        logger.info(f"  config keys: {config.keys() if config else 'None'}")
+        logger.info(f"  timestamp: {timestamp}")
+        logger.info(f"  model_display_name: {self.model_display_name}")
+
+        # 1. Model name: spaces to underscores
+        model_name = self.model_display_name.replace(" ", "_")
+
+        # 2. Prompt info: try shorthand first, fallback to description
+        slot_str = str(self.prompt_slot)
+        prompt_titles = config.get("prompt_titles", {})
+
+        if slot_str in prompt_titles and prompt_titles[slot_str]:
+            # Use shorthand from prompt_titles and sanitize it
+            shorthand = prompt_titles[slot_str]
+            # Replace spaces with underscores, remove special chars except _ and -
+            prompt_part = ''.join(
+                c if c.isalnum() or c in ('_', '-', ' ') else ''
+                for c in shorthand
+            ).replace(" ", "_")
+        else:
+            # Fallback: extract from prompt text
+            saved_prompts = config.get("saved_prompts", {})
+            prompt_text = saved_prompts.get(slot_str, "")
+            if prompt_text:
+                prompt_part = self.sanitize_prompt_description(prompt_text)
+            else:
+                prompt_part = "prompt"  # Ultimate fallback
+
+        # 3. Date: YYYY-MM-DD format (ISO 8601 for international compatibility)
+        date_str = timestamp.strftime("%Y-%m-%d")
+
+        # 4. Build filename
+        return f"{image_stem}-{model_name}-{prompt_part}-p{self.prompt_slot}-{date_str}.mp4"
 
     def _report_progress(self, message: str, level: str = "info"):
         """Report progress to callback if set."""
@@ -314,6 +427,8 @@ class FalAIKlingGenerator:
         camera_fixed: bool = False,
         generate_audio: bool = False,
         end_image_url: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None,
     ) -> Optional[str]:
         """Create Kling video via fal.ai
 
@@ -331,6 +446,8 @@ class FalAIKlingGenerator:
             camera_fixed: Whether camera should be fixed/stationary
             generate_audio: Whether to generate audio
             end_image_url: Optional last frame image URL for interpolation
+            config: Config dict containing prompt_titles and saved_prompts (for enhanced filenames)
+            timestamp: Generation start time for consistent filenames (defaults to now)
         """
         try:
             # Determine actual output folder
@@ -358,6 +475,19 @@ class FalAIKlingGenerator:
 
             # Prepare prompt
             prompt = custom_prompt if custom_prompt else self.default_prompt
+
+            # Truncate prompt if it exceeds API limit (2500 characters)
+            MAX_PROMPT_LENGTH = 2500
+            if len(prompt) > MAX_PROMPT_LENGTH:
+                original_length = len(prompt)
+                prompt = prompt[:MAX_PROMPT_LENGTH]
+                if self.verbose:
+                    logger.warning(
+                        f"⚠ Prompt truncated from {original_length} to {MAX_PROMPT_LENGTH} characters (API limit)"
+                    )
+                self._report_progress(
+                    f"⚠ Prompt truncated to {MAX_PROMPT_LENGTH} chars", "warning"
+                )
 
             # fal.ai API request
             headers = {
@@ -524,6 +654,8 @@ class FalAIKlingGenerator:
             base_delay = 5
             max_delay = 30
 
+            logger.debug(f" Starting polling loop. Max attempts: {max_attempts}, status_url: {status_url}")
+
             while attempt < max_attempts:
                 # Calculate delay with exponential backoff
                 if attempt < 24:  # First 2 minutes: 5 second polls
@@ -535,6 +667,8 @@ class FalAIKlingGenerator:
 
                 time.sleep(delay)
                 attempt += 1
+
+                logger.debug(f" Polling attempt {attempt}/{max_attempts}, delay: {delay}s")
 
                 # Show progress every minute
                 if attempt % (60 // base_delay) == 0:
@@ -615,34 +749,45 @@ class FalAIKlingGenerator:
 
                     elif status == "COMPLETED":
                         # Debug: log the full response to see structure
-                        if self.verbose:
-                            logger.info(
-                                f"DEBUG - Full response keys: {list(status_result.keys())}"
-                            )
-                            logger.info(f"DEBUG - Full response: {status_result}")
+                        logger.debug(" Status: COMPLETED")
+                        logger.debug(f" Full response keys: {list(status_result.keys())}")
+                        logger.debug(f" Full response: {status_result}")
 
                         # Try multiple possible response structures
                         video_url = None
 
                         # Structure 1: output.video.url
                         if "output" in status_result:
-                            video_url = (
-                                status_result.get("output", {})
-                                .get("video", {})
-                                .get("url")
-                            )
+                            logger.debug(" Trying Structure 1: output.video.url")
+                            output_data = status_result.get("output", {})
+                            logger.debug(f" output keys: {list(output_data.keys()) if isinstance(output_data, dict) else 'not a dict'}")
+                            video_url = output_data.get("video", {}).get("url")
+                            if video_url:
+                                logger.debug(f" Found video URL in Structure 1: {video_url}")
+                            else:
+                                logger.debug(" No video URL in Structure 1")
 
                         # Structure 2: video.url
                         if not video_url and "video" in status_result:
-                            video_url = status_result.get("video", {}).get("url")
+                            logger.debug(" Trying Structure 2: video.url")
+                            video_data = status_result.get("video", {})
+                            logger.debug(f" video keys: {list(video_data.keys()) if isinstance(video_data, dict) else 'not a dict'}")
+                            video_url = video_data.get("url")
+                            if video_url:
+                                logger.debug(f" Found video URL in Structure 2: {video_url}")
+                            else:
+                                logger.debug(" No video URL in Structure 2")
 
                         # Structure 3: data.video.url
                         if not video_url and "data" in status_result:
-                            video_url = (
-                                status_result.get("data", {})
-                                .get("video", {})
-                                .get("url")
-                            )
+                            logger.debug(" Trying Structure 3: data.video.url")
+                            data_obj = status_result.get("data", {})
+                            logger.debug(f" data keys: {list(data_obj.keys()) if isinstance(data_obj, dict) else 'not a dict'}")
+                            video_url = data_obj.get("video", {}).get("url")
+                            if video_url:
+                                logger.debug(f" Found video URL in Structure 3: {video_url}")
+                            else:
+                                logger.debug(" No video URL in Structure 3")
 
                         # Structure 4: response_url might contain the result
                         if not video_url and "response_url" in status_result:
@@ -652,11 +797,15 @@ class FalAIKlingGenerator:
                                     f"Fetching result from response_url: {response_url}"
                                 )
                             try:
+                                logger.debug(f" Fetching from response_url with headers: {status_headers}")
                                 result_response = requests.get(
                                     response_url, headers=status_headers, timeout=30
                                 )
+                                logger.debug(f" Response status code: {result_response.status_code}")
+                                logger.debug(f" Response text (first 1000 chars): {result_response.text[:1000]}")
                                 if result_response.status_code == 200:
                                     result_data = result_response.json()
+                                    logger.debug(f" Parsed JSON successfully")
                                     if self.verbose:
                                         logger.info(
                                             f"DEBUG - Result data keys: {list(result_data.keys())}"
@@ -686,7 +835,10 @@ class FalAIKlingGenerator:
                                         return None
 
                                     # Try all structures in result_data
+                                    logger.debug(" Extracting video URL from result_data")
                                     video_url = result_data.get("video", {}).get("url")
+                                    if video_url:
+                                        logger.debug(f" Found video URL in result_data.video.url: {video_url}")
 
                                     if not video_url:
                                         video_url = (
@@ -694,6 +846,8 @@ class FalAIKlingGenerator:
                                             .get("video", {})
                                             .get("url")
                                         )
+                                        if video_url:
+                                            logger.debug(f" Found video URL in result_data.output.video.url: {video_url}")
 
                                     if not video_url:
                                         video_url = (
@@ -701,6 +855,11 @@ class FalAIKlingGenerator:
                                             .get("video", {})
                                             .get("url")
                                         )
+                                        if video_url:
+                                            logger.debug(f" Found video URL in result_data.data.video.url: {video_url}")
+                                else:
+                                    logger.debug(f" Non-200 status from response_url: {result_response.status_code}")
+                                    logger.debug(f" Response text: {result_response.text[:1000]}")
 
                             except Exception as e:
                                 if self.verbose:
@@ -709,7 +868,11 @@ class FalAIKlingGenerator:
                                     )
 
                         if not video_url:
+                            logger.debug("No video URL found after checking all structures")
+                            logger.debug(f" status_result keys: {list(status_result.keys())}")
+                            logger.debug(f" status_result: {status_result}")
                             logger.error("✗ No video URL in response")
+                            logger.error("✗ Checked structures: output.video.url, video.url, data.video.url, response_url")
                             return None
 
                         if self.verbose:
@@ -736,9 +899,26 @@ class FalAIKlingGenerator:
                                         )
                                         return None
 
-                                # Save video with model and prompt slot in filename
+                                # Save video with enhanced filename (model, prompt, date)
                                 char_name = Path(character_image_path).stem
-                                output_filename = self.get_output_filename(char_name)
+
+                                # DEBUG: Log parameters before filename generation
+                                logger.debug(f" About to generate filename:")
+                                logger.info(f"  char_name: {char_name}")
+                                logger.info(f"  config type: {type(config)}, value: {config}")
+                                logger.info(f"  timestamp type: {type(timestamp)}, value: {timestamp}")
+                                logger.info(f"  model_display_name: {self.model_display_name}")
+                                logger.info(f"  prompt_slot: {self.prompt_slot}")
+
+                                try:
+                                    output_filename = self.get_output_filename(
+                                        char_name, config, timestamp
+                                    )
+                                    logger.debug(f" Generated filename: {output_filename}")
+                                except Exception as e:
+                                    logger.error(f"✗ Filename generation failed: {e}")
+                                    logger.error(f"✗ Traceback:\n{traceback.format_exc()}")
+                                    raise
                                 output_path = (
                                     Path(actual_output_folder) / output_filename
                                 )
@@ -839,6 +1019,7 @@ class FalAIKlingGenerator:
 
         except Exception as e:
             logger.error(f"✗ Error: {str(e)}")
+            logger.error(f"✗ Full traceback:\n{traceback.format_exc()}")
             return None
 
     def process_all_images_concurrent(

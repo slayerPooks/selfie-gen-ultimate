@@ -83,17 +83,17 @@ class DropZone(tk.Frame):
         self.icon_label = tk.Label(
             self.content_container,
             text="📥",
-            font=("Segoe UI Emoji", 54),
+            font=("Segoe UI Emoji", 40),
             bg=self._default_bg,
             fg=COLORS["accent_blue"],
         )
-        self.icon_label.pack(pady=(0, 10))
+        self.icon_label.pack(pady=(0, 8))
 
         # Main instruction label
         self.main_label = tk.Label(
             self.content_container,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 16, "bold"),
+            font=("Segoe UI", 13, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
@@ -103,17 +103,17 @@ class DropZone(tk.Frame):
         self.sub_label = tk.Label(
             self.content_container,
             text="or click to browse files",
-            font=("Segoe UI", 11),
+            font=("Segoe UI", 10),
             bg=self._default_bg,
             fg=COLORS["text_dim"],
         )
-        self.sub_label.pack(pady=(0, 15))
+        self.sub_label.pack(pady=(0, 10))
 
         # Folder hint
         self.folder_hint = tk.Label(
             self.content_container,
             text="Right-click to process a folder",
-            font=("Segoe UI", 9, "italic"),
+            font=("Segoe UI", 8, "italic"),
             bg=self._default_bg,
             fg=COLORS["accent_blue"],
         )

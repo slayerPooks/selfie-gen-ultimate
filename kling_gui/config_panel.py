@@ -345,6 +345,7 @@ class ConfigPanel(tk.Frame):
         # Main config frame
         config_frame = tk.Frame(self, bg=COLORS["bg_input"], padx=10, pady=10)
         config_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self._config_frame = config_frame
 
         # Row 1: Model selection
         row1 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -439,9 +440,11 @@ class ConfigPanel(tk.Frame):
             row2,
             textvariable=self.output_path_var,
             font=("Segoe UI", 9),
-            bg=COLORS["bg_main"],
+            bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             insertbackground=COLORS["text_light"],
+            disabledbackground=COLORS["bg_input"],
+            disabledforeground=COLORS["text_dim"],
             width=30,
             borderwidth=0,
             highlightthickness=1,
@@ -478,18 +481,29 @@ class ConfigPanel(tk.Frame):
             anchor="w",
         ).pack(side=tk.LEFT)
 
-        self.edit_prompt_btn = tk.Button(
+        self.edit_prompt_border = tk.Frame(
             row3,
+            bg=COLORS["accent_blue"],
+            padx=1,
+            pady=1,
+        )
+        self.edit_prompt_border.pack(side=tk.LEFT, padx=(5, 20))
+
+        self.edit_prompt_btn = tk.Button(
+            self.edit_prompt_border,
             text="✎ EDIT PROMPT / CHANGE MODEL",
             font=("Segoe UI", 9, "bold"),
-            bg=COLORS["accent_blue"],
-            fg="white",
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"],
             padx=15,
             pady=4,
             relief=tk.FLAT,
+            borderwidth=0,
             command=self._show_prompt_editor,
         )
-        self.edit_prompt_btn.pack(side=tk.LEFT, padx=(5, 20))
+        self.edit_prompt_btn.pack()
 
         tk.Label(
             row3,
@@ -502,6 +516,8 @@ class ConfigPanel(tk.Frame):
         # Slot container for 2-row layout (5 slots per row)
         slot_container = tk.Frame(row3, bg=COLORS["bg_input"])
         slot_container.pack(side=tk.LEFT, padx=(5, 0))
+        self._prompt_row = row3
+        self._slot_container = slot_container
 
         slot_row1 = tk.Frame(slot_container, bg=COLORS["bg_input"])
         slot_row1.pack(side=tk.TOP)
@@ -532,27 +548,52 @@ class ConfigPanel(tk.Frame):
             rb.pack(side=tk.LEFT, padx=1)
 
         # Prompt preview (multi-line, recessed look)
-        preview_container = tk.Frame(row3, bg=COLORS["bg_main"], padx=6, pady=4)
-        preview_container.pack(side=tk.LEFT, padx=(15, 0), fill=tk.BOTH, expand=True)
+        preview_shell = tk.Frame(
+            config_frame,
+            bg=COLORS["bg_panel"],
+            highlightthickness=1,
+            highlightbackground=COLORS["bg_input"],
+        )
+        self.prompt_preview_container = preview_shell
+
+        preview_container = tk.Frame(
+            preview_shell,
+            bg=COLORS["bg_panel"],
+            padx=8,
+            pady=6,
+        )
+        preview_container.pack(fill=tk.BOTH, expand=True)
 
         self.prompt_preview = tk.Text(
             preview_container,
             font=("Segoe UI", 9),
-            bg=COLORS["bg_main"],
+            bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
             height=6,  # 6 lines tall for better visibility
             width=40,
             wrap=tk.WORD,
             relief=tk.FLAT,
+            borderwidth=0,
             state=tk.DISABLED,  # Read-only
             cursor="arrow",
         )
-        self.prompt_preview.pack(fill=tk.BOTH, expand=True)
+
+        preview_scroll = ttk.Scrollbar(
+            preview_container, orient=tk.VERTICAL, command=self.prompt_preview.yview
+        )
+        self.prompt_preview.configure(yscrollcommand=preview_scroll.set)
+
+        self.prompt_preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Configure tag for bold titles
         self.prompt_preview.tag_configure(
             "title", font=("Segoe UI", 9, "bold"), foreground=COLORS["text_light"]
         )
+
+        # Position prompt preview without affecting row height
+        self._position_prompt_preview()
+        config_frame.bind("<Configure>", lambda e: self._position_prompt_preview())
 
         # Row 4: Loop Video option
         row4 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -764,15 +805,6 @@ class ConfigPanel(tk.Frame):
             command=self._on_folder_match_mode_changed,
         )
         self.exact_radio.pack(side=tk.LEFT, padx=2)
-
-        self.folder_info_label = tk.Label(
-            row7,
-            text="(required for folder processing)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        )
-        self.folder_info_label.pack(side=tk.LEFT, padx=10)
 
         # Row 8: Advanced Video Settings - Aspect Ratio and Resolution
         row8 = tk.Frame(config_frame, bg=COLORS["bg_input"])
@@ -1157,12 +1189,9 @@ class ConfigPanel(tk.Frame):
             # Show title prominently with bold tag
             self.prompt_preview.insert("1.0", f"📌 {title}\n", "title")
             if prompt:
-                preview = prompt[:150] + "..." if len(prompt) > 150 else prompt
-                self.prompt_preview.insert(tk.END, preview)
+                self.prompt_preview.insert(tk.END, prompt)
         elif prompt:
-            # Show more text - up to 200 chars for better visibility
-            preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
-            self.prompt_preview.insert("1.0", preview)
+            self.prompt_preview.insert("1.0", prompt)
         else:
             self.prompt_preview.insert("1.0", "(empty)")
 
@@ -1219,6 +1248,98 @@ class ConfigPanel(tk.Frame):
         """Notify that config has changed."""
         if self.on_config_changed:
             self.on_config_changed(self.config, description)
+
+    def _position_prompt_preview(self):
+        """Place prompt preview over the config area without shifting rows."""
+        if not hasattr(self, "prompt_preview_container"):
+            return
+        if not hasattr(self, "_config_frame"):
+            return
+        if not hasattr(self, "_prompt_row"):
+            return
+        if not hasattr(self, "_slot_container"):
+            return
+
+        try:
+            self.update_idletasks()
+            config_frame = self._config_frame
+            row3_y = self._prompt_row.winfo_y()
+            slot_x = self._slot_container.winfo_x()
+            slot_w = self._slot_container.winfo_width()
+
+            panel_config = {}
+            if hasattr(self, "_ui_config"):
+                panel_config = self._ui_config.get("config_panel", {})
+
+            try:
+                offset_x = int(panel_config.get("prompt_preview_offset_x", 16))
+            except (TypeError, ValueError):
+                offset_x = 16
+            try:
+                right_pad = int(panel_config.get("prompt_preview_right_pad", 0))
+            except (TypeError, ValueError):
+                right_pad = 0
+
+            x = slot_x + slot_w + offset_x
+            y = row3_y
+            max_width = config_frame.winfo_width() - x - right_pad
+            width = max_width if max_width > 0 else 220
+            height = self.prompt_preview.winfo_reqheight() + 16
+
+            self.prompt_preview_container.place(
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+            )
+            self.prompt_preview_container.lift()
+        except Exception:
+            pass
+
+    def apply_ui_config(self, ui_config: dict):
+        """Apply UI layout configuration to config panel widgets."""
+        if not ui_config:
+            return
+
+        self._ui_config = ui_config
+        config_panel = ui_config.get("config_panel", {})
+        try:
+            preview_height = int(config_panel.get("prompt_preview_height", 6))
+            preview_font_size = int(config_panel.get("prompt_preview_font_size", 9))
+            negative_height = int(config_panel.get("negative_prompt_height", 1))
+        except (TypeError, ValueError):
+            return
+
+        if hasattr(self, "prompt_preview"):
+            self.prompt_preview.config(
+                height=max(1, preview_height),
+                font=("Segoe UI", max(6, preview_font_size)),
+            )
+            self.prompt_preview.tag_configure(
+                "title",
+                font=("Segoe UI", max(6, preview_font_size), "bold"),
+                foreground=COLORS["text_light"],
+            )
+
+        if hasattr(self, "prompt_preview_container"):
+            try:
+                preview_width = int(config_panel.get("prompt_preview_width", 0))
+            except (TypeError, ValueError):
+                preview_width = 0
+            if preview_width > 0:
+                try:
+                    self.prompt_preview_container.place_configure(width=preview_width)
+                except Exception:
+                    pass
+
+        if hasattr(self, "neg_entry"):
+            ipady = max(0, (max(1, negative_height) - 1) * 4)
+            try:
+                self.neg_entry.pack_configure(ipady=ipady)
+            except Exception:
+                pass
+
+        self._position_prompt_preview()
 
     def get_config(self) -> dict:
         """Get current configuration."""

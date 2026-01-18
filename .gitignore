@@ -40,6 +40,9 @@ tmp_run/
 
 # Session/History files
 kling_history.json
+.history/
+ui_config.json
+ui_config_exported*.json
 
 # Serena MCP
 .serena/
