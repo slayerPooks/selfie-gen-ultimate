@@ -87,7 +87,7 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
 1. Images uploaded to freeimage.host (fal.ai requires public URLs)
 2. fal.ai queue API returns `request_id` and `status_url`
 3. Polling with exponential backoff (5s → 10s → 15s)
-4. Video downloaded as `{imagename}_kling.mp4`
+4. Video downloaded as `{imagename}_kling_{model}_{pN}.mp4` (e.g., `selfie_kling_k25turbo_p2.mp4`)
 
 ### Configuration Schema (`kling_config.json`)
 
@@ -160,7 +160,24 @@ Image → freeimage.host upload → fal.ai queue API → Poll status → Downloa
 **Reprocessing Modes**:
 - `allow_reprocess: false` → Skip existing videos
 - `reprocess_mode: "overwrite"` → Delete and regenerate
-- `reprocess_mode: "increment"` → Save as `_kling_2.mp4`, `_kling_3.mp4`
+- `reprocess_mode: "increment"` → Save as `_kling_{model}_pN_2.mp4`, `_kling_{model}_pN_3.mp4`
+
+**Model Short Names in Filenames**:
+- Kling 2.5 Turbo: `k25turbo`
+- Kling 2.5: `k25`
+- Kling 2.1 Pro: `k21pro`
+- Kling 2.1 Master: `k21master`
+- Kling O1: `kO1`
+- Wan 2.5: `wan25`
+- Veo 3: `veo3`
+- Ovi: `ovi`
+- LTX-2: `ltx2`
+- Pixverse V5: `pix5`
+- Hunyuan: `hunyuan`
+- MiniMax: `minimax`
+
+**Output Folder Fallback**:
+- If custom output folder is empty/invalid and "Use Source Folder" is unchecked, falls back to source folder with warning
 
 **Output Folder Fallback**:
 - If custom output folder is empty/invalid and "Use Source Folder" is unchecked, falls back to source folder with warning

@@ -27,8 +27,15 @@ class SeleniumBalanceChecker:
         self.last_balance = None
         if profile_dir is None:
             import os
-            # Default to a local chrome_profile directory
-            self.profile_dir = os.path.join(os.getcwd(), "chrome_profile")
+            import sys
+            # Default to a local chrome_profile directory relative to exe/script location
+            if getattr(sys, 'frozen', False):
+                # Running as compiled exe
+                app_dir = os.path.dirname(sys.executable)
+            else:
+                # Running as script - use script's directory
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+            self.profile_dir = os.path.join(app_dir, "chrome_profile")
         else:
             self.profile_dir = profile_dir
         self.headless = headless

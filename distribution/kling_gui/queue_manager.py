@@ -4,47 +4,238 @@ Queue Manager - Thread-safe queue for processing images with status tracking.
 
 import threading
 import os
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List
 from pathlib import Path
+from datetime import datetime
+
+from path_utils import VALID_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif'}
+def get_output_video_path(
+    image_path: str,
+    output_folder: str,
+    generator,
+    config: dict,
+    timestamp: Optional[datetime] = None,
+) -> Path:
+    """Get the output video path using new enhanced filename format.
 
+    Args:
+        image_path: Path to the source image
+        output_folder: Folder where video will be saved
+        generator: FalAIKlingGenerator instance
+        config: Config dict containing prompt_titles and saved_prompts
+        timestamp: Generation start time (defaults to now)
 
-def get_output_video_path(image_path: str, output_folder: str) -> Path:
-    """Get the default output video path for an image."""
-    image_name = Path(image_path).stem
-    return Path(output_folder) / f"{image_name}_kling.mp4"
-
-
-def check_video_exists(image_path: str, output_folder: str) -> bool:
+    Returns:
+        Path to output video with format:
+        {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
     """
-    Check if a video already exists for this image.
+    image_name = Path(image_path).stem
+    filename = generator.get_output_filename(image_name, config, timestamp)
+    return Path(output_folder) / filename
+
+
+def check_video_exists(
+    image_path: str,
+    output_folder: str,
+    generator,
+    config: dict,
+) -> tuple[bool, Optional[str]]:
+    """
+    Check if a video already exists for this image (any date variant).
+
+    Since date changes daily, checks for pattern:
+    {image_name}-{model_name}-{prompt_part}-p{slot}-*.mp4
 
     We treat either the base render or its looped sibling as "exists" to
     avoid overwriting/deleting a looped-only output.
+
+    Args:
+        image_path: Path to the source image
+        output_folder: Folder where video would be saved
+        generator: FalAIKlingGenerator instance
+        config: Config dict containing prompt_titles and saved_prompts
+
+    Returns:
+        Tuple of (exists: bool, found_path: str | None)
+        - exists: True if any matching video exists
+        - found_path: Path to the first found video, or None if not found
     """
-    base_path = get_output_video_path(image_path, output_folder)
-    loop_path = base_path.with_name(f"{base_path.stem}_looped{base_path.suffix}")
-    return base_path.exists() or loop_path.exists()
+    import glob
+
+    image_name = Path(image_path).stem
+    model_name = generator.model_display_name.replace(" ", "_")
+    slot_str = str(generator.prompt_slot)
+
+    # Get prompt part
+    prompt_titles = config.get("prompt_titles", {})
+    if slot_str in prompt_titles and prompt_titles[slot_str]:
+        # Sanitize shorthand (same logic as in generator)
+        shorthand = prompt_titles[slot_str]
+        prompt_part = ''.join(
+            c if c.isalnum() or c in ('_', '-', ' ') else ''
+            for c in shorthand
+        ).replace(" ", "_")
+    else:
+        saved_prompts = config.get("saved_prompts", {})
+        prompt_text = saved_prompts.get(slot_str, "")
+        if prompt_text:
+            prompt_part = generator.sanitize_prompt_description(prompt_text)
+        else:
+            prompt_part = "prompt"
+
+    # Build glob pattern (match any date)
+    pattern = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*.mp4"
+    pattern_looped = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*_looped.mp4"
+
+    # Search for matching files
+    search_pattern = str(Path(output_folder) / pattern)
+    search_pattern_looped = str(Path(output_folder) / pattern_looped)
+
+    matches = glob.glob(search_pattern)
+    matches_looped = glob.glob(search_pattern_looped)
+
+    # Return first found match
+    all_matches = matches + matches_looped
+    if all_matches:
+        return True, all_matches[0]
+    return False, None
 
 
-def get_next_available_path(image_path: str, output_folder: str) -> Path:
+# Model duration constraints (from fal.ai API documentation)
+# Format: (pattern, allowed_durations, priority)
+# Higher priority patterns are checked first to ensure more specific matches
+MODEL_DURATION_CONSTRAINTS = [
+    # Kling family - most specific patterns first
+    ("kling-video/v2.1", [5, 10], 3),
+    ("kling-video/v2.5", [5, 10], 3),
+    ("kling-video/v2", [5, 10], 2),  # Catch-all for v2.x
+    ("kling-video/v1", [5, 10], 2),
+    ("kling-video/o1", [5, 10], 2),
+
+    # Wan models - specific versions first
+    ("wan/v2.6", [5, 10, 15], 3),  # v2.6 added 15-second support
+    ("wan/v2.5", [5, 10], 3),
+    ("wan-25-preview", [5, 10], 3),
+
+    # Pixverse models - specific versions first
+    ("pixverse/v5.5", [5, 8, 10], 3),
+    ("pixverse/v5", [5, 8], 3),
+
+    # Other models - alphabetically sorted
+    ("haiper-video-v2", [4, 6], 2),
+    ("hunyuan-video", [5, 10], 2),
+    ("ltx-2", [5, 10], 2),
+    ("minimax-video", [6], 2),
+    ("ovi", [5, 10], 2),
+    ("veo3", [5, 6, 7, 8], 2),
+    ("vidu", [2, 3, 4, 5, 6, 7, 8], 2),  # Vidu Q2 supports 2-8 seconds
+]
+
+
+def validate_duration(model_endpoint: str, duration: int) -> None:
+    """Validate duration against model-specific constraints.
+
+    Uses priority-based pattern matching to ensure more specific model versions
+    are matched before generic patterns (e.g., "kling-video/v2.5" before "kling-video/v2").
+
+    Args:
+        model_endpoint: Full model endpoint (e.g., "fal-ai/kling-video/v2.1/pro/image-to-video")
+        duration: Requested duration in seconds
+
+    Raises:
+        ValueError: If duration is not valid for the model
+    """
+    if not isinstance(duration, int) or duration <= 0:
+        raise ValueError(f"Duration must be a positive integer, got: {duration}")
+
+    # Sort constraints by priority (highest first) for most specific matching
+    sorted_constraints = sorted(MODEL_DURATION_CONSTRAINTS, key=lambda x: x[2], reverse=True)
+
+    # Check against known constraints with priority-based matching
+    for pattern, allowed_durations, _ in sorted_constraints:
+        if pattern in model_endpoint:
+            if duration not in allowed_durations:
+                allowed_str = ', '.join(f"{d}s" for d in allowed_durations)
+                model_name = model_endpoint.split('/')[-1] if '/' in model_endpoint else model_endpoint
+                raise ValueError(
+                    f"Duration {duration}s invalid for {model_name}. "
+                    f"Allowed durations: {allowed_str}"
+                )
+            logger.debug(f"Duration {duration}s validated for pattern '{pattern}'")
+            return  # Valid duration found
+
+    # Unknown model - log warning but allow (graceful degradation)
+    logger.warning(
+        f"No duration constraints found for model '{model_endpoint}'. "
+        f"Proceeding with duration {duration}s (may fail at API level if unsupported)."
+    )
+
+
+def get_duration_options_for_model(model_endpoint: str) -> list:
+    """Get available duration options for a given model.
+    
+    Args:
+        model_endpoint: Full model endpoint
+        
+    Returns:
+        List of allowed duration values in seconds, or [5, 10] if unknown
+    """
+    # Sort constraints by priority for most specific matching
+    sorted_constraints = sorted(MODEL_DURATION_CONSTRAINTS, key=lambda x: x[2], reverse=True)
+    
+    for pattern, allowed_durations, _ in sorted_constraints:
+        if pattern in model_endpoint:
+            return allowed_durations
+    
+    # Default for unknown models
+    return [5, 10]
+
+
+def get_next_available_path(
+    image_path: str,
+    output_folder: str,
+    generator,
+    config: dict,
+    timestamp: Optional[datetime] = None,
+) -> Path:
     """
     Find the next available filename with increment suffix.
 
-    Examples:
-        selfie_kling.mp4 exists -> returns selfie_kling_2.mp4
-        selfie_kling_2.mp4 exists -> returns selfie_kling_3.mp4
-    """
-    image_name = Path(image_path).stem
-    counter = 1
+    Args:
+        image_path: Path to the source image
+        output_folder: Folder where video would be saved
+        generator: FalAIKlingGenerator instance
+        config: Config dict containing prompt_titles and saved_prompts
+        timestamp: Generation start time (defaults to now)
 
+    Returns:
+        Next available path with increment suffix
+
+    Examples:
+        Image-Model-Prompt-p2-01-17-2026.mp4 exists ->
+            returns Image-Model-Prompt-p2-01-17-2026_2.mp4
+        Image-Model-Prompt-p2-01-17-2026_2.mp4 exists ->
+            returns Image-Model-Prompt-p2-01-17-2026_3.mp4
+    """
+    base_path = get_output_video_path(
+        image_path, output_folder, generator, config, timestamp
+    )
+
+    counter = 1
     while True:
-        suffix = "" if counter == 1 else f"_{counter}"
-        candidate = Path(output_folder) / f"{image_name}_kling{suffix}.mp4"
-        candidate_loop = Path(output_folder) / f"{image_name}_kling{suffix}_looped.mp4"
+        if counter == 1:
+            candidate = base_path
+        else:
+            # Insert counter before .mp4 extension
+            candidate = base_path.with_name(f"{base_path.stem}_{counter}{base_path.suffix}")
+
+        candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
 
         # Return first gap where neither base nor looped variant exists
         if not candidate.exists() and not candidate_loop.exists():
@@ -52,12 +243,13 @@ def get_next_available_path(image_path: str, output_folder: str) -> Path:
 
         counter += 1
         if counter > 999:  # Safety limit
-            raise ValueError(f"Too many versions of {image_name}_kling.mp4")
+            raise ValueError(f"Too many versions of {base_path.name}")
 
 
 @dataclass
 class QueueItem:
     """Represents a single queued image with status tracking."""
+
     path: str
     status: str = "pending"  # "pending", "processing", "completed", "failed"
     error_message: Optional[str] = None
@@ -83,7 +275,7 @@ class QueueManager:
         config_getter: Callable[[], dict],
         log_callback: Callable[[str, str], None],
         queue_update_callback: Callable[[], None],
-        processing_complete_callback: Callable[[QueueItem], None] = None
+        processing_complete_callback: Optional[Callable[[QueueItem], None]] = None,
     ):
         """
         Initialize the queue manager.
@@ -150,7 +342,9 @@ class QueueManager:
 
         with self.lock:
             # Check queue limit
-            pending_count = sum(1 for item in self.items if item.status in ("pending", "processing"))
+            pending_count = sum(
+                1 for item in self.items if item.status in ("pending", "processing")
+            )
             if pending_count >= self.MAX_QUEUE_SIZE:
                 return False, f"Queue full ({self.MAX_QUEUE_SIZE} items max)"
 
@@ -217,7 +411,11 @@ class QueueManager:
     def clear_queue(self):
         """Remove all pending and failed items from queue."""
         with self.lock:
-            self.items = [item for item in self.items if item.status in ("processing", "completed")]
+            self.items = [
+                item
+                for item in self.items
+                if item.status in ("processing", "completed")
+            ]
         self.update_queue_display()
         self.log("Queue cleared", "info")
 
@@ -247,10 +445,14 @@ class QueueManager:
         with self.lock:
             return {
                 "pending": sum(1 for item in self.items if item.status == "pending"),
-                "processing": sum(1 for item in self.items if item.status == "processing"),
-                "completed": sum(1 for item in self.items if item.status == "completed"),
+                "processing": sum(
+                    1 for item in self.items if item.status == "processing"
+                ),
+                "completed": sum(
+                    1 for item in self.items if item.status == "completed"
+                ),
                 "failed": sum(1 for item in self.items if item.status == "failed"),
-                "total": len(self.items)
+                "total": len(self.items),
             }
 
     def _get_next_pending(self) -> Optional[QueueItem]:
@@ -282,6 +484,9 @@ class QueueManager:
             self.log(f"Processing: {item.filename}", "info")
 
             try:
+                # Capture timestamp at start of processing (for consistent filenames)
+                generation_timestamp = datetime.now()
+
                 # Get current config
                 config = self.get_config()
                 use_source_folder = config.get("use_source_folder", True)
@@ -290,10 +495,37 @@ class QueueManager:
                 negative_prompt = self._get_current_negative_prompt(config)
                 allow_reprocess = config.get("allow_reprocess", False)
                 reprocess_mode = config.get("reprocess_mode", "increment")
+                video_duration = config.get("video_duration", 10)
+                model_endpoint = config.get("current_model", "")
+                prompt_slot = config.get("current_prompt_slot", 1)
+
+                # Advanced video settings
+                aspect_ratio = config.get("aspect_ratio", "9:16")
+                resolution = config.get("resolution", "720p")
+                seed = config.get("seed", -1)
+                camera_fixed = config.get("camera_fixed", False)
+                generate_audio = config.get("generate_audio", False)
+
+                # Update generator's prompt slot for filename generation
+                self.generator.update_prompt_slot(prompt_slot)
+
+                # Validate duration before making API request
+                try:
+                    validate_duration(model_endpoint, video_duration)
+                except ValueError as e:
+                    item.status = "failed"
+                    item.error_message = str(e)
+                    self.log(f"Invalid duration: {e}", "error")
+                    self.update_queue_display()
+                    if self.on_processing_complete:
+                        self.on_processing_complete(item)
+                    continue
 
                 # Verbose: Show configuration being used
                 self.log_verbose(f"  Model: {self.generator.model_display_name}", "api")
-                self.log_verbose(f"  Duration: {config.get('video_duration', 10)}s", "debug")
+                self.log_verbose(
+                    f"  Duration: {config.get('video_duration', 10)}s", "debug"
+                )
                 if prompt:
                     prompt_preview = prompt[:60] + "..." if len(prompt) > 60 else prompt
                     self.log_verbose(f"  Prompt: {prompt_preview}", "debug")
@@ -305,22 +537,33 @@ class QueueManager:
                 elif not output_folder or not os.path.isdir(output_folder):
                     # Custom folder selected but not set or invalid - use source folder
                     actual_output = item.source_folder
-                    self.log(f"No valid output folder set - saving to source folder", "warning")
+                    self.log(
+                        f"No valid output folder set - saving to source folder",
+                        "warning",
+                    )
                 else:
                     actual_output = output_folder
                     self.log_verbose(f"  Output: {actual_output}", "debug")
 
-                # Check if video already exists
-                video_exists = check_video_exists(item.path, actual_output)
+                # Check if video already exists (with current model and prompt slot)
+                video_exists, found_video_path = check_video_exists(
+                    item.path, actual_output, self.generator, config
+                )
                 custom_output_path = None
 
                 if video_exists:
                     if not allow_reprocess:
                         # Reprocessing disabled - fail with clear message
-                        existing_path = get_output_video_path(item.path, actual_output)
+                        # Use the actual found filename instead of generating a new one
+                        existing_path = Path(found_video_path) if found_video_path else get_output_video_path(
+                            item.path, actual_output, self.generator, config, generation_timestamp
+                        )
                         item.status = "failed"
                         item.error_message = f"Video already exists: {existing_path.name}. Enable 'Allow reprocessing' to regenerate."
-                        self.log(f"Skipped: {item.filename} - video already exists", "warning")
+                        self.log(
+                            f"Skipped: {item.filename} - video already exists",
+                            "warning",
+                        )
                         self.log(f"  Existing: {existing_path}", "info")
                         self.log(f"  Enable 'Allow reprocessing' to regenerate", "info")
                         self.update_queue_display()
@@ -329,11 +572,21 @@ class QueueManager:
                         continue
 
                     elif reprocess_mode == "overwrite":
-                        # Overwrite mode - delete existing file
-                        existing_path = get_output_video_path(item.path, actual_output)
+                        # Overwrite mode - delete existing file and looped variant
+                        existing_path = get_output_video_path(
+                            item.path, actual_output, self.generator, config, generation_timestamp
+                        )
+                        looped_path = existing_path.with_name(
+                            f"{existing_path.stem}_looped{existing_path.suffix}"
+                        )
                         try:
                             existing_path.unlink()
-                            self.log(f"Deleted existing: {existing_path.name}", "warning")
+                            if looped_path.exists():
+                                looped_path.unlink()
+                            self.log(
+                                f"Deleted existing: {existing_path.name} (+ looped variant)",
+                                "warning",
+                            )
                         except Exception as e:
                             self.log(f"Could not delete existing file: {e}", "error")
                             item.status = "failed"
@@ -346,9 +599,13 @@ class QueueManager:
                     elif reprocess_mode == "increment":
                         # Increment mode - find next available filename
                         try:
-                            next_path = get_next_available_path(item.path, actual_output)
+                            next_path = get_next_available_path(
+                                item.path, actual_output, self.generator, config, generation_timestamp
+                            )
                             custom_output_path = str(next_path)
-                            self.log(f"Will save as: {next_path.name} (incremented)", "info")
+                            self.log(
+                                f"Will save as: {next_path.name} (incremented)", "info"
+                            )
                         except ValueError as e:
                             item.status = "failed"
                             item.error_message = str(e)
@@ -363,8 +620,20 @@ class QueueManager:
                 # increment mode uses custom path)
                 skip_check = video_exists and reprocess_mode == "overwrite"
                 result = self._generate_video(
-                    item, actual_output, prompt, negative_prompt, use_source_folder, custom_output_path,
-                    skip_duplicate_check=skip_check
+                    item,
+                    actual_output,
+                    prompt,
+                    negative_prompt,
+                    use_source_folder,
+                    custom_output_path,
+                    skip_duplicate_check=skip_check,
+                    video_duration=video_duration,
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                    seed=seed,
+                    camera_fixed=camera_fixed,
+                    generate_audio=generate_audio,
+                    generation_timestamp=generation_timestamp,
                 )
 
                 if result:
@@ -401,7 +670,14 @@ class QueueManager:
         negative_prompt: str,
         use_source_folder: bool,
         custom_output_path: Optional[str] = None,
-        skip_duplicate_check: bool = False
+        skip_duplicate_check: bool = False,
+        video_duration: int = 10,
+        aspect_ratio: str = "9:16",
+        resolution: str = "720p",
+        seed: int = -1,
+        camera_fixed: bool = False,
+        generate_audio: bool = False,
+        generation_timestamp: Optional[datetime] = None,
     ) -> Optional[str]:
         """
         Generate video using the generator.
@@ -414,13 +690,22 @@ class QueueManager:
             use_source_folder: Whether to save to source folder
             custom_output_path: Optional custom output path (for increment mode)
             skip_duplicate_check: Whether to skip duplicate detection
+            video_duration: Video duration in seconds (default: 10)
+            aspect_ratio: Video aspect ratio (default: 9:16)
+            resolution: Video resolution (default: 720p)
+            seed: Random seed, -1 for random (default: -1)
+            camera_fixed: Lock camera movement (default: False)
+            generate_audio: Generate audio track (default: False)
+            generation_timestamp: Generation start time for consistent filenames (default: None)
 
         Returns:
             Output path on success, None on failure
         """
         # Respect model capability: if not supported, drop negative_prompt
-        supports_negative = self.get_config().get("model_capabilities", {}).get(
-            self.generator.base_url.replace("https://queue.fal.run/", ""), False
+        supports_negative = (
+            self.get_config()
+            .get("model_capabilities", {})
+            .get(self.generator.model_endpoint, False)
         )
         neg_for_payload = negative_prompt if supports_negative else None
 
@@ -444,13 +729,22 @@ class QueueManager:
                 custom_prompt=prompt,
                 negative_prompt=neg_for_payload,
                 use_source_folder=use_source_folder,
-                skip_duplicate_check=True  # We've already handled duplicate check
+                skip_duplicate_check=True,  # We've already handled duplicate check
+                duration=video_duration,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                seed=seed,
+                camera_fixed=camera_fixed,
+                generate_audio=generate_audio,
+                config=config,
+                timestamp=generation_timestamp,
             )
 
             if result and custom_output_path != result:
                 # Rename to custom path (incremented filename)
                 try:
                     import shutil
+
                     shutil.move(result, custom_output_path)
                     return custom_output_path
                 except Exception as e:
@@ -466,7 +760,15 @@ class QueueManager:
                 custom_prompt=prompt,
                 negative_prompt=neg_for_payload,
                 use_source_folder=use_source_folder,
-                skip_duplicate_check=skip_duplicate_check
+                skip_duplicate_check=skip_duplicate_check,
+                duration=video_duration,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                seed=seed,
+                camera_fixed=camera_fixed,
+                generate_audio=generate_audio,
+                config=config,
+                timestamp=generation_timestamp,
             )
 
     def _loop_video(self, video_path: str, item: QueueItem):
@@ -487,11 +789,13 @@ class QueueManager:
                 input_path=video_path,
                 suffix="_looped",
                 overwrite=True,
-                log_callback=self.log
+                log_callback=self.log,
             )
 
             if looped_path:
-                self.log(f"Looped video saved: {os.path.basename(looped_path)}", "success")
+                self.log(
+                    f"Looped video saved: {os.path.basename(looped_path)}", "success"
+                )
             else:
                 self.log(f"Failed to create looped video", "warning")
 

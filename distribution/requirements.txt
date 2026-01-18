@@ -2,13 +2,13 @@
 # ================================
 
 # Core Requirements (REQUIRED)
-requests
-Pillow
-rich
+requests>=2.31,<3
+Pillow>=10.0,<12
+rich>=13.0,<14
 
 # GUI Drag-Drop Support (REQUIRED for GUI mode)
-tkinterdnd2
+tkinterdnd2>=0.3,<1
 
 # Balance Tracker (OPTIONAL - for real-time balance monitoring)
-selenium
-webdriver-manager
+selenium>=4.15,<5
+webdriver-manager>=4.0,<5

@@ -1,5 +1,5 @@
-requests
-Pillow
-rich
-selenium
-webdriver-manager
+requests>=2.31,<3
+Pillow>=10.0,<12
+rich>=13.0,<14
+selenium>=4.15,<5
+webdriver-manager>=4.0,<5

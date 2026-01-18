@@ -21,14 +21,13 @@ def check_ffmpeg_available() -> Tuple[bool, str]:
     """
     try:
         result = subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            text=True,
-            timeout=10
+            ["ffmpeg", "-version"], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             # Extract version from first line
-            version_line = result.stdout.split('\n')[0] if result.stdout else "FFmpeg found"
+            version_line = (
+                result.stdout.split("\n")[0] if result.stdout else "FFmpeg found"
+            )
             return True, version_line
         else:
             return False, "FFmpeg found but returned error"
@@ -45,7 +44,7 @@ def create_looped_video(
     output_path: Optional[str] = None,
     suffix: str = "_looped",
     overwrite: bool = True,
-    log_callback=None
+    log_callback=None,
 ) -> Optional[str]:
     """
     Create a seamless ping-pong loop from a video file.
@@ -63,6 +62,7 @@ def create_looped_video(
     Returns:
         Output path on success, None on failure
     """
+
     def log(msg: str, level: str = "info"):
         if log_callback:
             log_callback(msg, level)
@@ -85,6 +85,9 @@ def create_looped_video(
     else:
         output_file = Path(output_path)
 
+    # Ensure output directory exists
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
     # Check if output exists
     if output_file.exists() and not overwrite:
         log(f"Output already exists (skipping): {output_file}", "warning")
@@ -105,14 +108,21 @@ def create_looped_video(
     cmd = [
         "ffmpeg",
         "-y" if overwrite else "-n",  # Overwrite or fail if exists
-        "-i", str(input_file),
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-movflags", "+faststart",
-        str(output_file)
+        "-i",
+        str(input_file),
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[outv]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "23",
+        "-movflags",
+        "+faststart",
+        str(output_file),
     ]
 
     try:
@@ -123,13 +133,16 @@ def create_looped_video(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300,  # 5 minute timeout
         )
 
         if result.returncode == 0:
             if output_file.exists():
                 file_size = output_file.stat().st_size / (1024 * 1024)
-                log(f"Looped video saved: {output_file.name} ({file_size:.1f} MB)", "success")
+                log(
+                    f"Looped video saved: {output_file.name} ({file_size:.1f} MB)",
+                    "success",
+                )
                 return str(output_file)
             else:
                 log("FFmpeg completed but output file not found", "error")
@@ -160,18 +173,16 @@ def get_video_duration(video_path: str) -> Optional[float]:
     try:
         cmd = [
             "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            video_path
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path,
         ]
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())

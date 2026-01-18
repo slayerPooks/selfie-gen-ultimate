@@ -1,7 +1,8 @@
 import os
+import os
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable, Dict, Any
 import requests
 import logging
 from PIL import Image
@@ -10,26 +11,50 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+from model_schema_manager import ModelSchemaManager
+
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
+
 class FalAIKlingGenerator:
-    def __init__(self, api_key: str, verbose: bool = True, model_endpoint: str = None, model_display_name: str = None):
+    def __init__(
+        self,
+        api_key: str,
+        verbose: bool = True,
+        model_endpoint: Optional[str] = None,
+        model_display_name: Optional[str] = None,
+        prompt_slot: int = 1,
+    ):
         self.api_key = api_key
         self.verbose = verbose
+
+        # Initialize schema manager for dynamic parameter detection
+        self.schema_manager = ModelSchemaManager(api_key)
 
         # Store model display name for logging
         self.model_display_name = model_display_name or "Kling 2.1 Professional"
 
+        # Store prompt slot for filename generation
+        self.prompt_slot = prompt_slot
+
         # Configurable model endpoint - defaults to Kling 2.1 Professional
         if model_endpoint:
             self.base_url = f"https://queue.fal.run/{model_endpoint}"
+            self.model_endpoint = model_endpoint
         else:
-            self.base_url = "https://queue.fal.run/fal-ai/kling-video/v2.1/pro/image-to-video"
+            self.base_url = (
+                "https://queue.fal.run/fal-ai/kling-video/v2.1/pro/image-to-video"
+            )
+            self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
 
         # Freeimage.host guest API key
-        self.freeimage_key = "6d207e02198a847aa98d0a2a901485a5"
+        self.freeimage_key = os.getenv(
+            "FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5"
+        )
 
         # Default prompt for head movement
         self.default_prompt = (
@@ -51,6 +76,97 @@ class FalAIKlingGenerator:
         """Set a callback for progress updates (used by GUI verbose mode)."""
         self._progress_callback = callback
 
+    def update_model(self, model_endpoint: str, model_display_name: str):
+        """Update the model endpoint and display name.
+
+        Called when user changes model in GUI settings.
+        """
+        self.model_display_name = model_display_name or "Kling 2.1 Professional"
+        if model_endpoint:
+            self.base_url = f"https://queue.fal.run/{model_endpoint}"
+            self.model_endpoint = model_endpoint
+        else:
+            self.base_url = (
+                "https://queue.fal.run/fal-ai/kling-video/v2.1/pro/image-to-video"
+            )
+            self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
+
+    def update_prompt_slot(self, slot: int):
+        """Update the current prompt slot.
+
+        Called when user changes prompt slot in GUI settings.
+        """
+        self.prompt_slot = slot
+
+    def get_model_short_name(self) -> str:
+        """Get a short identifier for the current model based on the endpoint.
+
+        Used in video filenames to indicate which model was used.
+        Examples:
+            fal-ai/kling-video/v2.1/pro/image-to-video -> k21pro
+            fal-ai/kling-video/v2.5-turbo/pro/image-to-video -> k25turbo
+            fal-ai/wan-25-preview/image-to-video -> wan25
+            fal-ai/veo3/image-to-video -> veo3
+        """
+        endpoint = self.model_endpoint.lower()
+
+        # Common model mappings
+        if "kling" in endpoint:
+            # Extract version info
+            if "v2.5-turbo" in endpoint or "v2.5turbo" in endpoint:
+                return "k25turbo"
+            elif "v2.5" in endpoint:
+                return "k25"
+            elif "v2.1/master" in endpoint:
+                return "k21master"
+            elif "v2.1" in endpoint:
+                return "k21pro"
+            elif "o1" in endpoint:
+                return "kO1"
+            else:
+                return "kling"
+        elif "wan" in endpoint:
+            if "25" in endpoint:
+                return "wan25"
+            return "wan"
+        elif "veo3" in endpoint:
+            return "veo3"
+        elif "veo" in endpoint:
+            return "veo"
+        elif "ovi" in endpoint:
+            return "ovi"
+        elif "ltx" in endpoint:
+            return "ltx2"
+        elif "pixverse" in endpoint:
+            if "v5" in endpoint:
+                return "pix5"
+            return "pixverse"
+        elif "hunyuan" in endpoint:
+            return "hunyuan"
+        elif "minimax" in endpoint:
+            return "minimax"
+        else:
+            # Fallback: extract last meaningful segment
+            parts = endpoint.replace("/image-to-video", "").split("/")
+            for part in reversed(parts):
+                if part and part != "fal-ai":
+                    # Clean up and truncate
+                    clean = part.replace("-", "").replace("_", "")[:8]
+                    return clean
+            return "video"
+
+    def get_output_filename(self, image_stem: str) -> str:
+        """Generate the output filename with model and prompt slot.
+
+        Args:
+            image_stem: The image filename without extension (e.g., 'selfie')
+
+        Returns:
+            Filename like 'selfie_kling_k25turbo_p2.mp4'
+        """
+        model_short = self.get_model_short_name()
+        return f"{image_stem}_kling_{model_short}_p{self.prompt_slot}.mp4"
+
     def _report_progress(self, message: str, level: str = "info"):
         """Report progress to callback if set."""
         if self._progress_callback:
@@ -60,32 +176,38 @@ class FalAIKlingGenerator:
         """Upload image to freeimage.host"""
         try:
             img = Image.open(image_path)
-            
+
             # Resize if needed
             max_size = 1200
             if img.width > max_size or img.height > max_size:
                 if self.verbose:
                     logger.info(f"Resizing from {img.width}x{img.height}")
-                self._report_progress(f"Resizing from {img.width}x{img.height}", "resize")
+                self._report_progress(
+                    f"Resizing from {img.width}x{img.height}", "resize"
+                )
                 img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-            
+
             # Convert to RGB
-            if img.mode in ('RGBA', 'LA', 'P'):
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                if img.mode == 'P':
-                    img = img.convert('RGBA')
-                background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(
+                    img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None
+                )
                 img = background
-            
+
             # Compress to JPEG
             buffer = io.BytesIO()
-            img.save(buffer, format='JPEG', quality=85, optimize=True)
+            img.save(buffer, format="JPEG", quality=85, optimize=True)
             buffer.seek(0)
-            image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-            
+            image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+
             if self.verbose:
                 logger.info(f"Uploading {Path(image_path).name} to freeimage.host...")
-            self._report_progress(f"Uploading {Path(image_path).name} to freeimage.host...", "upload")
+            self._report_progress(
+                f"Uploading {Path(image_path).name} to freeimage.host...", "upload"
+            )
 
             response = requests.post(
                 "https://freeimage.host/api/1/upload",
@@ -93,40 +215,48 @@ class FalAIKlingGenerator:
                     "key": self.freeimage_key,
                     "action": "upload",
                     "source": image_base64,
-                    "format": "json"
+                    "format": "json",
                 },
-                timeout=30
+                timeout=30,
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
-                if result.get('status_code') == 200:
-                    url = result['image']['url']
+                if result.get("status_code") == 200:
+                    url = result["image"]["url"]
                     if self.verbose:
                         logger.info(f"✓ Uploaded: {url}")
                     self._report_progress(f"✓ Uploaded: {url}", "upload")
                     return url
-            
+
             logger.error(f"Upload failed: {response.status_code}")
             return None
-            
+
         except Exception as e:
             logger.error(f"Upload error: {e}")
             return None
-    
-    def check_duplicate_exists(self, image_path: str, output_folder: str = None) -> bool:
+
+    def check_duplicate_exists(
+        self, image_path: str, output_folder: Optional[str] = None
+    ) -> bool:
         """Check if video already exists in the target output folder"""
         try:
             char_name = Path(image_path).stem
             # Use provided output folder, or default to downloads folder
             target_folder = output_folder if output_folder else self.downloads_folder
-            output_path = Path(target_folder) / f"{char_name}_kling.mp4"
+            # Use new filename format with model and prompt slot
+            output_filename = self.get_output_filename(char_name)
+            output_path = Path(target_folder) / output_filename
             return output_path.exists()
         except Exception:
             return False
-    
-    def get_genx_image_files(self, folder_path: str, use_source_folder: bool = False,
-                             fallback_output_folder: str = None) -> List[str]:
+
+    def get_genx_image_files(
+        self,
+        folder_path: str,
+        use_source_folder: bool = False,
+        fallback_output_folder: Optional[str] = None,
+    ) -> List[str]:
         """Get GenX images excluding duplicates
 
         Args:
@@ -134,15 +264,25 @@ class FalAIKlingGenerator:
             use_source_folder: If True, check for duplicates in source folder (image's parent)
             fallback_output_folder: Output folder to check for duplicates when use_source_folder=False
         """
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
+        image_extensions = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".gif",
+            ".webp",
+            ".tiff",
+            ".tif",
+        }
         genx_images = []
 
         try:
             for file_path in Path(folder_path).iterdir():
-                if (file_path.is_file() and
-                    file_path.suffix.lower() in image_extensions and
-                    'genx' in file_path.name.lower()):
-
+                if (
+                    file_path.is_file()
+                    and file_path.suffix.lower() in image_extensions
+                    and "genx" in file_path.name.lower()
+                ):
                     # Determine output folder for duplicate check
                     if use_source_folder:
                         check_folder = str(file_path.parent)
@@ -158,12 +298,24 @@ class FalAIKlingGenerator:
                 logger.error(f"Error getting GenX files: {e}")
 
         return genx_images
-    
-    def create_kling_generation(self, character_image_path: str, output_folder: str = None,
-                                custom_prompt: str = None, negative_prompt: str = None,
-                                use_source_folder: bool = False,
-                                skip_duplicate_check: bool = False) -> Optional[str]:
-        """Create Kling 2.5 Turbo Pro video via fal.ai
+
+    def create_kling_generation(
+        self,
+        character_image_path: str,
+        output_folder: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+        use_source_folder: bool = False,
+        skip_duplicate_check: bool = False,
+        duration: int = 10,
+        aspect_ratio: str = "9:16",
+        resolution: str = "720p",
+        seed: int = -1,
+        camera_fixed: bool = False,
+        generate_audio: bool = False,
+        end_image_url: Optional[str] = None,
+    ) -> Optional[str]:
+        """Create Kling video via fal.ai
 
         Args:
             character_image_path: Path to source image
@@ -172,6 +324,13 @@ class FalAIKlingGenerator:
             negative_prompt: Negative prompt for content to avoid (model-dependent)
             use_source_folder: If True, save video in same folder as source image
             skip_duplicate_check: If True, skip duplicate detection (for reprocessing)
+            duration: Video duration in seconds (default 10, some models support 5 or 6)
+            aspect_ratio: Aspect ratio string (21:9, 16:9, 4:3, 1:1, 3:4, 9:16)
+            resolution: Resolution string (480p, 720p)
+            seed: Random seed (-1 for random)
+            camera_fixed: Whether camera should be fixed/stationary
+            generate_audio: Whether to generate audio
+            end_image_url: Optional last frame image URL for interpolation
         """
         try:
             # Determine actual output folder
@@ -182,118 +341,172 @@ class FalAIKlingGenerator:
             else:
                 actual_output_folder = self.downloads_folder
 
-            if not skip_duplicate_check and self.check_duplicate_exists(character_image_path, actual_output_folder):
+            if not skip_duplicate_check and self.check_duplicate_exists(
+                character_image_path, actual_output_folder
+            ):
                 if self.verbose:
-                    logger.info(f"Skipping {Path(character_image_path).name} - already exists")
+                    logger.info(
+                        f"Skipping {Path(character_image_path).name} - already exists"
+                    )
                 return None
-            
+
             # Upload image
             image_url = self.upload_to_freeimage(character_image_path)
             if not image_url:
                 logger.error("Failed to upload image")
                 return None
-            
+
             # Prepare prompt
             prompt = custom_prompt if custom_prompt else self.default_prompt
-            
+
             # fal.ai API request
             headers = {
                 "Authorization": f"Key {self.api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            
+
             # Status check headers (no Content-Type for GET requests)
-            status_headers = {
-                "Authorization": f"Key {self.api_key}"
-            }
-            
-            payload = {
+            status_headers = {"Authorization": f"Key {self.api_key}"}
+
+            # Build full payload with ALL possible parameters
+            payload_full: Dict[str, Any] = {
                 "image_url": image_url,
                 "prompt": prompt,
-                "duration": "10",
-                "aspect_ratio": "9:16"
+                "duration": str(duration),
+                "aspect_ratio": aspect_ratio,
             }
+
+            # Add optional parameters if they differ from defaults or are explicitly set
+            if resolution:
+                payload_full["resolution"] = resolution
+
+            if seed >= 0:
+                payload_full["seed"] = seed
+
+            if camera_fixed:
+                payload_full["camera_fixed"] = True
+
+            if generate_audio:
+                payload_full["generate_audio"] = True
+
+            if end_image_url:
+                payload_full["end_image_url"] = end_image_url
+
             if negative_prompt:
-                payload["negative_prompt"] = negative_prompt
-            
+                payload_full["negative_prompt"] = negative_prompt
+
+            # Validate and filter parameters based on model schema (dynamic detection)
+            payload = self.schema_manager.validate_parameters(
+                self.model_endpoint,
+                payload_full
+            )
+
+            if self.verbose:
+                # Show which parameters were filtered out
+                removed = set(payload_full.keys()) - set(payload.keys())
+                if removed:
+                    logger.info(f"Filtered unsupported parameters: {removed}")
+                logger.info(f"Sending parameters: {list(payload.keys())}")
+
             if self.verbose:
                 logger.info(f"Creating {self.model_display_name} video via fal.ai...")
                 logger.info(f"Image: {Path(character_image_path).name}")
-                logger.info(f"Duration: 10 seconds")
+                logger.info(f"Duration: {duration} seconds")
                 logger.info(f"Endpoint: {self.base_url}")
-            
+
             # Submit request with retry logic
             max_submit_retries = 3
             request_id = None
-            
+            status_url = None
+
             for submit_attempt in range(max_submit_retries):
                 try:
-                    response = requests.post(self.base_url, headers=headers, json=payload, timeout=30)
-                    
+                    response = requests.post(
+                        self.base_url, headers=headers, json=payload, timeout=30
+                    )
+
                     if response.status_code == 429:
-                        logger.warning(f"⚠ Rate limited - waiting before retry ({submit_attempt + 1}/{max_submit_retries})")
+                        logger.warning(
+                            f"⚠ Rate limited - waiting before retry ({submit_attempt + 1}/{max_submit_retries})"
+                        )
                         time.sleep(30)
                         continue
-                    
+
                     elif response.status_code == 503:
-                        logger.warning(f"⚠ Service unavailable - retrying ({submit_attempt + 1}/{max_submit_retries})")
+                        logger.warning(
+                            f"⚠ Service unavailable - retrying ({submit_attempt + 1}/{max_submit_retries})"
+                        )
                         time.sleep(10)
                         continue
-                    
+
                     elif response.status_code == 402:
-                        logger.error("💳 Payment required - insufficient credits in your fal.ai account")
+                        logger.error(
+                            "💳 Payment required - insufficient credits in your fal.ai account"
+                        )
                         return None
-                    
+
                     elif response.status_code != 200:
                         logger.error(f"❌ Request failed: {response.status_code}")
                         logger.error(f"Response: {response.text}")
                         if submit_attempt < max_submit_retries - 1:
-                            logger.info(f"Retrying... ({submit_attempt + 1}/{max_submit_retries})")
+                            logger.info(
+                                f"Retrying... ({submit_attempt + 1}/{max_submit_retries})"
+                            )
                             time.sleep(5)
                             continue
                         return None
-                    
+
                     result = response.json()
-                    request_id = result.get('request_id')
-                    status_url = result.get('status_url')  # Get the status URL from response
-                    
+                    request_id = result.get("request_id")
+                    status_url = result.get(
+                        "status_url"
+                    )  # Get the status URL from response
+
                     if not request_id or not status_url:
                         logger.error("✗ No request ID or status URL returned")
                         if submit_attempt < max_submit_retries - 1:
                             time.sleep(5)
                             continue
                         return None
-                    
+
                     # Success!
                     break
-                    
+
                 except requests.exceptions.Timeout:
-                    logger.warning(f"⚠ Request timeout ({submit_attempt + 1}/{max_submit_retries})")
+                    logger.warning(
+                        f"⚠ Request timeout ({submit_attempt + 1}/{max_submit_retries})"
+                    )
                     if submit_attempt < max_submit_retries - 1:
                         time.sleep(10)
                         continue
                     logger.error("✗ Failed to submit request after timeouts")
                     return None
-                    
+
                 except requests.exceptions.ConnectionError as e:
-                    logger.warning(f"⚠ Connection error: {e} ({submit_attempt + 1}/{max_submit_retries})")
+                    logger.warning(
+                        f"⚠ Connection error: {e} ({submit_attempt + 1}/{max_submit_retries})"
+                    )
                     if submit_attempt < max_submit_retries - 1:
                         time.sleep(10)
                         continue
                     logger.error("✗ Failed to submit request due to connection errors")
                     return None
-                    
+
                 except Exception as e:
                     logger.error(f"✗ Unexpected error during submission: {e}")
                     if submit_attempt < max_submit_retries - 1:
                         time.sleep(5)
                         continue
                     return None
-            
+
             if not request_id:
                 logger.error("✗ Failed to get request ID after all retries")
                 return None
-            
+
+            if not status_url:
+                logger.error("✗ Failed to get status URL after all retries")
+                return None
+
             if self.verbose:
                 logger.info(f"✓ Task created: {request_id}")
                 logger.info("Waiting for video generation...")
@@ -306,11 +519,11 @@ class FalAIKlingGenerator:
             attempt = 0
             consecutive_errors = 0
             max_consecutive_errors = 10
-            
+
             # Exponential backoff settings
             base_delay = 5
             max_delay = 30
-            
+
             while attempt < max_attempts:
                 # Calculate delay with exponential backoff
                 if attempt < 24:  # First 2 minutes: 5 second polls
@@ -319,113 +532,191 @@ class FalAIKlingGenerator:
                     delay = 10
                 else:  # After 5 minutes: 15 second polls
                     delay = 15
-                    
+
                 time.sleep(delay)
                 attempt += 1
-                
+
                 # Show progress every minute
                 if attempt % (60 // base_delay) == 0:
                     elapsed_mins = (attempt * base_delay) // 60
                     if self.verbose:
-                        logger.info(f"⏳ Still waiting... {elapsed_mins} min elapsed (attempt {attempt}/{max_attempts})")
-                    self._report_progress(f"⏳ Still waiting... {elapsed_mins} min elapsed", "progress")
-                
+                        logger.info(
+                            f"⏳ Still waiting... {elapsed_mins} min elapsed (attempt {attempt}/{max_attempts})"
+                        )
+                    self._report_progress(
+                        f"⏳ Still waiting... {elapsed_mins} min elapsed", "progress"
+                    )
+
                 try:
                     # fal.ai status endpoint requires Authorization header
-                    status_response = requests.get(status_url, headers=status_headers, timeout=30)
-                    
+                    status_response = requests.get(
+                        status_url, headers=status_headers, timeout=30
+                    )
+
                     # Handle different HTTP status codes
                     if status_response.status_code == 404:
-                        logger.error(f"✗ Job not found (404) - request may have expired")
+                        logger.error(
+                            f"✗ Job not found (404) - request may have expired"
+                        )
                         return None
                     elif status_response.status_code == 429:
                         if self.verbose:
-                            logger.warning("⚠ Rate limited - waiting longer before retry")
+                            logger.warning(
+                                "⚠ Rate limited - waiting longer before retry"
+                            )
                         time.sleep(30)
                         continue
                     elif status_response.status_code == 503:
                         if self.verbose:
-                            logger.warning("⚠ Service unavailable - fal.ai may be overloaded")
+                            logger.warning(
+                                "⚠ Service unavailable - fal.ai may be overloaded"
+                            )
                         consecutive_errors += 1
                         if consecutive_errors >= max_consecutive_errors:
-                            logger.error(f"✗ Too many service errors ({consecutive_errors}) - giving up")
+                            logger.error(
+                                f"✗ Too many service errors ({consecutive_errors}) - giving up"
+                            )
                             return None
                         time.sleep(10)
                         continue
                     elif status_response.status_code not in [200, 202]:
                         if self.verbose:
-                            logger.warning(f"⚠ Unexpected status code: {status_response.status_code}")
+                            logger.warning(
+                                f"⚠ Unexpected status code: {status_response.status_code}"
+                            )
                         consecutive_errors += 1
                         if consecutive_errors >= max_consecutive_errors:
-                            logger.error(f"✗ Too many errors ({consecutive_errors}) - giving up")
+                            logger.error(
+                                f"✗ Too many errors ({consecutive_errors}) - giving up"
+                            )
                             return None
                         continue
-                    
+
                     # Reset error counter on success
                     consecutive_errors = 0
-                    
+
                     status_result = status_response.json()
-                    status = status_result.get('status')
-                    
+                    status = status_result.get("status")
+
                     # Log queue position if available
-                    queue_position = status_result.get('queue_position')
+                    queue_position = status_result.get("queue_position")
                     if queue_position and self.verbose and attempt % 6 == 0:
                         logger.info(f"📊 Queue position: {queue_position}")
-                    
-                    if status == 'IN_QUEUE':
+
+                    if status == "IN_QUEUE":
                         if self.verbose and attempt % 12 == 0:
                             logger.info("⏳ Job is in queue, waiting...")
                         continue
-                    
-                    elif status == 'IN_PROGRESS':
+
+                    elif status == "IN_PROGRESS":
                         if self.verbose and attempt % 12 == 0:
                             logger.info("🎬 Video is being generated...")
                         continue
-                    
-                    elif status == 'COMPLETED':
+
+                    elif status == "COMPLETED":
                         # Debug: log the full response to see structure
                         if self.verbose:
-                            logger.info(f"DEBUG - Full response keys: {list(status_result.keys())}")
+                            logger.info(
+                                f"DEBUG - Full response keys: {list(status_result.keys())}"
+                            )
                             logger.info(f"DEBUG - Full response: {status_result}")
-                        
+
                         # Try multiple possible response structures
                         video_url = None
-                        
+
                         # Structure 1: output.video.url
-                        if 'output' in status_result:
-                            video_url = status_result.get('output', {}).get('video', {}).get('url')
-                        
+                        if "output" in status_result:
+                            video_url = (
+                                status_result.get("output", {})
+                                .get("video", {})
+                                .get("url")
+                            )
+
                         # Structure 2: video.url
-                        if not video_url and 'video' in status_result:
-                            video_url = status_result.get('video', {}).get('url')
-                        
+                        if not video_url and "video" in status_result:
+                            video_url = status_result.get("video", {}).get("url")
+
                         # Structure 3: data.video.url
-                        if not video_url and 'data' in status_result:
-                            video_url = status_result.get('data', {}).get('video', {}).get('url')
-                        
+                        if not video_url and "data" in status_result:
+                            video_url = (
+                                status_result.get("data", {})
+                                .get("video", {})
+                                .get("url")
+                            )
+
                         # Structure 4: response_url might contain the result
-                        if not video_url and 'response_url' in status_result:
-                            response_url = status_result.get('response_url')
+                        if not video_url and "response_url" in status_result:
+                            response_url = status_result.get("response_url")
                             if self.verbose:
-                                logger.info(f"Fetching result from response_url: {response_url}")
+                                logger.info(
+                                    f"Fetching result from response_url: {response_url}"
+                                )
                             try:
-                                result_response = requests.get(response_url, headers=status_headers, timeout=30)
+                                result_response = requests.get(
+                                    response_url, headers=status_headers, timeout=30
+                                )
                                 if result_response.status_code == 200:
                                     result_data = result_response.json()
                                     if self.verbose:
-                                        logger.info(f"DEBUG - Result data: {result_data}")
-                                    video_url = result_data.get('video', {}).get('url')
+                                        logger.info(
+                                            f"DEBUG - Result data keys: {list(result_data.keys())}"
+                                        )
+                                        logger.info(
+                                            f"DEBUG - Result data: {result_data}"
+                                        )
+
+                                    # Check for errors in result data (API validation errors)
+                                    if "error" in result_data:
+                                        logger.error(
+                                            f"❌ API Error: {result_data['error']}"
+                                        )
+                                        return None
+                                    if "detail" in result_data:
+                                        # Parse validation errors like duration invalid
+                                        detail = result_data["detail"]
+                                        if isinstance(detail, list):
+                                            for err in detail:
+                                                msg = err.get("msg", str(err))
+                                                loc = err.get("loc", [])
+                                                logger.error(
+                                                    f"❌ Validation Error: {msg} (field: {loc})"
+                                                )
+                                        else:
+                                            logger.error(f"❌ API Detail: {detail}")
+                                        return None
+
+                                    # Try all structures in result_data
+                                    video_url = result_data.get("video", {}).get("url")
+
+                                    if not video_url:
+                                        video_url = (
+                                            result_data.get("output", {})
+                                            .get("video", {})
+                                            .get("url")
+                                        )
+
+                                    if not video_url:
+                                        video_url = (
+                                            result_data.get("data", {})
+                                            .get("video", {})
+                                            .get("url")
+                                        )
+
                             except Exception as e:
                                 if self.verbose:
-                                    logger.warning(f"Failed to fetch from response_url: {e}")
-                        
+                                    logger.warning(
+                                        f"Failed to fetch from response_url: {e}"
+                                    )
+
                         if not video_url:
                             logger.error("✗ No video URL in response")
                             return None
-                        
+
                         if self.verbose:
                             logger.info(f"✓ Video ready: {video_url}")
-                        self._report_progress(f"✓ Video ready - downloading...", "download")
+                        self._report_progress(
+                            f"✓ Video ready - downloading...", "download"
+                        )
 
                         # Download video with retry logic
                         max_download_retries = 3
@@ -434,55 +725,80 @@ class FalAIKlingGenerator:
                                 video_response = requests.get(video_url, timeout=120)
                                 if video_response.status_code != 200:
                                     if download_attempt < max_download_retries - 1:
-                                        logger.warning(f"⚠ Download failed (attempt {download_attempt + 1}/{max_download_retries})")
+                                        logger.warning(
+                                            f"⚠ Download failed (attempt {download_attempt + 1}/{max_download_retries})"
+                                        )
                                         time.sleep(5)
                                         continue
                                     else:
-                                        logger.error(f"✗ Failed to download after {max_download_retries} attempts: {video_response.status_code}")
+                                        logger.error(
+                                            f"✗ Failed to download after {max_download_retries} attempts: {video_response.status_code}"
+                                        )
                                         return None
-                                
-                                # Save video
+
+                                # Save video with model and prompt slot in filename
                                 char_name = Path(character_image_path).stem
-                                output_path = Path(actual_output_folder) / f"{char_name}_kling.mp4"
-                                
-                                with open(output_path, 'wb') as f:
+                                output_filename = self.get_output_filename(char_name)
+                                output_path = (
+                                    Path(actual_output_folder) / output_filename
+                                )
+
+                                with open(output_path, "wb") as f:
                                     f.write(video_response.content)
-                                
+
                                 file_size = output_path.stat().st_size / (1024 * 1024)
                                 total_time = attempt * base_delay
                                 if self.verbose:
                                     logger.info(f"✓ Video saved: {output_path}")
                                     logger.info(f"✓ File size: {file_size:.2f} MB")
-                                    logger.info(f"✓ Total generation time: {total_time // 60}m {total_time % 60}s")
-                                self._report_progress(f"✓ File size: {file_size:.2f} MB", "download")
-                                self._report_progress(f"✓ Total generation time: {total_time // 60}m {total_time % 60}s", "success")
+                                    logger.info(
+                                        f"✓ Total generation time: {total_time // 60}m {total_time % 60}s"
+                                    )
+                                self._report_progress(
+                                    f"✓ File size: {file_size:.2f} MB", "download"
+                                )
+                                self._report_progress(
+                                    f"✓ Total generation time: {total_time // 60}m {total_time % 60}s",
+                                    "success",
+                                )
 
                                 return str(output_path)
-                            
+
                             except Exception as download_error:
                                 if download_attempt < max_download_retries - 1:
-                                    logger.warning(f"⚠ Download error: {download_error} (retry {download_attempt + 1}/{max_download_retries})")
+                                    logger.warning(
+                                        f"⚠ Download error: {download_error} (retry {download_attempt + 1}/{max_download_retries})"
+                                    )
                                     time.sleep(5)
                                 else:
-                                    logger.error(f"✗ Download failed after {max_download_retries} attempts: {download_error}")
+                                    logger.error(
+                                        f"✗ Download failed after {max_download_retries} attempts: {download_error}"
+                                    )
                                     return None
-                    
-                    elif status in ['FAILED', 'ERROR']:
-                        error_msg = status_result.get('error', 'Unknown error')
+
+                    elif status in ["FAILED", "ERROR"]:
+                        error_msg = status_result.get("error", "Unknown error")
                         logger.error(f"✗ Generation failed: {error_msg}")
-                        
+
                         # Check if it's a retriable error
-                        if 'quota' in error_msg.lower() or 'credit' in error_msg.lower():
-                            logger.error("💳 Insufficient credits - please add more credits to your fal.ai account")
-                        elif 'timeout' in error_msg.lower():
-                            logger.error("⏱️ Server timeout - fal.ai may be overloaded, try again later")
-                        
+                        if (
+                            "quota" in error_msg.lower()
+                            or "credit" in error_msg.lower()
+                        ):
+                            logger.error(
+                                "💳 Insufficient credits - please add more credits to your fal.ai account"
+                            )
+                        elif "timeout" in error_msg.lower():
+                            logger.error(
+                                "⏱️ Server timeout - fal.ai may be overloaded, try again later"
+                            )
+
                         return None
-                    
-                    elif status == 'CANCELLED':
+
+                    elif status == "CANCELLED":
                         logger.error("✗ Job was cancelled")
                         return None
-                        
+
                 except requests.exceptions.Timeout:
                     if self.verbose:
                         logger.warning(f"⚠ Request timeout (attempt {attempt})")
@@ -491,7 +807,7 @@ class FalAIKlingGenerator:
                         logger.error(f"✗ Too many timeouts - giving up")
                         return None
                     continue
-                    
+
                 except requests.exceptions.ConnectionError:
                     if self.verbose:
                         logger.warning(f"⚠ Connection error - retrying")
@@ -501,7 +817,7 @@ class FalAIKlingGenerator:
                         return None
                     time.sleep(10)
                     continue
-                    
+
                 except Exception as e:
                     if self.verbose and attempt % 12 == 0:
                         logger.warning(f"⚠ Status check error: {e}")
@@ -510,22 +826,37 @@ class FalAIKlingGenerator:
                         logger.error(f"✗ Too many errors - giving up")
                         return None
                     continue
-            
+
             # Timeout reached
             logger.error(f"✗ Timeout after {max_attempts * base_delay // 60} minutes")
             logger.error("💡 Possible causes:")
-            logger.error("   - fal.ai servers are overloaded (try again during off-peak hours)")
+            logger.error(
+                "   - fal.ai servers are overloaded (try again during off-peak hours)"
+            )
             logger.error("   - Job stuck in queue (check fal.ai dashboard)")
             logger.error("   - Network connectivity issues")
             return None
-            
+
         except Exception as e:
             logger.error(f"✗ Error: {str(e)}")
             return None
-    
-    def process_all_images_concurrent(self, target_directory: str, output_directory: str = None,
-                                     max_workers: int = 5, custom_prompt: str = None,
-                                     progress_callback=None, use_source_folder: bool = False):
+
+    def process_all_images_concurrent(
+        self,
+        target_directory: str,
+        output_directory: Optional[str] = None,
+        max_workers: int = 5,
+        custom_prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        use_source_folder: bool = False,
+        duration: int = 10,
+        aspect_ratio: str = "9:16",
+        resolution: str = "720p",
+        seed: int = -1,
+        camera_fixed: bool = False,
+        generate_audio: bool = False,
+    ):
         """Process all GenX images concurrently
 
         Args:
@@ -533,8 +864,15 @@ class FalAIKlingGenerator:
             output_directory: Fallback output directory (used when use_source_folder=False)
             max_workers: Maximum concurrent workers
             custom_prompt: Custom generation prompt
+            negative_prompt: Negative prompt for content to avoid
             progress_callback: Progress callback function
             use_source_folder: If True, save each video alongside its source image
+            duration: Video duration in seconds
+            aspect_ratio: Aspect ratio string
+            resolution: Resolution string (480p, 720p)
+            seed: Random seed (-1 for random)
+            camera_fixed: Whether camera should be fixed
+            generate_audio: Whether to generate audio
         """
         if output_directory is None:
             output_directory = self.downloads_folder
@@ -563,55 +901,83 @@ class FalAIKlingGenerator:
                 logger.info(f"Skipping duplicate: {target_path.name}")
         else:
             # Root directory
-            genx_images = self.get_genx_image_files(target_directory, use_source_folder, output_directory)
+            genx_images = self.get_genx_image_files(
+                target_directory, use_source_folder, output_directory
+            )
             all_images.extend(genx_images)
 
             # Subdirectories
             try:
                 for folder_path in Path(target_directory).iterdir():
                     if folder_path.is_dir():
-                        genx_images = self.get_genx_image_files(str(folder_path), use_source_folder, output_directory)
+                        genx_images = self.get_genx_image_files(
+                            str(folder_path), use_source_folder, output_directory
+                        )
                         all_images.extend(genx_images)
             except Exception as e:
                 if self.verbose:
                     logger.error(f"Error: {e}")
-        
+
         total_images = len(all_images)
         if total_images == 0:
             if self.verbose:
                 logger.info("No GenX images found")
             return
-        
+
         if self.verbose:
             logger.info(f"Found {total_images} GenX images")
             logger.info("Starting concurrent processing...")
-        
+
         videos_created = 0
         videos_skipped = 0
         lock = threading.Lock()
-        
+
         def process_image(image_path):
             nonlocal videos_created, videos_skipped
-            
+
             image_name = Path(image_path).name
-            
+
             if progress_callback:
                 with lock:
-                    progress_callback(videos_created + videos_skipped, total_images, f"Generating: {image_name}")
-            
+                    progress_callback(
+                        videos_created + videos_skipped,
+                        total_images,
+                        f"Generating: {image_name}",
+                    )
+
             try:
-                result = self.create_kling_generation(image_path, output_directory, custom_prompt, use_source_folder)
+                result = self.create_kling_generation(
+                    character_image_path=image_path,
+                    output_folder=output_directory,
+                    custom_prompt=custom_prompt,
+                    negative_prompt=negative_prompt,
+                    use_source_folder=use_source_folder,
+                    duration=duration,
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                    seed=seed,
+                    camera_fixed=camera_fixed,
+                    generate_audio=generate_audio,
+                )
 
                 with lock:
                     if result:
                         videos_created += 1
                         if progress_callback:
-                            progress_callback(videos_created + videos_skipped, total_images, f"Completed: {image_name}")
+                            progress_callback(
+                                videos_created + videos_skipped,
+                                total_images,
+                                f"Completed: {image_name}",
+                            )
                     else:
                         videos_skipped += 1
                         if progress_callback:
-                            progress_callback(videos_created + videos_skipped, total_images, f"Failed: {image_name}")
-                
+                            progress_callback(
+                                videos_created + videos_skipped,
+                                total_images,
+                                f"Failed: {image_name}",
+                            )
+
                 return result
             except Exception as e:
                 with lock:
@@ -619,20 +985,24 @@ class FalAIKlingGenerator:
                     if self.verbose:
                         logger.error(f"Error processing {image_name}: {e}")
                     if progress_callback:
-                        progress_callback(videos_created + videos_skipped, total_images, f"Failed: {image_name}")
+                        progress_callback(
+                            videos_created + videos_skipped,
+                            total_images,
+                            f"Failed: {image_name}",
+                        )
                 return None
-        
+
         # Process concurrently
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_image, img): img for img in all_images}
-            
+
             for future in as_completed(futures):
                 try:
                     future.result()
                 except Exception as e:
                     if self.verbose:
                         logger.error(f"Unexpected error: {e}")
-        
+
         # Summary
         if self.verbose:
             logger.info("\n" + "=" * 80)

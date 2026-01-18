@@ -24,6 +24,10 @@ kling_automation.log
 # Distribution artifacts
 *.zip
 
+# PyInstaller build outputs (distribution folder)
+distribution/build/
+distribution/dist/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -36,6 +40,9 @@ tmp_run/
 
 # Session/History files
 kling_history.json
+.history/
+ui_config.json
+ui_config_exported*.json
 
 # Serena MCP
 .serena/

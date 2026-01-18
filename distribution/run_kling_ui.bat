@@ -125,9 +125,20 @@ if not exist "%VENV_PYTHON%" (
 echo Starting Kling UI...
 echo.
 "%VENV_PYTHON%" -u "%SCRIPT_PATH%"
+set EXIT_CODE=%errorlevel%
 
 echo.
-pause
+if %EXIT_CODE% neq 0 (
+    echo ============================================
+    echo   APPLICATION CRASHED ^(Exit code: %EXIT_CODE%^)
+    echo ============================================
+    echo.
+    echo The application exited with an error.
+    echo Review the messages above for details.
+    echo.
+)
+echo Press any key to close this window...
+pause >nul
 
 :: Clean up "nul" file again before exit
 if exist "%BATCH_DIR%nul" del /f /q "%BATCH_DIR%nul" 2>nul
