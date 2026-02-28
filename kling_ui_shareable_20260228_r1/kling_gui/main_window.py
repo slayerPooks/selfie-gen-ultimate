@@ -1107,6 +1107,48 @@ class KlingGUIWindow:
         )
         dnd_label.pack(side=tk.RIGHT, padx=10, pady=8)
 
+        # API key status indicator (green = set, red = not set; click to edit)
+        api_key = self.config.get("falai_api_key", "")
+        api_set = bool(api_key and api_key.strip())
+        self.api_key_indicator = tk.Label(
+            header,
+            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set",
+            font=("Segoe UI", 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["success"] if api_set else COLORS["error"],
+            cursor="hand2",
+        )
+        self.api_key_indicator.pack(side=tk.RIGHT, padx=(0, 4), pady=8)
+        self.api_key_indicator.bind("<Button-1>", lambda e: self._prompt_api_key())
+
+    def _prompt_api_key(self):
+        """Open a dialog to enter / update the fal.ai API key."""
+        from tkinter import simpledialog
+        current = self.config.get("falai_api_key", "")
+        new_key = simpledialog.askstring(
+            "fal.ai API Key",
+            "Enter your fal.ai API key:\n(Get yours at https://fal.ai/dashboard/keys)",
+            initialvalue=current,
+            parent=self.root,
+        )
+        if new_key is None:
+            return  # User cancelled
+        new_key = new_key.strip()
+        self.config["falai_api_key"] = new_key
+        self._save_config()
+        # Update indicator colour and text
+        api_set = bool(new_key)
+        self.api_key_indicator.config(
+            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set",
+            fg=COLORS["success"] if api_set else COLORS["error"],
+        )
+        # Re-initialise the generator with the new key
+        self._init_generator()
+        if api_set:
+            self._log("API key updated and saved.", "success")
+        else:
+            self._log("API key cleared.", "warning")
+
     def _setup_queue_panel_content(self, queue_frame):
         """Set up the queue panel content inside the given frame."""
         # Header with count
