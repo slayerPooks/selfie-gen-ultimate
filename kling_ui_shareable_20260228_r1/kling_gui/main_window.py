@@ -224,8 +224,11 @@ class KlingGUIWindow:
 
         # Create root window with DnD support if available
         self.root = create_dnd_root()
-        self.root.title("FAL.AI Video Generator - GUI Mode")
+        self.root.title("Kling UI - AI Video Generator")
         self.root.configure(bg=COLORS["bg_main"])
+
+        # Set app icon
+        self._set_app_icon()
 
         # Restore window geometry or use defaults
         window_config = self.ui_config.get("window", {})
@@ -262,6 +265,23 @@ class KlingGUIWindow:
 
         # Protocol for window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _set_app_icon(self):
+        """Load and set the app icon from bundled resources or alongside the exe."""
+        try:
+            from path_utils import get_resource_dir, get_app_dir
+            import tkinter as tk
+
+            icon_name = "kling_ui.ico"
+
+            # Check bundled resources first (PyInstaller _MEIPASS), then app dir
+            for search_dir in [get_resource_dir(), get_app_dir()]:
+                icon_path = os.path.join(search_dir, icon_name)
+                if os.path.isfile(icon_path):
+                    self.root.iconbitmap(icon_path)
+                    return
+        except Exception:
+            pass  # Icon is cosmetic - never crash the app over it
 
     def _setup_logging(self) -> logging.Logger:
         """Configure rotating file logging."""
@@ -316,11 +336,22 @@ class KlingGUIWindow:
             "sash_log": 380,  # Height of log pane (before history)
         }
 
+        # Layer 1: apply bundled defaults template (prompts, model, etc.)
+        try:
+            from path_utils import get_resource_dir
+            template_path = os.path.join(get_resource_dir(), "default_config_template.json")
+            if os.path.exists(template_path):
+                with open(template_path, "r", encoding="utf-8") as f:
+                    template = json.load(f)
+                    default_config.update(template)
+        except Exception:
+            pass  # Template is cosmetic - never crash on missing defaults
+
+        # Layer 2: apply user's saved config (overrides everything)
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    # Merge with defaults
                     default_config.update(loaded)
         except Exception as e:
             print(f"Warning: Could not load config: {e}")
@@ -414,6 +445,11 @@ class KlingGUIWindow:
         # Header
         self._setup_header()
 
+        # Control buttons MUST be packed before main_frame so the pack manager
+        # reserves their space at the bottom first. If packed after an expand=True
+        # frame, they get pushed off-screen when the window is small.
+        self._setup_controls()
+
         # Main content area
         main_frame = tk.Frame(self.root, bg=COLORS["bg_main"])
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -483,8 +519,6 @@ class KlingGUIWindow:
         self._setup_history_panel_content(self.history_frame)
         self.right_paned.add(self.history_frame, minsize=100)
 
-        # Control buttons at bottom
-        self._setup_controls()
 
     def _apply_ui_config(self):
         """Apply UI layout configuration to existing widgets."""
@@ -1054,26 +1088,12 @@ class KlingGUIWindow:
 
         title = tk.Label(
             header,
-            text="🎬 FAL.AI VIDEO GENERATOR - GUI MODE",
+            text="🎬 Kling UI - AI Video Generator",
             font=("Segoe UI", 12, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
         title.pack(side=tk.LEFT, padx=10, pady=8)
-
-        # Balance link
-        balance_link = tk.Label(
-            header,
-            text="💰 Check Balance",
-            font=("Segoe UI", 9, "underline"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["accent_blue"],
-            cursor="hand2",
-        )
-        balance_link.pack(side=tk.RIGHT, padx=10, pady=8)
-        balance_link.bind(
-            "<Button-1>", lambda e: webbrowser.open("https://fal.ai/dashboard")
-        )
 
         # DnD status
         dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"

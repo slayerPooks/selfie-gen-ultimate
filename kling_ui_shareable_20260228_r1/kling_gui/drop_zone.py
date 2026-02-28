@@ -99,25 +99,15 @@ class DropZone(tk.Frame):
         )
         self.main_label.pack(pady=2)
 
-        # Sub-instruction label
+        # Sub-instruction label (combined: left click + right click hint on one line)
         self.sub_label = tk.Label(
             self.content_container,
-            text="or click to browse files",
+            text="Left click to select files  |  Right click for folder",
             font=("Segoe UI", 10),
             bg=self._default_bg,
             fg=COLORS["text_dim"],
         )
         self.sub_label.pack(pady=(0, 10))
-
-        # Folder hint
-        self.folder_hint = tk.Label(
-            self.content_container,
-            text="Right-click to process a folder",
-            font=("Segoe UI", 8, "italic"),
-            bg=self._default_bg,
-            fg=COLORS["accent_blue"],
-        )
-        self.folder_hint.pack()
 
         # Bind events for hover and click
         for widget in [
@@ -126,7 +116,6 @@ class DropZone(tk.Frame):
             self.main_label,
             self.sub_label,
             self.content_container,
-            self.folder_hint,
         ]:
             widget.bind("<Button-1>", self._on_click_browse)
             widget.bind("<Button-3>", self._on_right_click_browse_folder)
@@ -149,7 +138,7 @@ class DropZone(tk.Frame):
             self._setup_dnd()
         else:
             self.main_label.config(text="CLICK TO SELECT IMAGES")
-            self.sub_label.config(text="Drag-drop not available in this environment")
+            self.sub_label.config(text="Left click to select files  |  Right click for folder")
 
     def _on_mouse_enter(self, event=None):
         """Handle mouse hover enter."""
@@ -170,7 +159,6 @@ class DropZone(tk.Frame):
             self.sub_label,
             self.content_container,
             self.status_label,
-            self.folder_hint,
         ]:
             widget.config(bg=color)
 
