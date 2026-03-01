@@ -245,7 +245,7 @@ def fal_queue_poll(
                 progress_cb(f"Still waiting... {elapsed} min elapsed", "progress")
 
         try:
-            resp = requests.get(status_url, headers=status_headers, timeout=30)
+            resp = _get_with_auth_fallback(status_url, status_headers, timeout=30)
 
             if resp.status_code == 404:
                 logger.error("Job not found (404) — request may have expired")
@@ -364,7 +364,7 @@ def _extract_result(
         if progress_cb:
             progress_cb("Fetching result from response_url...", "api")
         try:
-            r = requests.get(response_url, headers=status_headers, timeout=30)
+            r = _get_with_auth_fallback(response_url, status_headers, timeout=30)
             if r.status_code == 200:
                 result_data = r.json()
                 # Check for API-level errors inside result
@@ -405,6 +405,24 @@ def _extract_result(
     if progress_cb:
         progress_cb("Could not extract result from completed response", "error")
     return None
+
+
+def _get_with_auth_fallback(url: str, headers: dict, timeout: int = 30) -> requests.Response:
+    """GET with auth fallback for fal queue endpoints.
+
+    Some fal queue/result URLs may reject `Key` auth while accepting `Bearer`.
+    We keep `Key` as primary and retry once with `Bearer` on auth/validation codes.
+    """
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    auth_value = headers.get("Authorization", "")
+    if (
+        resp.status_code in (401, 403, 422)
+        and auth_value.startswith("Key ")
+    ):
+        bearer_headers = dict(headers)
+        bearer_headers["Authorization"] = auth_value.replace("Key ", "Bearer ", 1)
+        return requests.get(url, headers=bearer_headers, timeout=timeout)
+    return resp
 
 
 def fal_download_file(
