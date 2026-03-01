@@ -1468,6 +1468,7 @@ class KlingGUIWindow:
                 model_endpoint=self.config.get("current_model"),
                 model_display_name=self.config.get("model_display_name"),
                 prompt_slot=self.config.get("current_prompt_slot", 1),
+                freeimage_key=self.config.get("freeimage_api_key", ""),
             )
 
             self.queue_manager = QueueManager(
@@ -1793,6 +1794,9 @@ class KlingGUIWindow:
                 self.generator.update_prompt_slot(
                     int(self.config.get("current_prompt_slot", 1))
                 )
+                self.generator.update_freeimage_key(
+                    str(self.config.get("freeimage_api_key", ""))
+                )
 
         # Log the specific change if description provided
         if change_description:
@@ -1834,6 +1838,9 @@ class KlingGUIWindow:
             )
             self.generator.update_prompt_slot(
                 int(self.config.get("current_prompt_slot", 1))
+            )
+            self.generator.update_freeimage_key(
+                str(self.config.get("freeimage_api_key", ""))
             )
 
     def _toggle_pause(self):

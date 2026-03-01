@@ -360,12 +360,14 @@ def _unwrap_payload(data: dict) -> dict:
     fal.ai responses may nest the actual result under 'output' or 'data' keys.
     This helper drills down to the innermost dict containing 'images' or 'video'.
     """
-    if "output" in data:
-        return data["output"]
+    if not isinstance(data, dict):
+        return data
     if "video" in data or "images" in data:
         return data
-    if "data" in data:
-        return data["data"]
+    if "output" in data and isinstance(data.get("output"), dict):
+        return _unwrap_payload(data["output"])
+    if "data" in data and isinstance(data.get("data"), dict):
+        return _unwrap_payload(data["data"])
     return data
 
 
@@ -385,7 +387,7 @@ def _extract_result(
     """
     # Structures 1-3: output / direct / data wrappers
     unwrapped = _unwrap_payload(status_result)
-    if unwrapped is not status_result:
+    if unwrapped is not status_result or "images" in unwrapped or "video" in unwrapped:
         return unwrapped
 
     # Structure 4: response_url indirection

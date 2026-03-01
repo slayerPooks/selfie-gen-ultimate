@@ -29,6 +29,7 @@ class FalAIKlingGenerator:
         model_endpoint: Optional[str] = None,
         model_display_name: Optional[str] = None,
         prompt_slot: int = 1,
+        freeimage_key: Optional[str] = None,
     ):
         self.api_key = api_key
         self.verbose = verbose
@@ -52,8 +53,11 @@ class FalAIKlingGenerator:
             )
             self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
 
-        # Freeimage.host API key (optional; can be overridden by GUI config)
-        self.freeimage_key = os.getenv("FREEIMAGE_API_KEY", "")
+        # Freeimage.host API key (GUI config overrides env when provided)
+        configured_freeimage_key = (freeimage_key or "").strip()
+        self.freeimage_key = configured_freeimage_key or os.getenv(
+            "FREEIMAGE_API_KEY", ""
+        ).strip()
 
         # Default prompt for head movement
         self.default_prompt = (
@@ -89,6 +93,13 @@ class FalAIKlingGenerator:
                 "https://queue.fal.run/fal-ai/kling-video/v2.1/pro/image-to-video"
             )
             self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
+
+    def update_freeimage_key(self, freeimage_key: Optional[str]):
+        """Update Freeimage API key from UI config (fallback to env when blank)."""
+        configured_freeimage_key = (freeimage_key or "").strip()
+        self.freeimage_key = configured_freeimage_key or os.getenv(
+            "FREEIMAGE_API_KEY", ""
+        ).strip()
 
     def update_prompt_slot(self, slot: int):
         """Update the current prompt slot.
