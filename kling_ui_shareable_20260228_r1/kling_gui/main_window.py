@@ -544,6 +544,7 @@ class KlingGUIWindow:
             config_getter=lambda: self.config,
             log_callback=self._log,
             prompt_writer=self._write_to_active_prompt,
+            config_saver=self._save_config,
         )
         self.notebook.add(self.prep_tab, text="1. Prep Photo")
 
