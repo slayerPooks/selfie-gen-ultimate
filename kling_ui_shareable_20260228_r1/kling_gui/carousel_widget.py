@@ -177,6 +177,7 @@ class ImageCarousel(tk.Frame):
             from PIL import Image, ImageTk
 
             img = Image.open(path)
+            img.load()  # Read pixels into memory, release file handle
             cw = max(1, self.canvas.winfo_width() - 4)
             ch = max(1, self.canvas.winfo_height() - 4)
 

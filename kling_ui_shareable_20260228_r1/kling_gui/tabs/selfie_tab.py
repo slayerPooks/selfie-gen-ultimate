@@ -319,7 +319,9 @@ class SelfieTab(tk.Frame):
 
                 gen = SelfieGenerator(api_key)
                 gen.set_progress_callback(
-                    lambda msg, lvl: self.log(msg, lvl)
+                    lambda msg, lvl: self.winfo_toplevel().after(
+                        0, lambda m=msg, l=lvl: self.log(m, l)
+                    )
                 )
                 result = gen.generate(
                     image_path=image_path,

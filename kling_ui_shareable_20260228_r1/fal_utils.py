@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
-# Freeimage.host guest API key (same as in kling_generator_falai.py)
-_FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5")
+# Freeimage.host API key — read from environment only
+_FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
 
 
 def upload_to_freeimage(
@@ -29,8 +29,14 @@ def upload_to_freeimage(
     Converts transparent images to RGB JPEG before upload.
     Returns None on failure.
     """
+    if not _FREEIMAGE_KEY:
+        if progress_cb:
+            progress_cb("FREEIMAGE_API_KEY not set — set via environment", "error")
+        return None
+
     try:
         img = Image.open(image_path)
+        img.load()  # Read pixel data into memory, releasing file handle
 
         # Resize if needed
         if img.width > max_size or img.height > max_size:
@@ -214,6 +220,7 @@ def fal_queue_poll(
     base_delay = 5
     consecutive_errors = 0
     max_consecutive_errors = 10
+    start_time = time.monotonic()
 
     for attempt in range(1, max_attempts + 1):
         # Backoff schedule
@@ -228,7 +235,7 @@ def fal_queue_poll(
 
         # Periodic progress update
         if attempt % 12 == 0:
-            elapsed = (attempt * base_delay) // 60
+            elapsed = int((time.monotonic() - start_time) / 60)
             if progress_cb:
                 progress_cb(f"Still waiting... {elapsed} min elapsed", "progress")
 

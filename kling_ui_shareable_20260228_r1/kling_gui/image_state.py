@@ -8,15 +8,32 @@ from typing import Optional, Callable, List
 logger = logging.getLogger(__name__)
 
 
+_VALID_SOURCE_TYPES = {"input", "selfie", "outpaint"}
+
+
 @dataclass
 class ImageEntry:
-    """A single image in the session."""
+    """A single image in the session.
+
+    Attributes:
+        path: Absolute path to the image file.
+        source_type: One of "input", "selfie", "outpaint".
+        label: Display label (auto-generated if empty).
+    """
 
     path: str
     source_type: str  # "input", "selfie", "outpaint"
     label: str = ""
 
     def __post_init__(self):
+        # Normalize to absolute path
+        self.path = os.path.abspath(self.path)
+        # Validate source_type
+        if self.source_type not in _VALID_SOURCE_TYPES:
+            logger.warning(
+                "Unknown source_type %r, defaulting to 'input'", self.source_type
+            )
+            self.source_type = "input"
         if not self.label:
             self.label = f"{self.source_type}: {os.path.basename(self.path)}"
 

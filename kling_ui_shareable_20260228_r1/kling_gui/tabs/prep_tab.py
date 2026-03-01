@@ -210,6 +210,7 @@ class PrepTab(tk.Frame):
             return
 
         self._set_busy(True)
+        self.write_btn.config(state=tk.DISABLED)
         model = self._get_selected_model_endpoint()
 
         def _run():
@@ -218,7 +219,9 @@ class PrepTab(tk.Frame):
 
                 analyzer = VisionAnalyzer(api_key, model)
                 analyzer.set_progress_callback(
-                    lambda msg, lvl: self.log(msg, lvl)
+                    lambda msg, lvl: self.winfo_toplevel().after(
+                        0, lambda m=msg, l=lvl: self.log(m, l)
+                    )
                 )
                 result = analyzer.analyze_image(image_path)
                 self.winfo_toplevel().after(
@@ -241,10 +244,14 @@ class PrepTab(tk.Frame):
             self.write_btn.config(state=tk.NORMAL)
             self.log("Analysis complete — review result below", "success")
         else:
+            self._last_result = ""
+            self.result_text.delete("1.0", tk.END)
+            self.write_btn.config(state=tk.DISABLED)
             self.log("Analysis returned no result", "warning")
 
     def _on_analyze_error(self, error: str):
         self._set_busy(False)
+        self.write_btn.config(state=tk.DISABLED)
         self.log(f"Analysis error: {error}", "error")
 
     def _on_write_prompt(self):

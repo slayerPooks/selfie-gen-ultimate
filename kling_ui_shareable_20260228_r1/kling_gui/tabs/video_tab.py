@@ -101,5 +101,5 @@ class VideoTab(tk.Frame):
                 )
                 return
         self.log(
-            f"Added carousel image to video queue: {basename}", "info"
+            "Could not add image to queue — no handler available", "warning"
         )

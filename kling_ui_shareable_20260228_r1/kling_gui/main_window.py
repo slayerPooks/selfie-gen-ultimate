@@ -1692,8 +1692,10 @@ class KlingGUIWindow:
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:
                     self.config.update(tab_widget.get_config_updates())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "Failed to get config from %s: %s", tab, exc
+                    )
         self._save_config()
 
         # Update generator with new model if it exists and NOT currently processing
@@ -1920,6 +1922,15 @@ class KlingGUIWindow:
                 return
 
             self.queue_manager.stop_processing()
+
+        # Collect tab configs before saving
+        for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+            tab_widget = getattr(self, tab, None)
+            if tab_widget and hasattr(tab_widget, "get_config_updates"):
+                try:
+                    self.config.update(tab_widget.get_config_updates())
+                except Exception:
+                    pass
 
         # Save layout (geometry + sash positions) before closing
         self._save_layout()
