@@ -73,7 +73,8 @@ class SelfieGenerator:
         # Build payload
         payload = {
             "prompt": prompt,
-            "reference_images": [{"url": image_url}],
+            # FLUX PuLID expects a single reference image URL field.
+            "reference_image_url": image_url,
             "id_weight": id_weight,
             "width": width,
             "height": height,

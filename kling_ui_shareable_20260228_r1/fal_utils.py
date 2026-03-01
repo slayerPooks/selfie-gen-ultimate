@@ -18,6 +18,22 @@ ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 _FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
 
 
+def _extract_http_error_detail(resp: requests.Response, limit: int = 500) -> str:
+    """Return a readable error detail from an HTTP response."""
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            if "detail" in data:
+                return str(data["detail"])[:limit]
+            if "error" in data:
+                return str(data["error"])[:limit]
+            if "message" in data:
+                return str(data["message"])[:limit]
+        return str(data)[:limit]
+    except Exception:
+        return (resp.text or "").strip()[:limit]
+
+
 def upload_to_freeimage(
     image_path: str,
     max_size: int = 1200,
@@ -150,9 +166,13 @@ def fal_queue_submit(
                 return None
 
             elif response.status_code != 200:
-                logger.error("Queue submit failed: %s — %s", response.status_code, response.text)
+                detail = _extract_http_error_detail(response)
+                logger.error("Queue submit failed: %s — %s", response.status_code, detail)
                 if progress_cb:
-                    progress_cb(f"Submit failed: HTTP {response.status_code}", "error")
+                    progress_cb(
+                        f"Submit failed: HTTP {response.status_code} — {detail}",
+                        "error",
+                    )
                 if attempt < max_retries - 1:
                     time.sleep(5)
                     continue
@@ -270,6 +290,16 @@ def fal_queue_poll(
 
             elif resp.status_code not in (200, 202):
                 consecutive_errors += 1
+                detail = _extract_http_error_detail(resp)
+                logger.warning(
+                    "Polling returned HTTP %s (attempt %d/%d): %s",
+                    resp.status_code, attempt, max_attempts, detail,
+                )
+                if progress_cb:
+                    progress_cb(
+                        f"Polling HTTP {resp.status_code}: {detail}",
+                        "warning",
+                    )
                 if consecutive_errors >= max_consecutive_errors:
                     logger.error("Too many errors (%d) — giving up", consecutive_errors)
                     if progress_cb:
@@ -386,13 +416,15 @@ def _extract_result(
                 # Unwrap nested wrappers in the fetched result too
                 return _unwrap_payload(result_data)
             else:
+                detail = _extract_http_error_detail(r)
                 logger.error(
                     "response_url returned HTTP %s: %s",
-                    r.status_code, r.text[:200],
+                    r.status_code, detail,
                 )
                 if progress_cb:
                     progress_cb(
-                        f"response_url failed: HTTP {r.status_code}", "error"
+                        f"response_url failed: HTTP {r.status_code} — {detail}",
+                        "error",
                     )
                 return None
         except Exception as e:
