@@ -23,7 +23,7 @@ def _model_short_from_endpoint(endpoint: str) -> str:
         return "model"
 
     if "kling" in endpoint:
-        if "v3" in endpoint:
+        if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
             return "k30pro" if "pro" in endpoint else "k30std"
         if "v2.6" in endpoint:
             return "k26pro"
@@ -108,10 +108,11 @@ def get_output_video_path(
     image_name = Path(image_path).stem
     try:
         filename = generator.get_output_filename(image_name, output_folder)
-    except (TypeError, AttributeError):
+    except (TypeError, AttributeError) as _e:
         # Backward compatibility for older generator signatures.
         # AttributeError can occur when a generator expects a config dict but
         # receives output_folder (a string) and calls .get() on it.
+        logger.warning("Legacy generator API fallback triggered (%s); trying older signatures", _e)
         try:
             filename = generator.get_output_filename(image_name, config or {}, timestamp)
         except (TypeError, AttributeError):
