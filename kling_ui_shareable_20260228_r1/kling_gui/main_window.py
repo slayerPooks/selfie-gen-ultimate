@@ -574,7 +574,13 @@ class KlingGUIWindow:
         self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
 
         # Wire Step 1 → Step 2 prompt connection (set after both tabs exist)
-        self.prep_tab._selfie_prompt_writer = self.selfie_tab.set_prompt
+        self.prep_tab.set_selfie_prompt_writer(self.selfie_tab.set_prompt)
+        self.prep_tab.set_selfie_config_getter(
+            lambda: {
+                "composer_gender": self.selfie_tab.gender_var.get(),
+                "composer_camera_style": self.selfie_tab.style_var.get(),
+            }
+        )
 
         # Tab 3: Expand (Outpaint)
         self.outpaint_tab = OutpaintTab(

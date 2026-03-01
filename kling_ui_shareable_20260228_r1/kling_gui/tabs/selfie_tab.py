@@ -261,6 +261,10 @@ class SelfieTab(tk.Frame):
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", text)
 
+    def _get_selected_dimensions(self) -> tuple:
+        """Return (width, height) for the currently selected aspect ratio."""
+        return self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
+
     def _compose_prompt(self):
         """Compose prompt from selected options."""
         try:
@@ -307,8 +311,7 @@ class SelfieTab(tk.Frame):
         try:
             seed = -1 if self.random_seed_var.get() else self.seed_var.get()
             id_weight = self.id_weight_var.get()
-            dims = self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
-            width, height = dims
+            width, height = self._get_selected_dimensions()
         except (tk.TclError, ValueError):
             self.log("Invalid numeric value in settings", "error")
             return
@@ -371,13 +374,13 @@ class SelfieTab(tk.Frame):
         )
 
     def get_config_updates(self) -> dict:
-        dims = self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
+        width, height = self._get_selected_dimensions()
         return {
             "composer_gender": self.gender_var.get(),
             "composer_camera_style": self.style_var.get(),
             "selfie_id_weight": self.id_weight_var.get(),
-            "selfie_width": dims[0],
-            "selfie_height": dims[1],
+            "selfie_width": width,
+            "selfie_height": height,
             "selfie_seed": self.seed_var.get(),
             "selfie_random_seed": self.random_seed_var.get(),
         }

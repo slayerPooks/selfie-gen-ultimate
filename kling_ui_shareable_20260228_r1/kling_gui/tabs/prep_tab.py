@@ -50,6 +50,7 @@ class PrepTab(tk.Frame):
         self.prompt_writer = prompt_writer
         self._config_saver = config_saver
         self._selfie_prompt_writer = selfie_prompt_writer
+        self._selfie_config_getter = None  # set via set_selfie_config_getter
         self._busy = False
         self._last_result = ""
 
@@ -60,6 +61,14 @@ class PrepTab(tk.Frame):
             self._all_models.append((endpoint, endpoint))
 
         self._build_ui()
+
+    def set_selfie_prompt_writer(self, writer: Callable[[str], None]):
+        """Set the callback that writes composed prompts into Step 2."""
+        self._selfie_prompt_writer = writer
+
+    def set_selfie_config_getter(self, getter: Callable[[], dict]):
+        """Set a getter for live Step 2 composer options (gender, style)."""
+        self._selfie_config_getter = getter
 
     def _build_ui(self):
         # API Key section
@@ -406,19 +415,28 @@ class PrepTab(tk.Frame):
         if not description:
             return
 
-        # Compose using selfie_prompt_composer with defaults, appending
-        # the vision analysis as additional details
+        # Use live Step 2 widget values if available, else fall back to config
+        if self._selfie_config_getter:
+            live = self._selfie_config_getter()
+            gender = live.get("composer_gender", "female")
+            camera_style = live.get("composer_camera_style", "phone_selfie")
+        else:
+            gender = self.config.get("composer_gender", "female")
+            camera_style = self.config.get("composer_camera_style", "phone_selfie")
+
         try:
             from selfie_prompt_composer import SelfiePromptComposer
 
             composer = SelfiePromptComposer()
             composed = composer.compose(
-                gender=self.config.get("composer_gender", "female"),
-                camera_style=self.config.get("composer_camera_style", "phone_selfie"),
+                gender=gender,
+                camera_style=camera_style,
                 additional_details=description,
             )
         except ImportError:
-            # Fallback: just use the raw analysis text
+            composed = description
+        except Exception as e:
+            self.log(f"Compose error: {e}", "error")
             composed = description
 
         if self._selfie_prompt_writer:
