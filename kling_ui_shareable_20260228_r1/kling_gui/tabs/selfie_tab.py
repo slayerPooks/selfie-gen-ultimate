@@ -7,7 +7,9 @@ import os
 import shutil
 import platform
 import subprocess
-from typing import Callable, Dict, List
+import json
+import random
+from typing import Callable, Dict, List, Optional
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
@@ -21,6 +23,18 @@ except Exception:
 
 class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
+
+    HANDOFF_SCENE_PROMPT_TEMPLATE = (
+        "{age_range}, {face_shape} face, {hair} hair, {skin} skin, {eyes} eyes, "
+        "{clothing}, {expression}, {scene}"
+    )
+    DEFAULT_SCENE_TEMPLATES = [
+        "sunny park, green trees bokeh background",
+        "cozy kitchen, warm overhead light",
+        "living room, TV glow",
+        "cafe, soft window light",
+        "outdoor street, urban daylight",
+    ]
 
     def __init__(
         self,
@@ -40,6 +54,8 @@ class SelfieTab(tk.Frame):
         self._last_result_path = ""
         self._model_options = self._load_model_options()
         self._model_vars: Dict[str, tk.BooleanVar] = {}
+        self._handoff_identity_data: Optional[Dict[str, str]] = None
+        self._scene_roll_counter = 0
 
         self._build_ui()
 
@@ -119,9 +135,12 @@ class SelfieTab(tk.Frame):
         )
         compose_btn.grid(row=0, column=4, padx=5)
 
-        # Prompt text
+        # Prompt text + randomize scene
+        prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        prompt_editor_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
         self.prompt_text = tk.Text(
-            prompt_frame,
+            prompt_editor_frame,
             height=3,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
@@ -131,11 +150,58 @@ class SelfieTab(tk.Frame):
             padx=5,
             pady=5,
         )
-        self.prompt_text.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.prompt_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.prompt_text.insert(
             "1.0",
             "Photo of a person, casual phone selfie, photorealistic",
         )
+        self.randomize_scene_btn = tk.Button(
+            prompt_editor_frame,
+            text="Randomize Scene",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_randomize_scene,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+        )
+        self.randomize_scene_btn.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
+
+        scene_templates_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Scene Templates (One Per Line)",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        scene_templates_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.scene_templates_text = tk.Text(
+            scene_templates_frame,
+            height=4,
+            wrap=tk.WORD,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=("Consolas", 9),
+            insertbackground=COLORS["text_light"],
+            padx=5,
+            pady=5,
+        )
+        self.scene_templates_text.pack(fill=tk.X, padx=5, pady=5)
+        saved_scene_templates = self.config.get(
+            "selfie_scene_templates", self.DEFAULT_SCENE_TEMPLATES
+        )
+        if not isinstance(saved_scene_templates, list):
+            saved_scene_templates = list(self.DEFAULT_SCENE_TEMPLATES)
+        scene_templates = [
+            str(item).strip()
+            for item in saved_scene_templates
+            if str(item).strip()
+        ]
+        if not scene_templates:
+            scene_templates = list(self.DEFAULT_SCENE_TEMPLATES)
+        self.scene_templates_text.insert("1.0", "\n".join(scene_templates))
 
         # Settings
         settings_frame = tk.LabelFrame(
@@ -419,12 +485,76 @@ class SelfieTab(tk.Frame):
 
     def set_prompt(self, text: str):
         """Set the prompt text (called by Step 1 'Send to Step 2')."""
+        raw_text = (text or "").strip()
+        if not raw_text:
+            self._handoff_identity_data = None
+            self.prompt_text.delete("1.0", tk.END)
+            return
+
+        payload = None
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            payload = None
+
+        normalized = None
+        if payload is not None:
+            try:
+                from selfie_generator import SelfieGenerator
+                normalized = SelfieGenerator.normalize_handoff_identity(payload)
+            except Exception:
+                normalized = None
+
+        if normalized:
+            self._handoff_identity_data = normalized
+            self._scene_roll_counter = 0
+            self._apply_handoff_scene_prompt(reroll=False)
+            return
+
+        self._handoff_identity_data = None
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", text)
 
     def _get_selected_dimensions(self) -> tuple:
         """Return (width, height) for the currently selected aspect ratio."""
         return self._aspect_ratios.get(self.aspect_var.get(), self._aspect_ratios["Portrait (3:4)"])
+
+    def _get_scene_templates(self) -> List[str]:
+        if not hasattr(self, "scene_templates_text"):
+            return list(self.DEFAULT_SCENE_TEMPLATES)
+        lines = self.scene_templates_text.get("1.0", tk.END).splitlines()
+        templates = [line.strip() for line in lines if line.strip()]
+        return templates or list(self.DEFAULT_SCENE_TEMPLATES)
+
+    def _apply_handoff_scene_prompt(self, reroll: bool):
+        if not self._handoff_identity_data:
+            return
+        if reroll:
+            self._scene_roll_counter += 1
+
+        scene_templates = self._get_scene_templates()
+        if not scene_templates:
+            self.log("Scene template list is empty", "warning")
+            return
+
+        try:
+            seed_value = int(self.seed_var.get())
+        except (tk.TclError, TypeError, ValueError):
+            seed_value = 0
+        rng = random.Random(seed_value + self._scene_roll_counter)
+        scene = rng.choice(scene_templates)
+        prompt = self.HANDOFF_SCENE_PROMPT_TEMPLATE.format(
+            scene=scene,
+            **self._handoff_identity_data,
+        )
+        self.prompt_text.delete("1.0", tk.END)
+        self.prompt_text.insert("1.0", prompt)
+
+    def _on_randomize_scene(self):
+        if not self._handoff_identity_data:
+            self.log("No Step 1 JSON prompt to randomize yet", "warning")
+            return
+        self._apply_handoff_scene_prompt(reroll=True)
 
     def _compose_prompt(self):
         """Compose prompt from selected options."""
@@ -436,6 +566,8 @@ class SelfieTab(tk.Frame):
                 gender=self.gender_var.get(),
                 camera_style=self.style_var.get(),
             )
+            self._handoff_identity_data = None
+            self._scene_roll_counter = 0
             self.prompt_text.delete("1.0", tk.END)
             self.prompt_text.insert("1.0", prompt)
         except ImportError:
@@ -733,6 +865,7 @@ class SelfieTab(tk.Frame):
             "selfie_random_seed": self.random_seed_var.get(),
             "selfie_output_mode": self.output_mode_var.get(),
             "selfie_output_folder": self.output_path_var.get().strip(),
+            "selfie_scene_templates": self._get_scene_templates(),
             "selfie_selected_models": {
                 endpoint: bool(var.get())
                 for endpoint, var in self._model_vars.items()

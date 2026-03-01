@@ -4,7 +4,7 @@ import os
 import random
 import logging
 import re
-from typing import Optional, Callable, Dict, List
+from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,15 @@ class SelfieGenerator:
     """Generate selfie images using fal.ai image-to-image identity models."""
 
     DEFAULT_ENDPOINT = "fal-ai/flux-pulid"
+    HANDOFF_JSON_KEYS = (
+        "hair",
+        "skin",
+        "eyes",
+        "face_shape",
+        "age_range",
+        "clothing",
+        "expression",
+    )
     AVAILABLE_MODELS = [
         {
             "endpoint": "fal-ai/flux-pulid",
@@ -96,6 +105,19 @@ class SelfieGenerator:
             if model["endpoint"] == endpoint:
                 return model["label"]
         return endpoint
+
+    @classmethod
+    def normalize_handoff_identity(cls, payload: Any) -> Optional[Dict[str, str]]:
+        """Normalize Step 1 JSON payload into the expected identity field map."""
+        if not isinstance(payload, dict):
+            return None
+        normalized: Dict[str, str] = {}
+        for key in cls.HANDOFF_JSON_KEYS:
+            value = payload.get(key)
+            if value is None:
+                return None
+            normalized[key] = str(value).strip()
+        return normalized
 
     @classmethod
     def _model_short_name(cls, endpoint: str) -> str:
