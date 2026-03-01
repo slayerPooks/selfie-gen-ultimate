@@ -345,6 +345,11 @@ class KlingGUIWindow:
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
+            "selfie_selected_models": {
+                "fal-ai/flux-pulid": True,
+                "fal-ai/pulid": False,
+                "fal-ai/instant-character": False,
+            },
             # Folder processing settings
             "folder_filter_pattern": "",
             "folder_match_mode": "partial",  # "partial" or "exact"

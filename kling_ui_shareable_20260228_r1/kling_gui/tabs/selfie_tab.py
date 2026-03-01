@@ -7,7 +7,7 @@ import os
 import shutil
 import platform
 import subprocess
-from typing import Callable
+from typing import Callable, Dict, List
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
@@ -38,6 +38,8 @@ class SelfieTab(tk.Frame):
         self.log = log_callback
         self._busy = False
         self._last_result_path = ""
+        self._model_options = self._load_model_options()
+        self._model_vars: Dict[str, tk.BooleanVar] = {}
 
         self._build_ui()
 
@@ -245,6 +247,36 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).grid(row=2, column=2, columnspan=2, sticky="w")
 
+        # Model selection
+        models_frame = tk.LabelFrame(
+            self,
+            text="Step 2 Models (Fal.ai)",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        models_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        saved_models = self.config.get("selfie_selected_models", {})
+        for idx, model in enumerate(self._model_options):
+            endpoint = model.get("endpoint", "")
+            label = model.get("label", endpoint)
+            default_checked = endpoint == "fal-ai/flux-pulid"
+            checked = bool(saved_models.get(endpoint, default_checked))
+            var = tk.BooleanVar(value=checked)
+            self._model_vars[endpoint] = var
+            tk.Checkbutton(
+                models_frame,
+                text=f"{label} ({endpoint})",
+                variable=var,
+                bg=COLORS["bg_panel"],
+                fg=COLORS["text_light"],
+                selectcolor=COLORS["bg_input"],
+                activebackground=COLORS["bg_panel"],
+                font=(FONT_FAMILY, 9),
+                anchor="w",
+            ).pack(fill=tk.X, padx=8, pady=1)
+
         # Save location settings
         save_frame = tk.LabelFrame(
             self,
@@ -431,6 +463,11 @@ class SelfieTab(tk.Frame):
             self.log("Prompt is empty", "warning")
             return
 
+        selected_models = self._get_selected_models()
+        if not selected_models:
+            self.log("Select at least one Step 2 model", "warning")
+            return
+
         try:
             output_folder = self._resolve_output_folder(image_path)
         except Exception as e:
@@ -460,17 +497,36 @@ class SelfieTab(tk.Frame):
                         0, lambda m=msg, l=lvl: self.log(m, l)
                     )
                 )
-                result = gen.generate(
-                    image_path=image_path,
-                    prompt=prompt,
-                    output_folder=output_folder,
-                    id_weight=id_weight,
-                    width=width,
-                    height=height,
-                    seed=seed,
-                )
+                results = []
+                failed_models = []
+
+                for model in selected_models:
+                    endpoint = model.get("endpoint", "")
+                    label = model.get("label", endpoint)
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda l=label, e=endpoint: self.log(
+                            f"Generating with {l} ({e})...", "task"
+                        ),
+                    )
+                    result = gen.generate(
+                        image_path=image_path,
+                        prompt=prompt,
+                        output_folder=output_folder,
+                        id_weight=id_weight,
+                        width=width,
+                        height=height,
+                        seed=seed,
+                        model_endpoint=endpoint,
+                        model_label=label,
+                    )
+                    if result:
+                        results.append((model, result))
+                    else:
+                        failed_models.append(label)
+
                 self.winfo_toplevel().after(
-                    0, lambda: self._on_complete(result)
+                    0, lambda: self._on_complete_batch(results, failed_models)
                 )
             except Exception as e:
                 err = str(e)
@@ -491,6 +547,28 @@ class SelfieTab(tk.Frame):
             self._refresh_result_actions()
         else:
             self.log("Selfie generation failed", "error")
+
+    def _on_complete_batch(self, results, failed_models):
+        self._set_busy(False)
+
+        if results:
+            for model, result in results:
+                label = model.get("label", model.get("endpoint", "model"))
+                self._last_result_path = result
+                self.image_session.add_image(result, "selfie")
+                self.log(
+                    f"Selfie generated [{label}]: {os.path.basename(result)}",
+                    "success",
+                )
+            self._refresh_result_actions()
+        else:
+            self.log("Selfie generation failed for all selected models", "error")
+
+        if failed_models:
+            self.log(
+                f"Failed models: {', '.join(failed_models)}",
+                "warning",
+            )
 
     def _on_error(self, error):
         self._set_busy(False)
@@ -617,6 +695,28 @@ class SelfieTab(tk.Frame):
         except Exception as e:
             self.log(f"Save failed: {e}", "error")
 
+    def _load_model_options(self) -> List[dict]:
+        try:
+            from selfie_generator import SelfieGenerator
+            return SelfieGenerator.get_available_models()
+        except Exception:
+            return [
+                {
+                    "endpoint": "fal-ai/flux-pulid",
+                    "label": "PuLID Flux",
+                    "api_url": "https://fal.ai/models/fal-ai/flux-pulid/api",
+                }
+            ]
+
+    def _get_selected_models(self) -> List[dict]:
+        selected = []
+        for model in self._model_options:
+            endpoint = model.get("endpoint", "")
+            var = self._model_vars.get(endpoint)
+            if var and var.get():
+                selected.append(model)
+        return selected
+
     def get_config_updates(self) -> dict:
         width, height = self._get_selected_dimensions()
         return {
@@ -629,4 +729,8 @@ class SelfieTab(tk.Frame):
             "selfie_random_seed": self.random_seed_var.get(),
             "selfie_output_mode": self.output_mode_var.get(),
             "selfie_output_folder": self.output_path_var.get().strip(),
+            "selfie_selected_models": {
+                endpoint: bool(var.get())
+                for endpoint, var in self._model_vars.items()
+            },
         }
