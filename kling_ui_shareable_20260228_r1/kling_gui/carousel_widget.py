@@ -28,40 +28,22 @@ class ImageCarousel(tk.Frame):
         self.log = log_callback
         self._photo_ref = None  # prevent GC of PhotoImage
 
-        # Header with title + Add button
-        header = tk.Frame(self, bg=COLORS["bg_panel"])
-        header.pack(fill=tk.X, padx=8, pady=(5, 2))
+        # --- Pack fixed-height elements FIRST (bottom-up) so the canvas
+        #     only claims leftover space and never pushes controls off-screen.
 
-        tk.Label(
-            header,
-            text="IMAGE CAROUSEL",
-            font=(FONT_FAMILY, 10, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).pack(side=tk.LEFT)
-
-        add_btn = tk.Button(
-            header,
-            text="+ Add",
+        # Info label (shows source type and filename)
+        self.info_label = tk.Label(
+            self,
+            text="",
             font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_add_image,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
         )
-        add_btn.pack(side=tk.RIGHT)
-
-        # Image display area
-        self.canvas = tk.Canvas(
-            self, bg=COLORS["bg_main"], highlightthickness=0
-        )
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        self.info_label.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 5))
 
         # Navigation bar
         nav = tk.Frame(self, bg=COLORS["bg_panel"])
-        nav.pack(fill=tk.X, padx=8, pady=(2, 5))
+        nav.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(2, 0))
 
         self.prev_btn = tk.Button(
             nav,
@@ -98,15 +80,36 @@ class ImageCarousel(tk.Frame):
         )
         self.next_btn.pack(side=tk.RIGHT)
 
-        # Info label (shows source type and filename)
-        self.info_label = tk.Label(
-            self,
-            text="",
-            font=(FONT_FAMILY, 9),
+        # Header with title + Add button
+        header = tk.Frame(self, bg=COLORS["bg_panel"])
+        header.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(5, 2))
+
+        tk.Label(
+            header,
+            text="IMAGE CAROUSEL",
+            font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT)
+
+        add_btn = tk.Button(
+            header,
+            text="+ Add",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_add_image,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
         )
-        self.info_label.pack(fill=tk.X, padx=8, pady=(0, 5))
+        add_btn.pack(side=tk.RIGHT)
+
+        # Image display area — packed LAST so it only takes remaining space
+        self.canvas = tk.Canvas(
+            self, bg=COLORS["bg_main"], highlightthickness=0
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         # Listen for session changes
         self.image_session.set_on_change(self._on_session_change)

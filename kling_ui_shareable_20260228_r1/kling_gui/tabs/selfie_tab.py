@@ -138,10 +138,10 @@ class SelfieTab(tk.Frame):
         grid = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
         grid.pack(fill=tk.X, padx=5, pady=5)
 
-        # ID Weight
+        # Face Resemblance (ID Weight)
         tk.Label(
             grid,
-            text="ID Weight:",
+            text="Face Resemblance:",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
@@ -162,48 +162,39 @@ class SelfieTab(tk.Frame):
             highlightthickness=0,
             length=150,
         )
-        id_scale.grid(row=0, column=1, padx=5, pady=2)
+        id_scale.grid(row=0, column=1, columnspan=3, padx=5, pady=2, sticky="w")
 
-        # Dimensions
+        # Aspect Ratio (replaces manual Width/Height)
+        self._aspect_ratios = {
+            "Portrait (3:4)": (896, 1152),
+            "Landscape (16:9)": (1280, 720),
+            "Square (1:1)": (1024, 1024),
+        }
         tk.Label(
             grid,
-            text="Width:",
+            text="Aspect Ratio:",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).grid(row=1, column=0, sticky="w")
-        self.width_var = tk.IntVar(
-            value=self.config.get("selfie_width", 896)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.width_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=1, sticky="w", padx=5, pady=2)
 
-        tk.Label(
+        # Determine saved selection from config dimensions
+        saved_w = self.config.get("selfie_width", 896)
+        saved_h = self.config.get("selfie_height", 1152)
+        saved_ratio = "Portrait (3:4)"
+        for name, (w, h) in self._aspect_ratios.items():
+            if w == saved_w and h == saved_h:
+                saved_ratio = name
+                break
+        self.aspect_var = tk.StringVar(value=saved_ratio)
+        aspect_combo = ttk.Combobox(
             grid,
-            text="Height:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=1, column=2, sticky="w")
-        self.height_var = tk.IntVar(
-            value=self.config.get("selfie_height", 1152)
+            textvariable=self.aspect_var,
+            values=list(self._aspect_ratios.keys()),
+            state="readonly",
+            width=18,
         )
-        tk.Entry(
-            grid,
-            textvariable=self.height_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=3, sticky="w", padx=5, pady=2)
+        aspect_combo.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="w")
 
         # Seed
         tk.Label(
@@ -265,6 +256,11 @@ class SelfieTab(tk.Frame):
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
 
+    def set_prompt(self, text: str):
+        """Set the prompt text (called by Step 1 'Send to Step 2')."""
+        self.prompt_text.delete("1.0", tk.END)
+        self.prompt_text.insert("1.0", text)
+
     def _compose_prompt(self):
         """Compose prompt from selected options."""
         try:
@@ -311,8 +307,8 @@ class SelfieTab(tk.Frame):
         try:
             seed = -1 if self.random_seed_var.get() else self.seed_var.get()
             id_weight = self.id_weight_var.get()
-            width = self.width_var.get()
-            height = self.height_var.get()
+            dims = self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
+            width, height = dims
         except (tk.TclError, ValueError):
             self.log("Invalid numeric value in settings", "error")
             return
@@ -375,12 +371,13 @@ class SelfieTab(tk.Frame):
         )
 
     def get_config_updates(self) -> dict:
+        dims = self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
         return {
             "composer_gender": self.gender_var.get(),
             "composer_camera_style": self.style_var.get(),
             "selfie_id_weight": self.id_weight_var.get(),
-            "selfie_width": self.width_var.get(),
-            "selfie_height": self.height_var.get(),
+            "selfie_width": dims[0],
+            "selfie_height": dims[1],
             "selfie_seed": self.seed_var.get(),
             "selfie_random_seed": self.random_seed_var.get(),
         }

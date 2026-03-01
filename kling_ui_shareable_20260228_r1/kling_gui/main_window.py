@@ -431,7 +431,22 @@ class KlingGUIWindow:
             fieldbackground=COLORS["bg_input"],
             background=COLORS["bg_panel"],
             foreground=COLORS["text_light"],
+            arrowcolor=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"],
+            selectforeground="white",
         )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", COLORS["bg_input"])],
+            foreground=[("readonly", COLORS["text_light"])],
+            selectbackground=[("readonly", COLORS["accent_blue"])],
+            selectforeground=[("readonly", "white")],
+        )
+        # Style the dropdown listbox (popdown) for all Combobox widgets
+        self.root.option_add("*TCombobox*Listbox.background", COLORS["bg_input"])
+        self.root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", COLORS["accent_blue"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "white")
 
         # Dark theme for Treeview (PROCESSED VIDEOS section)
         style.configure(
@@ -557,6 +572,9 @@ class KlingGUIWindow:
             log_callback=self._log,
         )
         self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
+
+        # Wire Step 1 → Step 2 prompt connection (set after both tabs exist)
+        self.prep_tab._selfie_prompt_writer = self.selfie_tab.set_prompt
 
         # Tab 3: Expand (Outpaint)
         self.outpaint_tab = OutpaintTab(

@@ -28,6 +28,7 @@ class PrepTab(tk.Frame):
         log_callback: Callable[[str, str], None],
         prompt_writer: Callable[[str], None],
         config_saver: Optional[Callable[[], None]] = None,
+        selfie_prompt_writer: Optional[Callable[[str], None]] = None,
         **kwargs,
     ):
         """
@@ -39,6 +40,7 @@ class PrepTab(tk.Frame):
             log_callback: log(message, level)
             prompt_writer: Function to write text into the active prompt slot
             config_saver: Function to persist config to disk immediately
+            selfie_prompt_writer: Write composed prompt into Step 2's text box
         """
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
         self.image_session = image_session
@@ -47,6 +49,7 @@ class PrepTab(tk.Frame):
         self.log = log_callback
         self.prompt_writer = prompt_writer
         self._config_saver = config_saver
+        self._selfie_prompt_writer = selfie_prompt_writer
         self._busy = False
         self._last_result = ""
 
@@ -257,12 +260,12 @@ class PrepTab(tk.Frame):
 
         self.write_btn = tk.Button(
             write_frame,
-            text="Write to Active Prompt Slot",
+            text="Send to Step 2",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             disabledforeground="#8FBC8F",
-            command=self._on_write_prompt,
+            command=self._on_send_to_step2,
             cursor="hand2",
             relief=tk.FLAT,
             padx=10,
@@ -397,10 +400,33 @@ class PrepTab(tk.Frame):
         self.write_btn.config(state=tk.DISABLED)
         self.log(f"Analysis error: {error}", "error")
 
-    def _on_write_prompt(self):
-        text = self.result_text.get("1.0", tk.END).strip()
-        if text:
-            self.prompt_writer(text)
+    def _on_send_to_step2(self):
+        """Compose a selfie prompt from the analysis and send to Step 2."""
+        description = self.result_text.get("1.0", tk.END).strip()
+        if not description:
+            return
+
+        # Compose using selfie_prompt_composer with defaults, appending
+        # the vision analysis as additional details
+        try:
+            from selfie_prompt_composer import SelfiePromptComposer
+
+            composer = SelfiePromptComposer()
+            composed = composer.compose(
+                gender=self.config.get("composer_gender", "female"),
+                camera_style=self.config.get("composer_camera_style", "phone_selfie"),
+                additional_details=description,
+            )
+        except ImportError:
+            # Fallback: just use the raw analysis text
+            composed = description
+
+        if self._selfie_prompt_writer:
+            self._selfie_prompt_writer(composed)
+            self.log("Prompt sent to Step 2 (Generate Selfie)", "success")
+        else:
+            # Fallback to legacy prompt slot writer
+            self.prompt_writer(composed)
             self.log("Prompt written to active slot", "success")
 
     def _set_busy(self, busy: bool):
