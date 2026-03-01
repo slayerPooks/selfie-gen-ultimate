@@ -349,6 +349,12 @@ class KlingGUIWindow:
                 "fal-ai/flux-pulid": True,
                 "fal-ai/pulid": False,
                 "fal-ai/instant-character": False,
+                "fal-ai/z-image/turbo/image-to-image": False,
+                "fal-ai/nano-banana-pro/edit": False,
+                "fal-ai/qwen-image-edit": False,
+                "fal-ai/bytedance/seedream/v4.5/edit": False,
+                "fal-ai/bytedance/seedream/v5/edit": False,
+                "fal-ai/bytedance/seedream/v5/lite/edit": False,
             },
             # Folder processing settings
             "folder_filter_pattern": "",

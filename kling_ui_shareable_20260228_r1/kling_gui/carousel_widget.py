@@ -156,8 +156,15 @@ class ImageCarousel(tk.Frame):
                 "outpaint": COLORS["warning"],
             }
             color = type_colors.get(entry.source_type, COLORS["text_dim"])
+            default_label = f"{entry.source_type}: {entry.filename}"
+            custom_label = entry.label.strip() if entry.label else ""
+            detail = (
+                custom_label
+                if custom_label and custom_label.lower() != default_label.lower()
+                else entry.filename
+            )
             self.info_label.config(
-                text=f"[{entry.source_type.upper()}] {entry.filename}",
+                text=f"[{entry.source_type.upper()}] {detail}",
                 fg=color,
             )
 

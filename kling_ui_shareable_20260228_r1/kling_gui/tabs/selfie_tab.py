@@ -555,7 +555,11 @@ class SelfieTab(tk.Frame):
             for model, result in results:
                 label = model.get("label", model.get("endpoint", "model"))
                 self._last_result_path = result
-                self.image_session.add_image(result, "selfie")
+                self.image_session.add_image(
+                    result,
+                    "selfie",
+                    label=f"{label} | {os.path.basename(result)}",
+                )
                 self.log(
                     f"Selfie generated [{label}]: {os.path.basename(result)}",
                     "success",

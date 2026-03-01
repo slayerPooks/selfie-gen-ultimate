@@ -3,6 +3,7 @@
 import os
 import random
 import logging
+import re
 from typing import Optional, Callable, Dict, List
 from pathlib import Path
 
@@ -16,18 +17,59 @@ class SelfieGenerator:
     AVAILABLE_MODELS = [
         {
             "endpoint": "fal-ai/flux-pulid",
-            "label": "PuLID Flux",
+            "label": "FLUX.1 + PuLID",
+            "slug": "flux-pulid",
             "api_url": "https://fal.ai/models/fal-ai/flux-pulid/api",
         },
         {
             "endpoint": "fal-ai/pulid",
             "label": "PuLID",
+            "slug": "pulid",
             "api_url": "https://fal.ai/models/fal-ai/pulid/api",
         },
         {
             "endpoint": "fal-ai/instant-character",
             "label": "Instant Character",
+            "slug": "instant-character",
             "api_url": "https://fal.ai/models/fal-ai/instant-character/api",
+        },
+        {
+            "endpoint": "fal-ai/z-image/turbo/image-to-image",
+            "label": "Z-Image Turbo",
+            "slug": "z-image-turbo",
+            "api_url": "https://fal.ai/models/fal-ai/z-image/turbo/image-to-image/api",
+        },
+        {
+            "endpoint": "fal-ai/nano-banana-pro/edit",
+            "label": "Nano Banana Pro",
+            "slug": "nano-banana-pro-edit",
+            "api_url": "https://fal.ai/models/fal-ai/nano-banana-pro/edit/api",
+        },
+        {
+            "endpoint": "fal-ai/qwen-image-edit",
+            "label": "Qwen Portrait / Image Edit",
+            "slug": "qwen-image-edit",
+            "api_url": "https://fal.ai/models/fal-ai/qwen-image-edit/api",
+        },
+        {
+            "endpoint": "fal-ai/bytedance/seedream/v4.5/edit",
+            "label": "Seedream 4.5",
+            "slug": "seedream-4-5",
+            "api_url": "https://fal.ai/models/fal-ai/bytedance/seedream/v4.5/edit/api",
+        },
+        {
+            # Keep v5 endpoint selectable if account supports it; if unavailable,
+            # API will return a clear submit error in the GUI log.
+            "endpoint": "fal-ai/bytedance/seedream/v5/edit",
+            "label": "Seedream v5",
+            "slug": "seedream-v5",
+            "api_url": "https://fal.ai/models/fal-ai/bytedance/seedream/v5/edit/api",
+        },
+        {
+            "endpoint": "fal-ai/bytedance/seedream/v5/lite/edit",
+            "label": "Seedream v5 Lite",
+            "slug": "seedream-v5-lite",
+            "api_url": "https://fal.ai/models/fal-ai/bytedance/seedream/v5/lite/edit/api",
         },
     ]
 
@@ -57,12 +99,30 @@ class SelfieGenerator:
 
     @classmethod
     def _model_short_name(cls, endpoint: str) -> str:
-        mapping = {
-            "fal-ai/flux-pulid": "fluxpulid",
-            "fal-ai/pulid": "pulid",
-            "fal-ai/instant-character": "instchar",
+        for model in cls.AVAILABLE_MODELS:
+            if model["endpoint"] == endpoint:
+                slug = model.get("slug", "")
+                if slug:
+                    return re.sub(r"[^a-z0-9\-]+", "-", slug.lower()).strip("-")
+        fallback = endpoint.split("/")[-1].lower()
+        return re.sub(r"[^a-z0-9\-]+", "-", fallback).strip("-")
+
+    @staticmethod
+    def _closest_aspect_ratio(width: int, height: int) -> str:
+        target = width / max(1, height)
+        options = {
+            "21:9": 21 / 9,
+            "16:9": 16 / 9,
+            "3:2": 3 / 2,
+            "4:3": 4 / 3,
+            "5:4": 5 / 4,
+            "1:1": 1.0,
+            "4:5": 4 / 5,
+            "3:4": 3 / 4,
+            "2:3": 2 / 3,
+            "9:16": 9 / 16,
         }
-        return mapping.get(endpoint, endpoint.split("/")[-1].replace("-", ""))
+        return min(options.items(), key=lambda kv: abs(kv[1] - target))[0]
 
     @classmethod
     def _build_payload(
@@ -105,6 +165,49 @@ class SelfieGenerator:
                 "image_size": {"width": width, "height": height},
                 "seed": seed,
                 "num_images": 1,
+            }
+
+        if model_endpoint == "fal-ai/z-image/turbo/image-to-image":
+            return {
+                "prompt": prompt,
+                "image_url": image_url,
+                "image_size": {"width": width, "height": height},
+                "strength": 0.6,
+                "num_images": 1,
+                "output_format": "png",
+                "seed": seed,
+            }
+
+        if model_endpoint == "fal-ai/nano-banana-pro/edit":
+            return {
+                "prompt": prompt,
+                "image_urls": [image_url],
+                "num_images": 1,
+                "aspect_ratio": SelfieGenerator._closest_aspect_ratio(width, height),
+                "resolution": "1K",
+                "output_format": "png",
+                "seed": seed,
+            }
+
+        if model_endpoint == "fal-ai/qwen-image-edit":
+            return {
+                "prompt": prompt,
+                "image_url": image_url,
+                "num_images": 1,
+                "seed": seed,
+            }
+
+        if model_endpoint in {
+            "fal-ai/bytedance/seedream/v4.5/edit",
+            "fal-ai/bytedance/seedream/v5/edit",
+            "fal-ai/bytedance/seedream/v5/lite/edit",
+        }:
+            return {
+                "prompt": prompt,
+                "image_urls": [image_url],
+                "image_size": {"width": width, "height": height},
+                "num_images": 1,
+                "seed": seed,
             }
 
         raise ValueError(f"Unsupported selfie model endpoint: {model_endpoint}")
@@ -203,19 +306,25 @@ class SelfieGenerator:
             self._report("No image URL in result", "error")
             return None
 
-        # Build output path (unique)
+        # Build output path (unique): {original}_{model}_{index}.png
         os.makedirs(output_folder, exist_ok=True)
         stem = Path(image_path).stem
         model_short = self._model_short_name(resolved_endpoint)
-        output_path = os.path.join(
-            output_folder, f"{stem}_selfie_{model_short}_{actual_seed}.png"
-        )
-        counter = 1
+        prefix = f"{stem}_{model_short}_"
+        max_index = 0
+        for name in os.listdir(output_folder):
+            if not name.lower().endswith(".png"):
+                continue
+            if not name.startswith(prefix):
+                continue
+            suffix = os.path.splitext(name)[0][len(prefix):]
+            if suffix.isdigit():
+                max_index = max(max_index, int(suffix))
+        next_index = max_index + 1
+        output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
         while os.path.exists(output_path):
-            output_path = os.path.join(
-                output_folder, f"{stem}_selfie_{model_short}_{actual_seed}_{counter}.png"
-            )
-            counter += 1
+            next_index += 1
+            output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
 
         self._report("Downloading result...", "download")
         if fal_download_file(image_url_result, output_path, self._progress_callback):
