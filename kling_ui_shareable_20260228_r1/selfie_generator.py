@@ -147,6 +147,50 @@ class SelfieGenerator:
         }
         return min(options.items(), key=lambda kv: abs(kv[1] - target))[0]
 
+    @staticmethod
+    def _next_indexed_output_path(output_folder: str, prefix: str) -> str:
+        max_index = 0
+        for name in os.listdir(output_folder):
+            if not name.lower().endswith(".png"):
+                continue
+            if not name.startswith(prefix):
+                continue
+            suffix = os.path.splitext(name)[0][len(prefix):]
+            if suffix.isdigit():
+                max_index = max(max_index, int(suffix))
+        next_index = max_index + 1
+        output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
+        while os.path.exists(output_path):
+            next_index += 1
+            output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
+        return output_path
+
+    @staticmethod
+    def _compute_similarity_percent(
+        source_image_path: str,
+        generated_image_path: str,
+    ) -> Optional[int]:
+        try:
+            from deepface import DeepFace
+        except Exception:
+            return None
+
+        try:
+            result = DeepFace.verify(
+                img1_path=source_image_path,
+                img2_path=generated_image_path,
+                model_name="Facenet",
+                enforce_detection=False,
+            )
+            distance = float(result.get("distance", 0.0))
+            threshold = float(result.get("threshold", 0.0))
+            if threshold <= 0:
+                return None
+            similarity = max(0, round((1 - distance / threshold) * 100))
+            return min(100, similarity)
+        except Exception:
+            return None
+
     @classmethod
     def _build_payload(
         cls,
@@ -329,30 +373,44 @@ class SelfieGenerator:
             self._report("No image URL in result", "error")
             return None
 
-        # Build output path (unique): {original}_{model}_{index}.png
+        # Download to a temp path first; final name includes similarity + index.
         os.makedirs(output_folder, exist_ok=True)
         stem = Path(image_path).stem
         model_short = self._model_short_name(resolved_endpoint)
-        prefix = f"{stem}_{model_short}_"
-        max_index = 0
-        for name in os.listdir(output_folder):
-            if not name.lower().endswith(".png"):
-                continue
-            if not name.startswith(prefix):
-                continue
-            suffix = os.path.splitext(name)[0][len(prefix):]
-            if suffix.isdigit():
-                max_index = max(max_index, int(suffix))
-        next_index = max_index + 1
-        output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
-        while os.path.exists(output_path):
-            next_index += 1
-            output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
+        temp_output_path = os.path.join(
+            output_folder, f"{stem}_{model_short}_tmp_{actual_seed}.png"
+        )
+        temp_counter = 1
+        while os.path.exists(temp_output_path):
+            temp_counter += 1
+            temp_output_path = os.path.join(
+                output_folder, f"{stem}_{model_short}_tmp_{actual_seed}_{temp_counter}.png"
+            )
 
         self._report("Downloading result...", "download")
-        if fal_download_file(image_url_result, output_path, self._progress_callback):
-            self._report(f"Saved: {os.path.basename(output_path)}", "success")
-            return output_path
+        if fal_download_file(image_url_result, temp_output_path, self._progress_callback):
+            similarity = self._compute_similarity_percent(image_path, temp_output_path)
+            if similarity is None:
+                self._report(f"[{resolved_label}] Similarity: n/a", "info")
+                similarity_tag = "simna"
+            else:
+                self._report(f"[{resolved_label}] Similarity: {similarity}%", "info")
+                similarity_tag = f"sim{similarity}"
+
+            final_prefix = f"{stem}_{model_short}_{similarity_tag}_"
+            final_output_path = self._next_indexed_output_path(output_folder, final_prefix)
+            try:
+                os.replace(temp_output_path, final_output_path)
+            except Exception:
+                try:
+                    os.remove(temp_output_path)
+                except Exception:
+                    pass
+                self._report("Download finalization failed", "error")
+                return None
+
+            self._report(f"Saved: {os.path.basename(final_output_path)}", "success")
+            return final_output_path
 
         self._report("Download failed", "error")
         return None

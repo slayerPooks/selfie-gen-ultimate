@@ -62,6 +62,7 @@ class SelfieTab(tk.Frame):
         self._model_options = self._load_model_options()
         self._model_vars: Dict[str, tk.BooleanVar] = {}
         self._handoff_identity_data: Optional[Dict[str, str]] = None
+        self._handoff_scene: Optional[str] = None
         self._scene_roll_counter = 0
         self._prompt_template_edit_mode = False
 
@@ -404,8 +405,42 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
         )
         models_frame.pack(fill=tk.X, padx=10, pady=5)
-        models_frame.grid_columnconfigure(0, weight=1)
-        models_frame.grid_columnconfigure(1, weight=1)
+
+        models_list_container = tk.Frame(models_frame, bg=COLORS["bg_panel"])
+        models_list_container.pack(fill=tk.X, padx=6, pady=4)
+        models_canvas = tk.Canvas(
+            models_list_container,
+            bg=COLORS["bg_panel"],
+            highlightthickness=0,
+            borderwidth=0,
+            height=126,
+        )
+        models_scroll = ttk.Scrollbar(
+            models_list_container,
+            orient=tk.VERTICAL,
+            command=models_canvas.yview,
+        )
+        models_canvas.configure(yscrollcommand=models_scroll.set)
+        models_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        models_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        models_grid_frame = tk.Frame(models_canvas, bg=COLORS["bg_panel"])
+        models_grid_frame.grid_columnconfigure(0, weight=1)
+        models_grid_frame.grid_columnconfigure(1, weight=1)
+        models_window_id = models_canvas.create_window(
+            (0, 0),
+            window=models_grid_frame,
+            anchor="nw",
+        )
+
+        def _on_models_grid_configure(_event):
+            models_canvas.configure(scrollregion=models_canvas.bbox("all"))
+
+        def _on_models_canvas_configure(event):
+            models_canvas.itemconfigure(models_window_id, width=event.width)
+
+        models_grid_frame.bind("<Configure>", _on_models_grid_configure)
+        models_canvas.bind("<Configure>", _on_models_canvas_configure)
 
         saved_models = self.config.get("selfie_selected_models", {})
         for idx, model in enumerate(self._model_options):
@@ -419,7 +454,7 @@ class SelfieTab(tk.Frame):
             var = tk.BooleanVar(value=checked)
             self._model_vars[endpoint] = var
             tk.Checkbutton(
-                models_frame,
+                models_grid_frame,
                 text=label,
                 variable=var,
                 bg=COLORS["bg_panel"],
@@ -600,11 +635,15 @@ class SelfieTab(tk.Frame):
 
         if normalized:
             self._handoff_identity_data = normalized
+            self._handoff_scene = None
             self._scene_roll_counter = 0
             self._apply_handoff_scene_prompt(reroll=False)
+            # Keep compose/manual prompt box out of JSON flow.
+            self.prompt_text.delete("1.0", tk.END)
             return
 
         self._handoff_identity_data = None
+        self._handoff_scene = None
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", text)
 
@@ -667,19 +706,25 @@ class SelfieTab(tk.Frame):
         except (tk.TclError, TypeError, ValueError):
             seed_value = 0
         rng = random.Random(seed_value + self._scene_roll_counter)
-        scene = rng.choice(scene_templates)
-        prompt = self._get_prompt_template_text().format(
+        self._handoff_scene = rng.choice(scene_templates)
+
+    def _build_handoff_prompt(self) -> str:
+        if not self._handoff_identity_data:
+            return ""
+        if not self._handoff_scene:
+            self._apply_handoff_scene_prompt(reroll=False)
+        scene = self._handoff_scene or self.DEFAULT_SCENE_TEMPLATES[0]
+        return self._get_prompt_template_text().format(
             scene=scene,
             **self._handoff_identity_data,
         )
-        self.prompt_text.delete("1.0", tk.END)
-        self.prompt_text.insert("1.0", prompt)
 
     def _on_randomize_scene(self):
         if not self._handoff_identity_data:
             self.log("No Step 1 JSON prompt to randomize yet", "warning")
             return
         self._apply_handoff_scene_prompt(reroll=True)
+        self.log("Scene randomized for JSON handoff", "info")
 
     def _compose_prompt(self):
         """Compose prompt from selected options."""
@@ -715,10 +760,16 @@ class SelfieTab(tk.Frame):
             self.log("No image selected in carousel", "warning")
             return
 
-        prompt = self.prompt_text.get("1.0", tk.END).strip()
-        if not prompt:
-            self.log("Prompt is empty", "warning")
-            return
+        if self._handoff_identity_data:
+            prompt = self._build_handoff_prompt().strip()
+            if not prompt:
+                self.log("Prompt template is empty", "warning")
+                return
+        else:
+            prompt = self.prompt_text.get("1.0", tk.END).strip()
+            if not prompt:
+                self.log("Prompt is empty", "warning")
+                return
 
         selected_models = self._get_selected_models()
         if not selected_models:
@@ -797,13 +848,20 @@ class SelfieTab(tk.Frame):
         self._set_busy(False)
         if result:
             self._last_result_path = result
-            self.image_session.add_image(result, "selfie")
+            self.image_session.add_image(result, "selfie", label="Selfie")
             self.log(
                 f"Selfie generated: {os.path.basename(result)}", "success"
             )
             self._refresh_result_actions()
         else:
             self.log("Selfie generation failed", "error")
+
+    @staticmethod
+    def _truncate_model_label(label: str) -> str:
+        text = (label or "").strip()
+        if not text:
+            return "Model"
+        return text[:18]
 
     def _on_complete_batch(self, results, failed_models):
         self._set_busy(False)
@@ -815,7 +873,7 @@ class SelfieTab(tk.Frame):
                 self.image_session.add_image(
                     result,
                     "selfie",
-                    label=f"{label} | {os.path.basename(result)}",
+                    label=self._truncate_model_label(label),
                 )
                 self.log(
                     f"Selfie generated [{label}]: {os.path.basename(result)}",
