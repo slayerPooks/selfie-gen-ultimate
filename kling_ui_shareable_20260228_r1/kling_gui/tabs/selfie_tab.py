@@ -81,11 +81,11 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
             labelanchor="nw",
         )
-        prompt_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        prompt_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         # Composer controls
         composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        composer_frame.pack(fill=tk.X, padx=5, pady=5)
+        composer_frame.pack(fill=tk.X, padx=4, pady=4)
 
         # Gender
         tk.Label(
@@ -149,18 +149,18 @@ class SelfieTab(tk.Frame):
 
         # Prompt text + randomize scene
         prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        prompt_editor_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
 
         self.prompt_text = tk.Text(
             prompt_editor_frame,
-            height=3,
+            height=2,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             font=("Consolas", 9),
             insertbackground=COLORS["text_light"],
             padx=5,
-            pady=5,
+            pady=4,
         )
         self.prompt_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.prompt_text.insert(
@@ -176,31 +176,34 @@ class SelfieTab(tk.Frame):
             command=self._on_randomize_scene,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=10,
-            pady=4,
+            padx=8,
+            pady=2,
         )
         self.randomize_scene_btn.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
 
+        templates_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+
         scene_templates_frame = tk.LabelFrame(
-            prompt_frame,
+            templates_row,
             text="Scene Templates (One Per Line)",
             font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        scene_templates_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        scene_templates_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 3))
         self.scene_templates_text = tk.Text(
             scene_templates_frame,
-            height=3,
+            height=2,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             font=("Consolas", 9),
             insertbackground=COLORS["text_light"],
             padx=5,
-            pady=5,
+            pady=4,
         )
-        self.scene_templates_text.pack(fill=tk.X, padx=5, pady=5)
+        self.scene_templates_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         saved_scene_templates = self.config.get(
             "selfie_scene_templates", self.DEFAULT_SCENE_TEMPLATES
         )
@@ -216,25 +219,25 @@ class SelfieTab(tk.Frame):
         self.scene_templates_text.insert("1.0", "\n".join(scene_templates))
 
         template_frame = tk.LabelFrame(
-            prompt_frame,
+            templates_row,
             text="Prompt Template (JSON Handoff)",
             font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        template_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        template_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(3, 0))
         self.prompt_template_text = tk.Text(
             template_frame,
-            height=4,
+            height=3,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             font=("Consolas", 9),
             insertbackground=COLORS["text_light"],
             padx=5,
-            pady=5,
+            pady=4,
         )
-        self.prompt_template_text.pack(fill=tk.X, padx=5, pady=(4, 4))
+        self.prompt_template_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
         saved_template = self.config.get(
             "selfie_prompt_template", self.DEFAULT_PROMPT_TEMPLATE
         )
@@ -243,8 +246,8 @@ class SelfieTab(tk.Frame):
         )
         self.prompt_template_text.config(state=tk.DISABLED)
 
-        template_actions = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        template_actions.pack(fill=tk.X, padx=5, pady=(0, 2))
+        template_actions = tk.Frame(template_frame, bg=COLORS["bg_panel"])
+        template_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
         self.edit_template_btn = tk.Button(
             template_actions,
             text="Edit Template",
@@ -254,7 +257,7 @@ class SelfieTab(tk.Frame):
             command=self._on_edit_prompt_template,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=8,
+            padx=7,
             pady=1,
         )
         self.edit_template_btn.pack(side=tk.LEFT)
@@ -267,7 +270,7 @@ class SelfieTab(tk.Frame):
             command=self._on_save_prompt_template,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=8,
+            padx=7,
             pady=1,
             state=tk.DISABLED,
         )
@@ -281,7 +284,7 @@ class SelfieTab(tk.Frame):
             command=self._on_reset_prompt_template,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=8,
+            padx=7,
             pady=1,
         )
         self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
@@ -294,10 +297,10 @@ class SelfieTab(tk.Frame):
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        settings_frame.pack(fill=tk.X, padx=10, pady=5)
+        settings_frame.pack(fill=tk.X, padx=8, pady=4)
 
         grid = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
-        grid.pack(fill=tk.X, padx=5, pady=5)
+        grid.pack(fill=tk.X, padx=4, pady=4)
 
         # Face Resemblance (ID Weight)
         tk.Label(
@@ -404,16 +407,16 @@ class SelfieTab(tk.Frame):
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        models_frame.pack(fill=tk.X, padx=10, pady=5)
+        models_frame.pack(fill=tk.X, padx=8, pady=4)
 
         models_list_container = tk.Frame(models_frame, bg=COLORS["bg_panel"])
-        models_list_container.pack(fill=tk.X, padx=6, pady=4)
+        models_list_container.pack(fill=tk.X, padx=4, pady=3)
         models_canvas = tk.Canvas(
             models_list_container,
             bg=COLORS["bg_panel"],
             highlightthickness=0,
             borderwidth=0,
-            height=126,
+            height=98,
         )
         models_scroll = ttk.Scrollbar(
             models_list_container,
@@ -468,7 +471,7 @@ class SelfieTab(tk.Frame):
                 column=idx % 2,
                 sticky="w",
                 padx=(8, 20),
-                pady=1,
+                pady=0,
             )
 
         # Save location settings
@@ -479,7 +482,7 @@ class SelfieTab(tk.Frame):
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        save_frame.pack(fill=tk.X, padx=10, pady=5)
+        save_frame.pack(fill=tk.X, padx=8, pady=4)
 
         save_mode = self.config.get("selfie_output_mode", "")
         if save_mode not in ("source", "custom"):
@@ -490,7 +493,7 @@ class SelfieTab(tk.Frame):
         )
 
         mode_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        mode_row.pack(fill=tk.X, padx=5, pady=(4, 2))
+        mode_row.pack(fill=tk.X, padx=4, pady=(3, 1))
         tk.Radiobutton(
             mode_row,
             text="Save Next To Source Image",
@@ -517,7 +520,7 @@ class SelfieTab(tk.Frame):
         ).pack(side=tk.LEFT)
 
         path_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        path_row.pack(fill=tk.X, padx=5, pady=(0, 5))
+        path_row.pack(fill=tk.X, padx=4, pady=(0, 3))
         self.output_entry = tk.Entry(
             path_row,
             textvariable=self.output_path_var,
@@ -544,7 +547,7 @@ class SelfieTab(tk.Frame):
 
         # Generate button
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=8)
 
         self.generate_btn = tk.Button(
             btn_frame,
