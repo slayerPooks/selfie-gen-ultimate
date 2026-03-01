@@ -93,7 +93,7 @@ class DropZone(tk.Frame):
         self.main_label = tk.Label(
             self.content_container,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI", 14, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
@@ -103,7 +103,7 @@ class DropZone(tk.Frame):
         self.sub_label = tk.Label(
             self.content_container,
             text="Left click to select files  |  Right click for folder",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 11),
             bg=self._default_bg,
             fg=COLORS["text_dim"],
         )
@@ -147,6 +147,12 @@ class DropZone(tk.Frame):
 
     def _on_mouse_leave(self, event=None):
         """Handle mouse hover leave."""
+        if event:
+            df = self.drop_frame
+            rel_x = event.x_root - df.winfo_rootx()
+            rel_y = event.y_root - df.winfo_rooty()
+            if 0 <= rel_x <= df.winfo_width() and 0 <= rel_y <= df.winfo_height():
+                return  # mouse moved onto a child widget, still inside drop_frame
         self._reset_highlight()
         self.drop_frame.config(highlightbackground=COLORS["border"])
 

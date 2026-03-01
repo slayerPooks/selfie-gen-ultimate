@@ -4,7 +4,7 @@ With dynamic model fetching from fal.ai API.
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 from typing import Callable, Optional, List, Dict
 import threading
 import time
@@ -30,7 +30,7 @@ COLORS = {
 }
 
 # Import centralized model metadata to avoid duplication
-from model_metadata import MODEL_METADATA
+from model_metadata import MODEL_METADATA, get_model_display_name
 
 # Minimal fallback - ONLY used when API fails AND no cache exists
 # Models change frequently - this is just a safety net with user's preferred model
@@ -56,6 +56,10 @@ VAGUE_MODEL_PATTERNS = {
     name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE)
     for name in VAGUE_MODEL_NAMES
 }
+
+# Global font — change this one line to switch the entire UI typeface.
+# JetBrains Mono and Inter look great if installed; Segoe UI is the safe fallback.
+FONT_FAMILY = "Segoe UI"
 
 # UI Configuration
 COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~10)
@@ -109,6 +113,70 @@ def parse_endpoint_to_display_name(endpoint_id: str) -> str:
     result = result.replace("  ", " ")
 
     return result.strip()
+
+
+class HoverTooltip:
+    """Dark-themed floating tooltip shown when hovering a widget."""
+
+    _BG = "#1A1A1E"
+    _FG = "#DCDCDC"
+    _BORDER = "#6496FF"
+    _WRAP = 500  # px wraplength
+
+    def __init__(self, widget: tk.Widget, text_func):
+        """
+        Args:
+            widget: Widget that triggers the tooltip on hover.
+            text_func: Callable() → str evaluated at show-time.
+                       Empty/None string suppresses the popup.
+        """
+        self._widget = widget
+        self._text_func = text_func
+        self._tip: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, event=None):
+        text = self._text_func()
+        if not text or self._tip:
+            return
+
+        self._tip = tk.Toplevel(self._widget)
+        self._tip.wm_overrideredirect(True)
+
+        outer = tk.Frame(
+            self._tip, bg=self._BG,
+            highlightbackground=self._BORDER, highlightthickness=1,
+        )
+        outer.pack()
+        tk.Label(
+            outer, text=text,
+            bg=self._BG, fg=self._FG,
+            font=(FONT_FAMILY, 9),
+            wraplength=self._WRAP, justify=tk.LEFT,
+            padx=14, pady=10,
+        ).pack(anchor="w")
+
+        self._tip.update_idletasks()
+        tip_w = self._tip.winfo_reqwidth()
+        tip_h = self._tip.winfo_reqheight()
+
+        wx = self._widget.winfo_rootx()
+        wy = self._widget.winfo_rooty()
+        wh = self._widget.winfo_height()
+        sh = self._widget.winfo_screenheight()
+
+        x = max(0, wx - tip_w + self._widget.winfo_width())
+        y = wy + wh + 4
+        if y + tip_h > sh - 40:
+            y = wy - tip_h - 4  # flip above if near bottom of screen
+
+        self._tip.wm_geometry(f"+{x}+{y}")
+
+    def _hide(self, event=None):
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
 
 
 class ModelFetcher:
@@ -265,6 +333,7 @@ class ConfigPanel(tk.Frame):
         parent,
         config: dict,
         on_config_changed: Callable[..., None],  # Flexible signature for compatibility
+        build_prompt: bool = True,
         **kwargs,
     ):
         """
@@ -274,10 +343,13 @@ class ConfigPanel(tk.Frame):
             parent: Parent widget
             config: Current configuration dict
             on_config_changed: Callback when config changes
+            build_prompt: If False, prompt panel is not built inline — caller
+                must call build_prompt_panel(parent) separately after init.
         """
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
         self.config = config
         self.on_config_changed = on_config_changed
+        self._build_prompt_inline = build_prompt
 
         # Configure dark theme for ttk Combobox widgets
         self._setup_combobox_style()
@@ -328,669 +400,468 @@ class ConfigPanel(tk.Frame):
             pass  # Ignore if can't set listbox options
 
     def _setup_ui(self):
-        """Set up the configuration UI."""
-        # Header
-        header = tk.Label(
-            self,
-            text="⚙ CONFIGURATION",
-            font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        )
-        header.pack(fill=tk.X, padx=10, pady=(5, 10))
+        """Set up the configuration UI — two-column layout."""
+        self._prompt_edit_mode = False
 
-        # Main config frame
+        # Main config frame (no CONFIGURATION heading — spec item 5)
         config_frame = tk.Frame(self, bg=COLORS["bg_input"], padx=10, pady=10)
-        config_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        config_frame.pack(fill=tk.X, padx=10, pady=(8, 10))
         self._config_frame = config_frame
 
-        # Row 1: Model selection
-        row1 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row1.pack(fill=tk.X, pady=(0, 12))
+        # ── Two-column layout from the top: left (model/output/options) | right (prompt) ──
+        body_frame = tk.Frame(config_frame, bg=COLORS["bg_input"])
+        body_frame.pack(fill=tk.BOTH, expand=True)
+
+        # ── LEFT COLUMN: model row, output row, separator, then option rows ──────────────
+        left_col = tk.Frame(body_frame, bg=COLORS["bg_input"])
+        left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 14), anchor="n")
+
+        # Row 1: Model selection (in left_col so right column gets full panel height)
+        row1 = tk.Frame(left_col, bg=COLORS["bg_input"])
+        row1.pack(fill=tk.X, pady=(0, 10))
 
         tk.Label(
-            row1,
-            text="MODEL",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-            width=8,
-            anchor="w",
+            row1, text="MODEL", font=(FONT_FAMILY, 10, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"], width=8, anchor="w",
         ).pack(side=tk.LEFT)
 
-        # Display model name in a recessed box
-        model_name = self.config.get("model_display_name", "Kling 2.5 Turbo Pro")
-        self.model_label = tk.Label(
-            row1,
-            text=model_name,
-            font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_main"],
-            fg=COLORS["accent_blue"],
-            padx=12,
-            pady=6,
-            anchor="w",
-            width=35,
-            relief=tk.FLAT,
+        self.model_var = tk.StringVar()
+        self.model_combo = ttk.Combobox(
+            row1, textvariable=self.model_var, state="readonly",
+            width=36, font=(FONT_FAMILY, 10, "bold"),
+            style="Dark.TCombobox", height=COMBOBOX_DROPDOWN_HEIGHT,
         )
-        self.model_label.pack(side=tk.LEFT, padx=(5, 10))
+        self.model_combo.pack(side=tk.LEFT, padx=(5, 10))
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
-        # Model Info container
         info_frame = tk.Frame(row1, bg=COLORS["bg_input"])
         info_frame.pack(side=tk.LEFT, fill=tk.Y)
-
         self.duration_label = tk.Label(
-            info_frame,
-            text="10s duration",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
+            info_frame, text="10s duration", font=(FONT_FAMILY, 10),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
         self.duration_label.pack(side=tk.TOP, anchor="w")
 
+        # ⓘ info icon — hover to see model notes (blue = has notes, dim = none)
+        self.model_info_icon = tk.Label(
+            info_frame, text="ⓘ info",
+            font=(FONT_FAMILY, 8), cursor="question_arrow",
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
+        )
+        self.model_info_icon.pack(side=tk.TOP, anchor="w")
+        HoverTooltip(self.model_info_icon, self._get_current_model_notes)
+
         # Row 2: Output mode
-        row2 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row2.pack(fill=tk.X, pady=(0, 12))
+        row2 = tk.Frame(left_col, bg=COLORS["bg_input"])
+        row2.pack(fill=tk.X, pady=(0, 10))
 
         tk.Label(
-            row2,
-            text="OUTPUT",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-            width=8,
-            anchor="w",
+            row2, text="OUTPUT", font=(FONT_FAMILY, 10, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"], width=8, anchor="w",
         ).pack(side=tk.LEFT)
 
         self.output_mode_var = tk.StringVar(value="source")
         self.source_radio = tk.Radiobutton(
-            row2,
-            text="Same as Source",
-            variable=self.output_mode_var,
-            value="source",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_output_mode_changed,
+            row2, text="Same as Source", variable=self.output_mode_var, value="source",
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_output_mode_changed,
         )
         self.source_radio.pack(side=tk.LEFT, padx=(5, 10))
 
         self.custom_radio = tk.Radiobutton(
-            row2,
-            text="Custom Folder:",
-            variable=self.output_mode_var,
-            value="custom",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_output_mode_changed,
+            row2, text="Custom Folder:", variable=self.output_mode_var, value="custom",
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_output_mode_changed,
         )
         self.custom_radio.pack(side=tk.LEFT)
 
         self.output_path_var = tk.StringVar()
         self.output_entry = tk.Entry(
-            row2,
-            textvariable=self.output_path_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            row2, textvariable=self.output_path_var, font=(FONT_FAMILY, 10),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
             insertbackground=COLORS["text_light"],
-            disabledbackground=COLORS["bg_input"],
-            disabledforeground=COLORS["text_dim"],
-            width=30,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=COLORS["border"],
+            disabledbackground=COLORS["bg_input"], disabledforeground=COLORS["text_dim"],
+            width=16, borderwidth=0, highlightthickness=1, highlightbackground=COLORS["border"],
         )
         self.output_entry.pack(side=tk.LEFT, padx=8, pady=2, fill=tk.Y)
 
         self.browse_btn = tk.Button(
-            row2,
-            text="BROWSE",
-            font=("Segoe UI", 8, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            padx=10,
-            relief=tk.FLAT,
-            command=self._browse_output_folder,
+            row2, text="BROWSE", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+            padx=10, relief=tk.FLAT, borderwidth=0, command=self._browse_output_folder,
         )
         self.browse_btn.pack(side=tk.LEFT, padx=2)
 
-        # Separator
-        ttk.Separator(config_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(2, 12))
+        # Separator (between model/output rows and option rows)
+        ttk.Separator(left_col, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(2, 10))
 
-        # Row 3: Prompt controls
-        row3 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row3.pack(fill=tk.X, pady=(0, 8))
+        lbl_w = 10  # consistent label width in chars
 
-        tk.Label(
-            row3,
-            text="PROMPT",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        self.edit_prompt_border = tk.Frame(
-            row3,
-            bg=COLORS["accent_blue"],
-            padx=1,
-            pady=1,
-        )
-        self.edit_prompt_border.pack(side=tk.LEFT, padx=(5, 20))
-
-        self.edit_prompt_btn = tk.Button(
-            self.edit_prompt_border,
-            text="✎ EDIT PROMPT / CHANGE MODEL",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            padx=15,
-            pady=4,
-            relief=tk.FLAT,
-            borderwidth=0,
-            command=self._show_prompt_editor,
-        )
-        self.edit_prompt_btn.pack()
-
-        tk.Label(
-            row3,
-            text="SLOT:",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT)
-
-        # Slot container for 2-row layout (5 slots per row)
-        slot_container = tk.Frame(row3, bg=COLORS["bg_input"])
-        slot_container.pack(side=tk.LEFT, padx=(5, 0))
-        self._prompt_row = row3
-        self._slot_container = slot_container
-
-        slot_row1 = tk.Frame(slot_container, bg=COLORS["bg_input"])
-        slot_row1.pack(side=tk.TOP)
-
-        slot_row2 = tk.Frame(slot_container, bg=COLORS["bg_input"])
-        slot_row2.pack(side=tk.TOP, pady=(2, 0))
-
-        self.slot_var = tk.IntVar(value=1)
-        for i in range(1, 11):  # 10 slots
-            # Choose which row based on slot number
-            parent_row = slot_row1 if i <= 5 else slot_row2
-            rb = tk.Radiobutton(
-                parent_row,
-                text=str(i),
-                variable=self.slot_var,
-                value=i,
-                font=("Segoe UI", 9, "bold"),
-                bg=COLORS["bg_input"],
-                fg=COLORS["text_light"],
-                selectcolor=COLORS["bg_main"],
-                activebackground=COLORS["bg_input"],
-                activeforeground=COLORS["accent_blue"],
-                indicatoron=False,  # Make them look like toggle buttons
-                width=2,
-                relief=tk.FLAT,
-                command=self._on_slot_changed,
-            )
-            rb.pack(side=tk.LEFT, padx=1)
-
-        # Prompt preview (multi-line, recessed look)
-        preview_shell = tk.Frame(
-            config_frame,
-            bg=COLORS["bg_panel"],
-            highlightthickness=1,
-            highlightbackground=COLORS["bg_input"],
-        )
-        self.prompt_preview_container = preview_shell
-
-        preview_container = tk.Frame(
-            preview_shell,
-            bg=COLORS["bg_panel"],
-            padx=8,
-            pady=6,
-        )
-        preview_container.pack(fill=tk.BOTH, expand=True)
-
-        self.prompt_preview = tk.Text(
-            preview_container,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
-            height=6,  # 6 lines tall for better visibility
-            width=40,
-            wrap=tk.WORD,
-            relief=tk.FLAT,
-            borderwidth=0,
-            state=tk.DISABLED,  # Read-only
-            cursor="arrow",
-        )
-
-        preview_scroll = ttk.Scrollbar(
-            preview_container, orient=tk.VERTICAL, command=self.prompt_preview.yview
-        )
-        self.prompt_preview.configure(yscrollcommand=preview_scroll.set)
-
-        self.prompt_preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Configure tag for bold titles
-        self.prompt_preview.tag_configure(
-            "title", font=("Segoe UI", 9, "bold"), foreground=COLORS["text_light"]
-        )
-
-        # Position prompt preview without affecting row height
-        self._position_prompt_preview()
-        config_frame.bind("<Configure>", lambda e: self._position_prompt_preview())
-
-        # Row 4: Loop Video option
-        row4 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row4.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            row4,
-            text="Options:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # Options: Loop Video
+        rA = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rA.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(rA, text="Options:", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                 width=lbl_w, anchor="w").pack(side=tk.LEFT)
         self.loop_video_var = tk.BooleanVar(value=False)
         self.loop_checkbox = tk.Checkbutton(
-            row4,
-            text="Loop Video (ping-pong effect)",
-            variable=self.loop_video_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_loop_changed,
+            rA, text="Loop Video (ping-pong)", variable=self.loop_video_var,
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_loop_changed,
         )
-        self.loop_checkbox.pack(side=tk.LEFT, padx=5)
-
+        self.loop_checkbox.pack(side=tk.LEFT)
         self.loop_info_label = tk.Label(
-            row4,
-            text="(requires FFmpeg)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
+            rA, text="(requires FFmpeg)", font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.loop_info_label.pack(side=tk.LEFT, padx=5)
+        self.loop_info_label.pack(side=tk.LEFT, padx=4)
 
-        # Row 5: Reprocess options
-        row5 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row5.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            row5,
-            text="",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # Allow reprocessing
+        rB = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rB.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(rB, text="", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], width=lbl_w).pack(side=tk.LEFT)
         self.reprocess_var = tk.BooleanVar(value=False)
         self.reprocess_checkbox = tk.Checkbutton(
-            row5,
-            text="Allow reprocessing",
-            variable=self.reprocess_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_reprocess_changed,
+            rB, text="Allow reprocessing", variable=self.reprocess_var,
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_reprocess_changed,
         )
-        self.reprocess_checkbox.pack(side=tk.LEFT, padx=5)
-
-        # Reprocess mode radio buttons (initially hidden)
-        self.reprocess_mode_frame = tk.Frame(row5, bg=COLORS["bg_input"])
-        self.reprocess_mode_frame.pack(side=tk.LEFT, padx=(10, 0))
-
+        self.reprocess_checkbox.pack(side=tk.LEFT)
+        self.reprocess_mode_frame = tk.Frame(rB, bg=COLORS["bg_input"])
+        self.reprocess_mode_frame.pack(side=tk.LEFT, padx=(8, 0))
         self.reprocess_mode_var = tk.StringVar(value="increment")
-
         self.overwrite_radio = tk.Radiobutton(
-            self.reprocess_mode_frame,
-            text="Overwrite",
-            variable=self.reprocess_mode_var,
-            value="overwrite",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_reprocess_mode_changed,
+            self.reprocess_mode_frame, text="Overwrite",
+            variable=self.reprocess_mode_var, value="overwrite",
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_reprocess_mode_changed,
         )
         self.overwrite_radio.pack(side=tk.LEFT, padx=2)
-
         self.increment_radio = tk.Radiobutton(
-            self.reprocess_mode_frame,
-            text="Increment (_2, _3...)",
-            variable=self.reprocess_mode_var,
-            value="increment",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_reprocess_mode_changed,
+            self.reprocess_mode_frame, text="Increment (_2, _3\u2026)",
+            variable=self.reprocess_mode_var, value="increment",
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_reprocess_mode_changed,
         )
         self.increment_radio.pack(side=tk.LEFT, padx=2)
-
-        # Initially hide reprocess mode options
         self._update_reprocess_mode_visibility()
 
-        # Row 6: Verbose logging toggle
-        row6 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row6.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            row6,
-            text="Logging:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # Logging
+        rC = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rC.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(rC, text="Logging:", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                 width=lbl_w, anchor="w").pack(side=tk.LEFT)
         self.verbose_gui_var = tk.BooleanVar(value=False)
         self.verbose_checkbox = tk.Checkbutton(
-            row6,
-            text="Verbose Mode",
-            variable=self.verbose_gui_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_verbose_changed,
+            rC, text="Verbose Mode", variable=self.verbose_gui_var,
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_verbose_changed,
         )
-        self.verbose_checkbox.pack(side=tk.LEFT, padx=5)
-
+        self.verbose_checkbox.pack(side=tk.LEFT)
         self.verbose_info_label = tk.Label(
-            row6,
-            text="(show detailed processing info)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
+            rC, text="(detailed processing log)", font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.verbose_info_label.pack(side=tk.LEFT, padx=5)
+        self.verbose_info_label.pack(side=tk.LEFT, padx=4)
 
-        # Row 7: Folder Filter options
-        row7 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row7.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            row7,
-            text="Folder:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
+        # File Filter — replaces the old "Folder:" row with clearer labeling
+        rD = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rD.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(rD, text="Filter:", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                 width=lbl_w, anchor="w").pack(side=tk.LEFT)
         self.folder_pattern_var = tk.StringVar(value="")
         self.folder_pattern_entry = tk.Entry(
-            row7,
-            textvariable=self.folder_pattern_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            width=20,
+            rD, textvariable=self.folder_pattern_var, font=(FONT_FAMILY, 10),
+            bg=COLORS["bg_main"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], width=16,
+            borderwidth=0, highlightthickness=1, highlightbackground=COLORS["border"],
         )
-        self.folder_pattern_entry.pack(side=tk.LEFT, padx=5)
+        self.folder_pattern_entry.pack(side=tk.LEFT, padx=(0, 8))
         self.folder_pattern_entry.bind("<FocusOut>", self._on_folder_pattern_changed)
         self.folder_pattern_entry.bind("<Return>", self._on_folder_pattern_changed)
-
-        tk.Label(
-            row7,
-            text="Match:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-        ).pack(side=tk.LEFT, padx=(10, 5))
-
+        tk.Label(rD, text="Match:", font=(FONT_FAMILY, 9),
+                 bg=COLORS["bg_input"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 4))
         self.folder_match_mode_var = tk.StringVar(value="partial")
         self.partial_radio = tk.Radiobutton(
-            row7,
-            text="Partial",
-            variable=self.folder_match_mode_var,
-            value="partial",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_folder_match_mode_changed,
+            rD, text="Partial", variable=self.folder_match_mode_var, value="partial",
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_folder_match_mode_changed,
         )
         self.partial_radio.pack(side=tk.LEFT, padx=2)
-
         self.exact_radio = tk.Radiobutton(
-            row7,
-            text="Exact",
-            variable=self.folder_match_mode_var,
-            value="exact",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
-            command=self._on_folder_match_mode_changed,
+            rD, text="Exact", variable=self.folder_match_mode_var, value="exact",
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_folder_match_mode_changed,
         )
         self.exact_radio.pack(side=tk.LEFT, padx=2)
-
-        # Row 8: Advanced Video Settings - Aspect Ratio and Resolution
-        row8 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row8.pack(fill=tk.X, pady=(8, 0))
-
+        # Filter help text — explains what Folder/Match do
+        rD2 = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rD2.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(rD2, text="", bg=COLORS["bg_input"], width=lbl_w).pack(side=tk.LEFT)
         tk.Label(
-            row8,
-            text="Video:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
+            rD2,
+            text="Subfolder name to match when processing a folder (blank \u2192 all files)"
+                 " \u00b7 Partial: name contains filter \u00b7 Exact: name equals filter",
+            font=(FONT_FAMILY, 8), bg=COLORS["bg_input"], fg=COLORS["text_dim"],
+            wraplength=280, justify="left",
         ).pack(side=tk.LEFT)
 
-        tk.Label(
-            row8,
-            text="Aspect:",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT, padx=(0, 3))
-
+        # Video settings
+        rE = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rE.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(rE, text="Video:", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                 width=lbl_w, anchor="w").pack(side=tk.LEFT)
+        tk.Label(rE, text="Aspect:", font=(FONT_FAMILY, 9),
+                 bg=COLORS["bg_input"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 3))
         self.aspect_ratio_var = tk.StringVar(value="9:16")
         self.aspect_ratio_combo = ttk.Combobox(
-            row8,
-            textvariable=self.aspect_ratio_var,
+            rE, textvariable=self.aspect_ratio_var,
             values=["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
-            state="readonly",
-            width=6,
-            font=("Segoe UI", 8),
-            style="Dark.TCombobox",
+            state="readonly", width=6, font=(FONT_FAMILY, 9), style="Dark.TCombobox",
         )
-        self.aspect_ratio_combo.pack(side=tk.LEFT, padx=(0, 20))
-        self.aspect_ratio_combo.bind(
-            "<<ComboboxSelected>>", self._on_aspect_ratio_changed
-        )
-
-        tk.Label(
-            row8,
-            text="Resolution:",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT, padx=(0, 3))
-
-        self.resolution_var = tk.StringVar(value="720p")
-        self.resolution_combo = ttk.Combobox(
-            row8,
-            textvariable=self.resolution_var,
-            values=["480p", "720p"],
-            state="readonly",
-            width=5,
-            font=("Segoe UI", 8),
-            style="Dark.TCombobox",
-        )
-        self.resolution_combo.pack(side=tk.LEFT, padx=(0, 20))
-        self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_changed)
-
-        # Duration selector
-        tk.Label(
-            row8,
-            text="Duration:",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT, padx=(0, 3))
-
+        self.aspect_ratio_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self.aspect_ratio_combo.bind("<<ComboboxSelected>>", self._on_aspect_ratio_changed)
+        tk.Label(rE, text="Duration:", font=(FONT_FAMILY, 9),
+                 bg=COLORS["bg_input"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 3))
         self.duration_var = tk.StringVar(value="10s")
         self.duration_combo = ttk.Combobox(
-            row8,
-            textvariable=self.duration_var,
-            values=["5s", "10s"],  # Default options, updated dynamically
-            state="readonly",
-            width=5,
-            font=("Segoe UI", 8),
-            style="Dark.TCombobox",
+            rE, textvariable=self.duration_var, values=["5s", "10s"],
+            state="readonly", width=5, font=(FONT_FAMILY, 9), style="Dark.TCombobox",
         )
-        self.duration_combo.pack(side=tk.LEFT, padx=(0, 20))
+        self.duration_combo.pack(side=tk.LEFT, padx=(0, 12))
         self.duration_combo.bind("<<ComboboxSelected>>", self._on_duration_changed)
-
-        # Schema diagnostic display (shows parameter support status)
+        tk.Label(rE, text="Res:", font=(FONT_FAMILY, 9),
+                 bg=COLORS["bg_input"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 3))
+        self.resolution_var = tk.StringVar(value="720p")
+        self.resolution_combo = ttk.Combobox(
+            rE, textvariable=self.resolution_var, values=["480p", "720p"],
+            state="readonly", width=5, font=(FONT_FAMILY, 9), style="Dark.TCombobox",
+        )
+        self.resolution_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_changed)
         self.schema_diagnostic_label = tk.Label(
-            row8,
-            text="",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"]
+            rE, text="", font=(FONT_FAMILY, 9), bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.schema_diagnostic_label.pack(side=tk.LEFT, padx=5)
-
+        self.schema_diagnostic_label.pack(side=tk.LEFT, padx=2)
         self.video_settings_info = tk.Label(
-            row8,
-            text="(model-dependent)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
+            rE, text="(model-dependent)", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.video_settings_info.pack(side=tk.LEFT, padx=5)
+        self.video_settings_info.pack(side=tk.LEFT, padx=2)
 
-        # Row 9: Seed and additional options
-        row9 = tk.Frame(config_frame, bg=COLORS["bg_input"])
-        row9.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            row9,
-            text="Options:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=8,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        tk.Label(
-            row9,
-            text="Seed:",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT, padx=(0, 3))
-
+        # Seed & misc options
+        rF = tk.Frame(left_col, bg=COLORS["bg_input"])
+        rF.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(rF, text="Options:", font=(FONT_FAMILY, 10),
+                 bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                 width=lbl_w, anchor="w").pack(side=tk.LEFT)
+        tk.Label(rF, text="Seed:", font=(FONT_FAMILY, 9),
+                 bg=COLORS["bg_input"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 3))
         self.seed_var = tk.StringVar(value="-1")
         self.seed_entry = tk.Entry(
-            row9,
-            textvariable=self.seed_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            width=10,
+            rF, textvariable=self.seed_var, font=(FONT_FAMILY, 10),
+            bg=COLORS["bg_main"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], width=10,
+            borderwidth=0, highlightthickness=1, highlightbackground=COLORS["border"],
         )
         self.seed_entry.pack(side=tk.LEFT, padx=(0, 3))
         self.seed_entry.bind("<FocusOut>", self._on_seed_changed)
         self.seed_entry.bind("<Return>", self._on_seed_changed)
-
         self.random_seed_var = tk.BooleanVar(value=True)
         self.random_seed_checkbox = tk.Checkbutton(
-            row9,
-            text="Random",
-            variable=self.random_seed_var,
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
+            rF, text="Random", variable=self.random_seed_var, font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"], selectcolor=COLORS["bg_main"],
+            activebackground=COLORS["bg_input"], activeforeground=COLORS["text_light"],
             command=self._on_random_seed_changed,
         )
-        self.random_seed_checkbox.pack(side=tk.LEFT, padx=(0, 20))
-
+        self.random_seed_checkbox.pack(side=tk.LEFT, padx=(0, 12))
         self.camera_fixed_var = tk.BooleanVar(value=False)
         self.camera_fixed_checkbox = tk.Checkbutton(
-            row9,
-            text="Camera Fixed",
-            variable=self.camera_fixed_var,
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
+            rF, text="Camera Fixed", variable=self.camera_fixed_var, font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"], selectcolor=COLORS["bg_main"],
+            activebackground=COLORS["bg_input"], activeforeground=COLORS["text_light"],
             command=self._on_camera_fixed_changed,
         )
-        self.camera_fixed_checkbox.pack(side=tk.LEFT, padx=(0, 20))
-
+        self.camera_fixed_checkbox.pack(side=tk.LEFT, padx=(0, 12))
         self.generate_audio_var = tk.BooleanVar(value=False)
         self.generate_audio_checkbox = tk.Checkbutton(
-            row9,
-            text="Generate Audio",
-            variable=self.generate_audio_var,
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_main"],
-            activebackground=COLORS["bg_input"],
-            activeforeground=COLORS["text_light"],
+            rF, text="Generate Audio", variable=self.generate_audio_var, font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"], selectcolor=COLORS["bg_main"],
+            activebackground=COLORS["bg_input"], activeforeground=COLORS["text_light"],
             command=self._on_generate_audio_changed,
         )
-        self.generate_audio_checkbox.pack(side=tk.LEFT, padx=(0, 5))
-
-        # Initialize seed entry state based on random checkbox
+        self.generate_audio_checkbox.pack(side=tk.LEFT)
         self._update_seed_entry_state()
+
+        # ── RIGHT COLUMN: built inline or externally via build_prompt_panel() ──
+        if self._build_prompt_inline:
+            self.build_prompt_panel(body_frame)
+
+    def build_prompt_panel(self, parent: tk.Widget) -> tk.Frame:
+        """Build the prompt editor UI into `parent`.
+
+        Called automatically during _setup_ui (default) when build_prompt=True,
+        or externally by main_window.py for side-by-side drop zone + prompt layout.
+        """
+        right_col = tk.Frame(
+            parent, bg=COLORS["bg_panel"],
+            highlightthickness=1, highlightbackground=COLORS["border"],
+        )
+        right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.prompt_preview_container = right_col  # compatibility reference
+
+        right_inner = tk.Frame(right_col, bg=COLORS["bg_panel"], padx=8, pady=6)
+        right_inner.pack(fill=tk.BOTH, expand=True)
+
+        # Slot selector bar — 1 through 10 in a single inline row
+        slot_bar = tk.Frame(right_inner, bg=COLORS["bg_panel"])
+        slot_bar.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(slot_bar, text="SLOT", font=(FONT_FAMILY, 9, "bold"),
+                 bg=COLORS["bg_panel"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 8))
+        self.slot_var = tk.IntVar(value=1)
+        self._slot_buttons = []
+        for i in range(1, 11):
+            rb = tk.Radiobutton(
+                slot_bar, text=str(i), variable=self.slot_var, value=i,
+                font=(FONT_FAMILY, 10, "bold"),
+                bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+                selectcolor=COLORS["accent_blue"],
+                activebackground=COLORS["bg_panel"], activeforeground=COLORS["accent_blue"],
+                indicatoron=False, width=2, relief=tk.FLAT,
+                command=self._on_slot_changed,
+            )
+            rb.pack(side=tk.LEFT, padx=1)
+            self._slot_buttons.append(rb)
+
+        # Title row (read-only by default; Edit mode enables it)
+        title_row = tk.Frame(right_inner, bg=COLORS["bg_panel"])
+        title_row.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(title_row, text="Title:", font=(FONT_FAMILY, 10, "bold"),
+                 bg=COLORS["bg_panel"], fg=COLORS["text_dim"]).pack(side=tk.LEFT)
+        self.prompt_title_var = tk.StringVar()
+        self.prompt_title_entry = tk.Entry(
+            title_row, textvariable=self.prompt_title_var,
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_main"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], relief=tk.FLAT,
+            highlightthickness=1, highlightbackground=COLORS["border"],
+            state="disabled", disabledforeground=COLORS["text_dim"],
+            disabledbackground=COLORS["bg_main"],
+        )
+        self.prompt_title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+
+        # Prompt text area — scrollbar packed first so it claims its rightmost space
+        text_frame = tk.Frame(right_inner, bg=COLORS["bg_panel"])
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        self.prompt_preview = tk.Text(
+            text_frame, font=(FONT_FAMILY, 10),
+            bg=COLORS["bg_main"], fg=COLORS["text_dim"],
+            height=15, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0,
+            insertbackground=COLORS["text_light"], state="disabled",
+        )
+        preview_scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.prompt_preview.yview)
+        self.prompt_preview.configure(yscrollcommand=preview_scroll.set)
+        preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)  # scrollbar first
+        self.prompt_preview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.prompt_preview.bind("<KeyRelease>", self._update_prompt_char_count)
+
+        # Footer: char count badge + Edit button + Save button
+        prompt_footer = tk.Frame(right_inner, bg=COLORS["bg_panel"])
+        prompt_footer.pack(fill=tk.X, pady=(6, 0))
+        char_badge = tk.Frame(
+            prompt_footer, bg=COLORS["bg_input"],
+            highlightthickness=1, highlightbackground=COLORS["border"],
+            padx=6, pady=2,
+        )
+        char_badge.pack(side=tk.LEFT)
+        self.prompt_char_count_label = tk.Label(
+            char_badge, text="0 chars", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
+        )
+        self.prompt_char_count_label.pack()
+        self.edit_prompt_btn = tk.Button(
+            prompt_footer, text="Edit", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
+            padx=10, pady=2, relief=tk.FLAT, borderwidth=0,
+            command=self._enter_edit_mode,
+        )
+        self.edit_prompt_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self.save_prompt_btn = tk.Button(
+            prompt_footer, text="Save Prompt", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
+            padx=10, pady=2, relief=tk.FLAT, borderwidth=0,
+            state="disabled", command=self._save_prompt,
+        )
+        self.save_prompt_btn.pack(side=tk.RIGHT)
+
+        # Load prompt config now that widgets exist
+        self._load_prompt_config()
+        return right_col
+
+    def _load_prompt_config(self):
+        """Load prompt slot/title/text. Safe to call before build_prompt_panel() — returns early."""
+        if not hasattr(self, "slot_var"):
+            return
+        self.slot_var.set(self.config.get("current_prompt_slot", 1))
+        self._update_prompt_preview()
+        self._update_slot_button_colors()
+
+    def _update_slot_button_colors(self):
+        """Set selected slot button to black text on blue; others to light text on dark."""
+        if not hasattr(self, "_slot_buttons"):
+            return
+        current = self.slot_var.get()
+        for i, rb in enumerate(self._slot_buttons, 1):
+            if i == current:
+                rb.config(fg="#111111", bg=COLORS["accent_blue"])
+            else:
+                rb.config(fg=COLORS["text_light"], bg=COLORS["bg_panel"])
 
     def _load_config(self):
         """Load configuration values into UI."""
-        # Model (display only - set via CLI)
-        model_name = self.config.get("model_display_name", "Kling 2.5 Turbo Pro")
-        self.model_label.config(text=model_name)
+        # Model list + inline model selector
+        self.models = ModelFetcher.get_cached_or_fallback(self.config)
+        if not self.models:
+            self.models = [
+                {
+                    "name": self.config.get("model_display_name", "Kling 2.5 Turbo Pro"),
+                    "endpoint": self.config.get("current_model", ""),
+                    "duration_default": self.config.get("video_duration", 10),
+                }
+            ]
+
+        model_names = [get_model_display_name(m) for m in self.models]
+        self.model_combo["values"] = model_names
+
+        current_model = self.config.get("current_model", "")
+        selected_index = 0
+        for i, model in enumerate(self.models):
+            if model.get("endpoint") == current_model:
+                selected_index = i
+                break
+        else:
+            current_name = self.config.get("model_display_name", "")
+            if current_name in model_names:
+                selected_index = model_names.index(current_name)
+
+        if model_names:
+            self.model_combo.current(selected_index)
+            self.model_var.set(model_names[selected_index])
+            self._update_model_info_icon()
 
         # Output mode
         if self.config.get("use_source_folder", True):
@@ -1000,9 +871,8 @@ class ConfigPanel(tk.Frame):
         self.output_path_var.set(self.config.get("output_folder", ""))
         self._update_output_entry_state()
 
-        # Prompt slot
-        self.slot_var.set(self.config.get("current_prompt_slot", 1))
-        self._update_prompt_preview()
+        # Prompt slot/editor (deferred if prompt panel not yet built externally)
+        self._load_prompt_config()
 
         # Duration
         duration = self.config.get("video_duration", 10)
@@ -1046,6 +916,61 @@ class ConfigPanel(tk.Frame):
             "current_model", "fal-ai/kling-video/v2.1/pro/image-to-video"
         )
         self.update_parameter_visibility(current_model)
+
+    def _on_model_changed(self, event=None):
+        """Handle inline model selection changes."""
+        selected_name = self.model_var.get()
+        if not selected_name:
+            return
+
+        selected_model = None
+        selected_index = self.model_combo.current()
+        if 0 <= selected_index < len(self.models):
+            selected_model = self.models[selected_index]
+        else:
+            for model in self.models:
+                if model.get("name") == selected_name:
+                    selected_model = model
+                    break
+
+        if not selected_model:
+            return
+
+        model_endpoint = selected_model.get("endpoint", "")
+        if not model_endpoint:
+            return
+
+        self.config["current_model"] = model_endpoint
+        self.config["model_display_name"] = selected_model.get("name", selected_name)
+
+        self.update_parameter_visibility(model_endpoint)
+
+        duration_text = self.duration_var.get().rstrip("s").strip()
+        if duration_text.isdigit():
+            self.config["video_duration"] = int(duration_text)
+            self.duration_label.config(text=f"{duration_text}s duration")
+
+        self._update_model_info_icon(selected_model)
+        self._notify_change(f"Model changed to {self.config['model_display_name']}")
+
+    def _get_current_model_notes(self) -> str:
+        """Return the notes string for the currently selected model (used by HoverTooltip)."""
+        idx = self.model_combo.current()
+        if hasattr(self, "models") and 0 <= idx < len(self.models):
+            return self.models[idx].get("notes", "")
+        return ""
+
+    def _update_model_info_icon(self, model: dict = None):
+        """Set info icon color: blue when model has notes, dim otherwise."""
+        if not hasattr(self, "model_info_icon"):
+            return
+        if model is None:
+            idx = self.model_combo.current()
+            model = self.models[idx] if hasattr(self, "models") and 0 <= idx < len(self.models) else {}
+        has_notes = bool(model.get("notes", ""))
+        self.model_info_icon.config(
+            fg=COLORS["accent_blue"] if has_notes else COLORS["text_dim"]
+        )
 
     def _check_ffmpeg_status(self):
         """Check if FFmpeg is available and update UI."""
@@ -1233,179 +1158,105 @@ class ConfigPanel(tk.Frame):
             self._notify_change(f"Output folder set to {folder}")
 
     def _on_slot_changed(self):
-        """Handle prompt slot change."""
+        """Handle prompt slot change — discard any unsaved edits first."""
+        if self._prompt_edit_mode:
+            self._exit_edit_mode_internal()
         slot = self.slot_var.get()
         self.config["current_prompt_slot"] = slot
         self._update_prompt_preview()
+        self._update_slot_button_colors()
         self._notify_change(f"Prompt slot changed to {slot}")
 
     def _update_prompt_preview(self):
-        """Update the prompt preview text widget."""
+        """Load selected slot title/prompt into the read-only display widgets."""
         slot = self.slot_var.get()
-        saved_prompts = self.config.get("saved_prompts", {})
-        saved_titles = self.config.get("prompt_titles", {})
-        prompt = saved_prompts.get(str(slot), "")
-        title = saved_titles.get(str(slot), "")
+        saved_prompts = self.config.setdefault("saved_prompts", {})
+        saved_titles = self.config.setdefault("prompt_titles", {})
+        prompt = saved_prompts.get(str(slot), "") or ""
+        title = saved_titles.get(str(slot), "") or ""
 
-        # Enable editing, update text, then disable again
-        self.prompt_preview.config(state=tk.NORMAL)
+        # Title entry: briefly enable to update, then restore disabled state
+        self.prompt_title_entry.config(state="normal")
+        self.prompt_title_var.set(title)
+        if not self._prompt_edit_mode:
+            self.prompt_title_entry.config(state="disabled")
+
+        # Text widget: briefly enable to update, then restore disabled state
+        self.prompt_preview.config(state="normal")
         self.prompt_preview.delete("1.0", tk.END)
+        self.prompt_preview.insert("1.0", prompt)
+        if not self._prompt_edit_mode:
+            self.prompt_preview.config(state="disabled")
 
-        if title:
-            # Show title prominently with bold tag
-            self.prompt_preview.insert("1.0", f"📌 {title}\n", "title")
-            if prompt:
-                self.prompt_preview.insert(tk.END, prompt)
-        elif prompt:
-            self.prompt_preview.insert("1.0", prompt)
-        else:
-            self.prompt_preview.insert("1.0", "(empty)")
+        self._update_prompt_char_count()
 
-        self.prompt_preview.config(state=tk.DISABLED)
+    def _update_prompt_char_count(self, event=None):
+        """Update live prompt character count."""
+        prompt_text = self.prompt_preview.get("1.0", "end-1c")
+        self.prompt_char_count_label.config(text=f"{len(prompt_text)} chars")
 
-    def _show_prompt_editor(self):
-        """Show the prompt editor dialog."""
-        dialog = PromptEditorDialog(self.winfo_toplevel(), config=self.config)
+    def _save_prompt(self):
+        """Persist title and prompt text for the currently selected slot."""
+        slot = str(self.slot_var.get())
+        saved_prompts = self.config.setdefault("saved_prompts", {})
+        saved_titles = self.config.setdefault("prompt_titles", {})
 
-        if dialog.result is not None:
-            # Update ALL saved prompts (user may have edited multiple slots)
-            if "all_prompts" in dialog.result:
-                self.config["saved_prompts"] = dialog.result["all_prompts"]
-            else:
-                # Fallback: just update the current slot
-                saved_prompts = self.config.get("saved_prompts", {})
-                saved_prompts[str(dialog.result["slot"])] = dialog.result["prompt"]
-                self.config["saved_prompts"] = saved_prompts
+        saved_prompts[slot] = self.prompt_preview.get("1.0", "end-1c")
+        saved_titles[slot] = self.prompt_title_var.get().strip()
 
-            # Update negative prompts
-            if "all_negative_prompts" in dialog.result:
-                self.config["negative_prompts"] = dialog.result["all_negative_prompts"]
-
-            # Update slot titles
-            if "all_titles" in dialog.result:
-                self.config["prompt_titles"] = dialog.result["all_titles"]
-
-            # Persist capability cache
-            if "model_capabilities" in dialog.result:
-                self.config["model_capabilities"] = dialog.result["model_capabilities"]
-
-            # Update current slot
-            self.config["current_prompt_slot"] = dialog.result["slot"]
-            self.slot_var.set(dialog.result["slot"])
-
-            # Update model if changed
-            self.config["current_model"] = dialog.result["model_endpoint"]
-            self.config["model_display_name"] = dialog.result["model_name"]
-            self.model_label.config(text=dialog.result["model_name"])
-
-            # Update parameter visibility based on new model's capabilities
-            self.update_parameter_visibility(dialog.result["model_endpoint"])
-
-            # Update duration based on model
-            self.config["video_duration"] = dialog.result["duration"]
-            self.duration_var.set(f"{dialog.result['duration']}s")
-
-            self._update_prompt_preview()
-            self._notify_change(
-                f"Settings updated: {dialog.result['model_name']}, slot {dialog.result['slot']}"
-            )
+        self.config["saved_prompts"] = saved_prompts
+        self.config["prompt_titles"] = saved_titles
+        self._update_prompt_char_count()
+        self._exit_edit_mode_internal()  # widgets already saved above
+        self._notify_change(f"Saved prompt slot {slot}")
 
     def _notify_change(self, description: Optional[str] = None):
         """Notify that config has changed."""
         if self.on_config_changed:
             self.on_config_changed(self.config, description)
 
+    def _enter_edit_mode(self):
+        """Switch prompt editor to editable mode."""
+        self._prompt_edit_mode = True
+        self.prompt_title_entry.config(state="normal")
+        self.prompt_preview.config(state="normal", fg=COLORS["text_light"])
+        self.save_prompt_btn.config(state="normal")
+        self.edit_prompt_btn.config(text="Cancel", command=self._cancel_edit)
+
+    def _cancel_edit(self):
+        """Discard edits and return to read-only mode."""
+        self._exit_edit_mode_internal()
+        # Reload the saved content to discard in-progress changes
+        self._update_prompt_preview()
+
+    def _exit_edit_mode_internal(self):
+        """Return prompt editor to read-only mode."""
+        self._prompt_edit_mode = False
+        self.prompt_title_entry.config(state="disabled")
+        self.prompt_preview.config(state="disabled", fg=COLORS["text_dim"])
+        self.save_prompt_btn.config(state="disabled")
+        self.edit_prompt_btn.config(text="Edit", command=self._enter_edit_mode)
+
     def _position_prompt_preview(self):
-        """Place prompt preview over the config area without shifting rows."""
-        if not hasattr(self, "prompt_preview_container"):
-            return
-        if not hasattr(self, "_config_frame"):
-            return
-        if not hasattr(self, "_prompt_row"):
-            return
-        if not hasattr(self, "_slot_container"):
-            return
-
-        try:
-            self.update_idletasks()
-            config_frame = self._config_frame
-            row3_y = self._prompt_row.winfo_y()
-            slot_x = self._slot_container.winfo_x()
-            slot_w = self._slot_container.winfo_width()
-
-            panel_config = {}
-            if hasattr(self, "_ui_config"):
-                panel_config = self._ui_config.get("config_panel", {})
-
-            try:
-                offset_x = int(panel_config.get("prompt_preview_offset_x", 16))
-            except (TypeError, ValueError):
-                offset_x = 16
-            try:
-                right_pad = int(panel_config.get("prompt_preview_right_pad", 0))
-            except (TypeError, ValueError):
-                right_pad = 0
-
-            x = slot_x + slot_w + offset_x
-            y = row3_y
-            max_width = config_frame.winfo_width() - x - right_pad
-            width = max_width if max_width > 0 else 220
-            height = self.prompt_preview.winfo_reqheight() + 16
-
-            self.prompt_preview_container.place(
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-            )
-            self.prompt_preview_container.lift()
-        except Exception:
-            pass
+        """No-op — prompt editor is now in the right column (pack layout)."""
+        pass
 
     def apply_ui_config(self, ui_config: dict):
         """Apply UI layout configuration to config panel widgets."""
         if not ui_config:
             return
-
         self._ui_config = ui_config
         config_panel = ui_config.get("config_panel", {})
         try:
             preview_height = int(config_panel.get("prompt_preview_height", 6))
             preview_font_size = int(config_panel.get("prompt_preview_font_size", 9))
-            negative_height = int(config_panel.get("negative_prompt_height", 1))
         except (TypeError, ValueError):
             return
-
         if hasattr(self, "prompt_preview"):
             self.prompt_preview.config(
-                height=max(1, preview_height),
-                font=("Segoe UI", max(6, preview_font_size)),
+                height=max(4, preview_height),
+                font=(FONT_FAMILY, max(6, preview_font_size)),
             )
-            self.prompt_preview.tag_configure(
-                "title",
-                font=("Segoe UI", max(6, preview_font_size), "bold"),
-                foreground=COLORS["text_light"],
-            )
-
-        if hasattr(self, "prompt_preview_container"):
-            try:
-                preview_width = int(config_panel.get("prompt_preview_width", 0))
-            except (TypeError, ValueError):
-                preview_width = 0
-            if preview_width > 0:
-                try:
-                    self.prompt_preview_container.place_configure(width=preview_width)
-                except Exception:
-                    pass
-
-        if hasattr(self, "neg_entry"):
-            ipady = max(0, (max(1, negative_height) - 1) * 4)
-            try:
-                self.neg_entry.pack_configure(ipady=ipady)
-            except Exception:
-                pass
-
-        self._position_prompt_preview()
 
     def get_config(self) -> dict:
         """Get current configuration."""
@@ -1421,13 +1272,16 @@ class ConfigPanel(tk.Frame):
         var_attrs = [
             "output_mode_var",
             "output_path_var",
+            "model_var",
             "slot_var",
+            "prompt_title_var",
             "loop_video_var",
             "reprocess_var",
             "reprocess_mode_var",
             "verbose_gui_var",
             "folder_pattern_var",
             "folder_match_mode_var",
+            "duration_var",
             "aspect_ratio_var",
             "resolution_var",
             "seed_var",
@@ -1507,7 +1361,7 @@ class ConfigPanel(tk.Frame):
                 ):
                     try:
                         self.video_settings_info.config(
-                            text="(No API key – capabilities unknown)",
+                            text="(model-dependent)",
                             fg=COLORS["text_dim"],
                         )
                     except tk.TclError as e:
@@ -1657,811 +1511,3 @@ class ConfigPanel(tk.Frame):
                     fg=COLORS.get("error", "#FF6464")
                 )
 
-
-class PromptEditorDialog(tk.Toplevel):
-    """Modal dialog for editing prompts with slot and model selection."""
-
-    def __init__(self, parent, config: dict):
-        super().__init__(parent)
-        self.title("Edit Prompt & Settings")
-        self.result = None
-        self.config = config
-        # Pre-set attributes so event callbacks remain safe even if UI setup aborts early
-        self.text: Optional[tk.Text] = None
-        self.custom_status: Optional[tk.Label] = None
-        self.prompt_label: Optional[tk.Label] = None
-        self.duration_label: Optional[tk.Label] = None
-        self.neg_badge: Optional[tk.Label] = None
-        self.neg_status: Optional[tk.Label] = None
-        self.neg_entry: Optional[tk.Entry] = None
-        self.char_count: Optional[tk.Label] = None
-        self.refresh_btn: Optional[tk.Button] = None
-        self.model_status: Optional[tk.Label] = None
-        self.model_combo: Optional[ttk.Combobox] = None
-        self.custom_entry: Optional[tk.Entry] = None
-        self.neg_var: Optional[tk.StringVar] = None
-        self.title_var: Optional[tk.StringVar] = None
-        self.title_entry: Optional[tk.Entry] = None
-
-        # IMPORTANT: Make a deep copy so cancel doesn't affect original config
-        original_prompts = config.get("saved_prompts", {})
-        original_negative_prompts = config.get("negative_prompts", {})
-        original_titles = config.get("prompt_titles", {})
-        self.capabilities = config.get("model_capabilities", {})
-        self.saved_prompts = {k: (v if v else "") for k, v in original_prompts.items()}
-        self.saved_negative_prompts = {
-            k: (v if v else "") for k, v in original_negative_prompts.items()
-        }
-        self.saved_titles = {k: (v if v else "") for k, v in original_titles.items()}
-
-        # Model list - start with cached/fallback, then fetch fresh
-        self.models = ModelFetcher.get_cached_or_fallback(config)
-        self.is_loading_models = False
-
-        # Make modal
-        self.transient(parent)
-        self.grab_set()
-
-        # Configure window
-        self.configure(bg=COLORS["bg_panel"])
-        self.geometry("900x820")
-        self.minsize(720, 560)
-
-        # Increase Combobox dropdown height to show more models at once
-        # Scoped to toplevel window to avoid affecting other windows in the process
-        # Guarded to prevent crashes in headless or unusual Tk backend environments
-        try:
-            root = self.winfo_toplevel()
-            root.option_add("*TCombobox*Listbox.height", COMBOBOX_DROPDOWN_HEIGHT)
-        except tk.TclError as e:
-            logger.warning("Failed to set combobox dropdown height: %s", e)
-
-        # Style to ensure Combobox text is visible on dark background
-        # NOTE: Do NOT use style.theme_use() - it breaks global ttk rendering
-        style = ttk.Style(self)
-        style.configure(
-            "Dialog.TCombobox",
-            fieldbackground=COLORS["bg_input"],
-            background=COLORS["bg_panel"],
-            foreground="#000000",  # Black text on light combobox
-            arrowcolor=COLORS["text_light"],
-        )
-        # Map ensures text is visible in all states
-        style.map(
-            "Dialog.TCombobox",
-            fieldbackground=[("readonly", COLORS["bg_input"]), ("disabled", "#666666")],
-            foreground=[("readonly", "#000000"), ("disabled", "#999999")],
-            selectbackground=[("readonly", COLORS["accent_blue"])],
-            selectforeground=[("readonly", "#FFFFFF")],
-        )
-
-        # Create UI
-        self._setup_ui()
-
-        # Center on parent
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{x}+{y}")
-
-        # Fetch fresh models if API key exists
-        api_key = config.get("falai_api_key", "")
-        if api_key:
-            self._refresh_models()
-
-        # Wait for dialog to close
-        self.wait_window()
-
-    def _setup_ui(self):
-        """Set up the dialog UI with slot and model selectors."""
-        # Title
-        tk.Label(
-            self,
-            text="✏️ PROMPT & MODEL SETTINGS",
-            font=("Segoe UI", 12, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).pack(padx=10, pady=(10, 5), anchor="w")
-
-        # Top controls frame
-        controls_frame = tk.Frame(self, bg=COLORS["bg_input"], padx=10, pady=10)
-        controls_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        # Row 1: Slot Selection
-        slot_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        slot_row.pack(fill=tk.X, pady=(0, 8))
-
-        tk.Label(
-            slot_row,
-            text="Prompt Slot:",
-            font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=12,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        self.slot_var = tk.IntVar(value=self.config.get("current_prompt_slot", 1))
-        self.current_slot = (
-            self.slot_var.get()
-        )  # Track current slot for saving before switch
-
-        for i in range(1, 11):  # 10 slots
-            rb = tk.Radiobutton(
-                slot_row,
-                text=f"{i}",
-                variable=self.slot_var,
-                value=i,
-                font=("Segoe UI", 9),
-                bg=COLORS["bg_input"],
-                fg=COLORS["text_light"],
-                selectcolor=COLORS["bg_main"],
-                activebackground=COLORS["bg_input"],
-                activeforeground=COLORS["text_light"],
-                command=self._on_slot_changed,
-            )
-            rb.pack(side=tk.LEFT, padx=4)
-
-        # Row 1.5: Title field for current slot
-        title_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        title_row.pack(fill=tk.X, pady=(0, 8))
-
-        tk.Label(
-            title_row,
-            text="Slot Title:",
-            font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=12,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        current_slot = self.config.get("current_prompt_slot", 1)
-        self.title_var = tk.StringVar(
-            value=self.saved_titles.get(str(current_slot), "")
-        )
-        self.title_entry = tk.Entry(
-            title_row,
-            textvariable=self.title_var,
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            width=40,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=COLORS["border"],
-        )
-        self.title_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-
-        tk.Label(
-            title_row,
-            text="(optional - for easy identification)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT, padx=5)
-
-        # Row 2: Model Selection
-        model_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        model_row.pack(fill=tk.X, pady=(0, 5))
-
-        tk.Label(
-            model_row,
-            text="Model:",
-            font=("Segoe UI", 10, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=12,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        # Find current model index
-        current_model = self.config.get("current_model", "")
-        model_names = [m["name"] for m in self.models]
-        current_index = 0
-        for i, m in enumerate(self.models):
-            if m["endpoint"] == current_model:
-                current_index = i
-                break
-
-        self.model_var = tk.StringVar(
-            value=model_names[current_index] if model_names else "Loading..."
-        )
-        self.model_combo = ttk.Combobox(
-            model_row,
-            textvariable=self.model_var,
-            values=model_names,
-            state="readonly",
-            font=("Segoe UI", 10),
-            width=28,
-            style="Dialog.TCombobox",
-        )
-        self.model_combo.pack(side=tk.LEFT, padx=5)
-        if model_names:
-            self.model_combo.current(current_index)
-        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
-
-        # Refresh button
-        self.refresh_btn = tk.Button(
-            model_row,
-            text="🔄",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            width=3,
-            command=self._refresh_models,
-        )
-        self.refresh_btn.pack(side=tk.LEFT, padx=2)
-
-        # Duration label
-        duration = self.models[current_index]["duration"] if self.models else 10
-        self.duration_label = tk.Label(
-            model_row,
-            text=f"Duration: {duration}s",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["accent_blue"],
-        )
-        self.duration_label.pack(side=tk.LEFT, padx=5)
-
-        # Model count and status
-        self.model_status = tk.Label(
-            model_row,
-            text=f"({len(self.models)} models)",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        )
-        self.model_status.pack(side=tk.LEFT, padx=5)
-
-        # Negative prompt row (capability-aware)
-        neg_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        neg_row.pack(fill=tk.X, pady=(0, 8))
-
-        tk.Label(
-            neg_row,
-            text="Negative:",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=12,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        self.neg_var = tk.StringVar(
-            value=self.saved_negative_prompts.get(str(self.slot_var.get()), "")
-        )
-        self.neg_entry = tk.Entry(
-            neg_row,
-            textvariable=self.neg_var,
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            width=60,
-        )
-        self.neg_entry.pack(side=tk.LEFT, padx=5, pady=2, fill=tk.X, expand=True)
-
-        self.neg_badge = tk.Label(
-            neg_row,
-            text="Checking",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS.get("warning", "#FFB347"),
-            fg="#1a1a1a",
-            padx=8,
-            pady=3,
-        )
-        self.neg_badge.pack(side=tk.LEFT, padx=6)
-
-        self.neg_status = tk.Label(
-            neg_row,
-            text="Checking support...",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        )
-        self.neg_status.pack(side=tk.LEFT, padx=5)
-
-        # Kick off capability check for initially selected model
-        if self.models:
-            self._check_negative_support(self.models[current_index]["endpoint"])
-        else:
-            self.neg_status.config(
-                text="No models loaded", fg=COLORS.get("warning", "#FFB347")
-            )
-            self.neg_entry.config(state="disabled")
-
-        # Row 3: Browse models link
-        link_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        link_row.pack(fill=tk.X)
-
-        tk.Label(link_row, text="", bg=COLORS["bg_input"], width=12).pack(side=tk.LEFT)
-
-        browse_link = tk.Label(
-            link_row,
-            text="📋 Browse all models on fal.ai →",
-            font=("Segoe UI", 9, "underline"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["accent_blue"],
-            cursor="hand2",
-        )
-        browse_link.pack(side=tk.LEFT, padx=5)
-        browse_link.bind(
-            "<Button-1>",
-            lambda e: os.startfile(FAL_MODELS_URL) if os.name == "nt" else None,
-        )
-
-        # Row 4: Custom model endpoint entry
-        custom_row = tk.Frame(controls_frame, bg=COLORS["bg_input"])
-        custom_row.pack(fill=tk.X, pady=(8, 0))
-
-        tk.Label(
-            custom_row,
-            text="Custom:",
-            font=("Segoe UI", 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-            width=12,
-            anchor="w",
-        ).pack(side=tk.LEFT)
-
-        self.custom_endpoint_var = tk.StringVar(value="")
-        self.custom_entry = tk.Entry(
-            custom_row,
-            textvariable=self.custom_endpoint_var,
-            font=("Consolas", 9),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            width=40,
-        )
-        self.custom_entry.pack(side=tk.LEFT, padx=5)
-
-        # Placeholder text
-        self.custom_entry.insert(0, "fal-ai/kling-video/v2.5/pro/image-to-video")
-        self.custom_entry.config(fg=COLORS["text_dim"])
-
-        def on_custom_focus_in(e):
-            if not self.custom_entry:
-                return
-            if self.custom_entry.get() == "fal-ai/kling-video/v2.5/pro/image-to-video":
-                self.custom_entry.delete(0, tk.END)
-                self.custom_entry.config(fg=COLORS["text_light"])
-
-        def on_custom_focus_out(e):
-            if not self.custom_entry:
-                return
-            if not self.custom_entry.get().strip():
-                self.custom_entry.insert(
-                    0, "fal-ai/kling-video/v2.5/pro/image-to-video"
-                )
-                self.custom_entry.config(fg=COLORS["text_dim"])
-
-        self.custom_entry.bind("<FocusIn>", on_custom_focus_in)
-        self.custom_entry.bind("<FocusOut>", on_custom_focus_out)
-
-        self.use_custom_btn = tk.Button(
-            custom_row,
-            text="Use Custom",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            command=self._use_custom_endpoint,
-        )
-        self.use_custom_btn.pack(side=tk.LEFT, padx=5)
-
-        # Custom endpoint status
-        self.custom_status = tk.Label(
-            custom_row,
-            text="",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-        )
-        self.custom_status.pack(side=tk.LEFT, padx=5)
-
-        # Prompt label
-        prompt_label_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        prompt_label_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
-
-        self.prompt_label = tk.Label(
-            prompt_label_frame,
-            text=f"Prompt for Slot {self.slot_var.get()}:",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        )
-        self.prompt_label.pack(side=tk.LEFT)
-
-        # Character count
-        self.char_count = tk.Label(
-            prompt_label_frame,
-            text="0 chars",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
-        )
-        self.char_count.pack(side=tk.RIGHT)
-
-        # Text area with scrollbar
-        text_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5, side=tk.TOP)
-
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.text = tk.Text(
-            text_frame,
-            wrap=tk.WORD,
-            font=("Consolas", 10),
-            bg=COLORS["bg_main"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            yscrollcommand=scrollbar.set,
-            padx=10,
-            pady=10,
-        )
-        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.text.yview)
-
-        # Bind text changes for character count
-        self.text.bind("<KeyRelease>", self._update_char_count)
-
-        # Load initial prompt for current slot
-        self._load_prompt_for_slot(self.slot_var.get())
-
-        # Button frame
-        btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(fill=tk.X, padx=10, pady=10, side=tk.BOTTOM)
-
-        # Info label
-        tk.Label(
-            btn_frame,
-            text="💾 Changes are saved to kling_config.json",
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
-        ).pack(side=tk.LEFT)
-
-        # Cancel button
-        tk.Button(
-            btn_frame,
-            text="✖ Cancel",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            width=12,
-            command=self._cancel,
-        ).pack(side=tk.RIGHT, padx=5, pady=(5, 0))
-
-        # Save button
-        tk.Button(
-            btn_frame,
-            text="💾 Save",
-            font=("Segoe UI", 10, "bold"),
-            bg="#329632",
-            fg="white",
-            width=12,
-            command=self._save,
-        ).pack(side=tk.RIGHT, padx=5, pady=(5, 0))
-
-    def _on_slot_changed(self):
-        """Handle slot selection change - save current and load new slot's prompt."""
-        # Guard: ensure UI widgets are initialized before accessing them
-        if (
-            not self.text
-            or not self.prompt_label
-            or not self.neg_var
-            or not self.title_var
-        ):
-            return
-
-        # Save current slot's text before switching
-        current_text = self.text.get("1.0", tk.END).strip()
-        self.saved_prompts[str(self.current_slot)] = current_text
-        self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
-        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
-
-        # Switch to new slot
-        new_slot = self.slot_var.get()
-        self.current_slot = new_slot
-        self.prompt_label.config(text=f"Prompt for Slot {new_slot}:")
-        self._load_prompt_for_slot(new_slot)
-
-    def _load_prompt_for_slot(self, slot: int):
-        """Load prompt text for the specified slot."""
-        if not self.text or not self.neg_var or not self.title_var:
-            return
-
-        prompt = self.saved_prompts.get(str(slot), "") or ""
-        neg_prompt = self.saved_negative_prompts.get(str(slot), "") or ""
-        title = self.saved_titles.get(str(slot), "") or ""
-        self.text.delete("1.0", tk.END)
-        self.text.insert("1.0", prompt)
-        self.neg_var.set(neg_prompt)
-        self.title_var.set(title)
-        self._update_char_count()
-
-    def _on_model_changed(self, event=None):
-        """Handle model selection change and update duration options."""
-        # Guard: ensure UI widgets are initialized before accessing them
-        if not self.custom_status or not self.duration_label:
-            return
-
-        model_name = self.model_var.get()
-        for m in self.models:
-            if m["name"] == model_name:
-                # Get duration options from new metadata structure
-                duration_options = m.get("duration_options", m.get("duration", [5, 10]))
-                if isinstance(duration_options, int):
-                    duration_options = [duration_options]
-                duration_default = m.get("duration_default", duration_options[0] if duration_options else 10)
-
-                # Update duration label in dialog
-                self.duration_label.config(text=f"Duration: {duration_default}s")
-
-                # Update parent ConfigPanel's duration dropdown
-                if hasattr(self.parent, 'duration_combo'):
-                    self.parent.duration_combo["values"] = [f"{d}s" for d in duration_options]
-
-                    # Set to default if current duration not valid for new model
-                    current_duration = self.config.get("video_duration", 10)
-                    if current_duration not in duration_options:
-                        self.parent.duration_var.set(f"{duration_default}s")
-                        self.config["video_duration"] = duration_default
-                        logger.info(f"Duration adjusted to {duration_default}s for model {model_name}")
-
-                # Clear custom status when selecting from dropdown
-                self.custom_status.config(text="", fg=COLORS["text_dim"])
-                self._check_negative_support(m.get("endpoint", m.get("endpoint_id", "")))
-                break
-
-    def _use_custom_endpoint(self):
-        """Use the custom endpoint from the entry field."""
-        if (
-            not self.custom_entry
-            or not self.custom_status
-            or not self.model_combo
-            or not self.duration_label
-        ):
-            return
-
-        custom_endpoint = self.custom_entry.get().strip()
-        placeholder = "fal-ai/kling-video/v2.5/pro/image-to-video"
-
-        if not custom_endpoint or custom_endpoint == placeholder:
-            self.custom_status.config(text="Enter endpoint first", fg="#FF6464")
-            return
-
-        # Validate format (should start with fal-ai/ or be a valid path)
-        if not custom_endpoint.startswith("fal-ai/") and "/" not in custom_endpoint:
-            self.custom_status.config(text="Invalid format", fg="#FF6464")
-            return
-
-        # Create display name from endpoint
-        display_name = parse_endpoint_to_display_name(custom_endpoint)
-
-        # Add to models list if not already there
-        existing = next(
-            (m for m in self.models if m["endpoint"] == custom_endpoint), None
-        )
-        if not existing:
-            custom_model = {
-                "name": f"[Custom] {display_name}",
-                "endpoint": custom_endpoint,
-                "duration_options": [5, 10],  # Default options for custom endpoints
-                "duration_default": 10,
-                "description": "Custom endpoint",
-            }
-            self.models.insert(0, custom_model)
-
-            # Update dropdown
-            model_names = [m["name"] for m in self.models]
-            self.model_combo["values"] = model_names
-
-        # Select the custom model
-        for i, m in enumerate(self.models):
-            if m["endpoint"] == custom_endpoint:
-                self.model_combo.current(i)
-                self.model_var.set(m["name"])
-                # Get duration from new structure
-                duration_default = m.get("duration_default", m.get("duration", 10))
-                self.duration_label.config(text=f"Duration: {duration_default}s")
-                break
-
-        self.custom_status.config(text="✓ Custom model set", fg="#64FF64")
-        # Trigger negative prompt capability check for custom endpoint
-        self._check_negative_support(custom_endpoint)
-
-    def _refresh_models(self):
-        """Fetch fresh model list from fal.ai API."""
-        if self.is_loading_models:
-            return
-
-        if not self.refresh_btn or not self.model_status:
-            return
-
-        api_key = self.config.get("falai_api_key", "")
-        if not api_key:
-            self.model_status.config(text="(No API key)", fg="#FF6464")
-            return
-
-        self.is_loading_models = True
-        self.refresh_btn.config(state="disabled")
-        self.model_status.config(text="(Loading...)", fg=COLORS["accent_blue"])
-
-        def on_models_fetched(models, error):
-            # Run on main thread
-            self.after(0, lambda: self._update_models(models, error))
-
-        ModelFetcher.fetch_models(api_key, on_models_fetched)
-
-    def _check_negative_support(self, endpoint_id: str):
-        """Detect if the selected model supports negative_prompt via its OpenAPI schema."""
-        # Use cached capability if present
-        cached = self.capabilities.get(endpoint_id)
-        if cached is not None:
-            self._apply_negative_support(cached)
-            return
-
-        if not self.neg_status or not self.neg_badge or not self.neg_entry:
-            return
-
-        self.neg_status.config(text="Checking support...", fg=COLORS["text_dim"])
-        self.neg_badge.config(text="Checking", bg=COLORS["warning"], fg="black")
-        self.neg_entry.config(state="disabled")
-
-        def worker():
-            supported = False
-            try:
-                import requests
-
-                url = f"https://fal.ai/api/openapi/queue/openapi.json?endpoint_id={endpoint_id}"
-                resp = requests.get(url, timeout=6)
-                if resp.status_code == 200:
-                    props = resp.json().get("paths", {})
-                    for pdata in props.values():
-                        for info in pdata.values():
-                            schema_props = (
-                                info.get("requestBody", {})
-                                .get("content", {})
-                                .get("application/json", {})
-                                .get("schema", {})
-                                .get("properties", {})
-                            )
-                            if any(
-                                "negative" in k.lower() for k in schema_props.keys()
-                            ):
-                                supported = True
-                                break
-                        if supported:
-                            break
-            except Exception as e:
-                logger.debug(f"Negative prompt capability check failed: {e}")
-
-            # Schedule cache update and UI apply on main thread for thread safety
-            def update_on_main():
-                if not self.winfo_exists():
-                    return
-                self.capabilities[endpoint_id] = supported
-                self.config["model_capabilities"] = self.capabilities
-                self._apply_negative_support(supported)
-
-            self.after(0, update_on_main)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _apply_negative_support(self, supported: bool):
-        """Enable/disable negative prompt entry based on support."""
-        if not self.neg_entry or not self.neg_status or not self.neg_badge:
-            return
-
-        if supported:
-            self.neg_entry.config(state="normal")
-            self.neg_status.config(text="Supported by model", fg=COLORS["success"])
-            self.neg_badge.config(text="✓ Supported", bg="#2E7D32", fg="#ffffff")
-        else:
-            self.neg_entry.delete(0, tk.END)
-            self.neg_entry.config(state="disabled")
-            self.neg_status.config(
-                text="Not supported by this model", fg=COLORS["text_dim"]
-            )
-            self.neg_badge.config(text="✗ Unsupported", bg="#C62828", fg="#ffffff")
-
-    def _update_models(self, models: list, error: str):
-        """Update model dropdown with fetched models."""
-        # Safety check: dialog may have been closed before callback fired
-        if not self.winfo_exists():
-            return
-
-        if (
-            not self.refresh_btn
-            or not self.model_status
-            or not self.model_combo
-            or not self.duration_label
-        ):
-            return
-
-        self.is_loading_models = False
-        self.refresh_btn.config(state="normal")
-
-        if error:
-            self.model_status.config(text=f"(Error: {error[:20]})", fg="#FF6464")
-            return
-
-        if not models:
-            self.model_status.config(text="(No models found)", fg="#FF6464")
-            return
-
-        # Update models list
-        self.models = models
-        ModelFetcher.cache_models(self.config, models)
-
-        # Update dropdown
-        model_names = [m["name"] for m in models]
-        self.model_combo["values"] = model_names
-
-        # Try to keep current selection
-        current_endpoint = self.config.get("current_model", "")
-        new_index = 0
-        for i, m in enumerate(models):
-            if m["endpoint"] == current_endpoint:
-                new_index = i
-                break
-
-        self.model_combo.current(new_index)
-        self.model_var.set(model_names[new_index])
-        # Get duration from new structure
-        duration_default = models[new_index].get("duration_default", models[new_index].get("duration", 10))
-        self.duration_label.config(text=f"Duration: {duration_default}s")
-        self.model_status.config(text=f"({len(models)} models)", fg="#64FF64")
-        self._check_negative_support(models[new_index]["endpoint"])
-
-    def _update_char_count(self, event=None):
-        """Update character count label."""
-        if not self.text or not self.char_count:
-            return
-        text = self.text.get("1.0", tk.END).strip()
-        self.char_count.config(text=f"{len(text)} chars")
-
-    def _get_selected_model(self) -> dict:
-        """Get the selected model details."""
-        model_name = self.model_var.get()
-        for m in self.models:
-            if m["name"] == model_name:
-                return m
-        # Fallback to first model or a default
-        if self.models:
-            return self.models[0]
-        return {"name": "Unknown", "endpoint": "", "duration": 10}
-
-    def _save(self):
-        """Save and close with all settings."""
-        if not self.text or not self.neg_var or not self.title_var:
-            return
-
-        # Save current slot's text to local dict
-        current_text = self.text.get("1.0", tk.END).strip()
-        self.saved_prompts[str(self.current_slot)] = current_text
-        self.saved_negative_prompts[str(self.current_slot)] = self.neg_var.get().strip()
-        self.saved_titles[str(self.current_slot)] = self.title_var.get().strip()
-
-        model = self._get_selected_model()
-        self.result = {
-            "slot": self.slot_var.get(),
-            "prompt": current_text,
-            "model_name": model["name"],
-            "model_endpoint": model["endpoint"],
-            "duration": model["duration"],
-            "all_prompts": self.saved_prompts.copy(),  # Include all edited prompts
-            "all_negative_prompts": self.saved_negative_prompts.copy(),
-            "all_titles": self.saved_titles.copy(),  # Include all slot titles
-            "model_capabilities": self.capabilities,
-        }
-        self.destroy()
-
-    def _cancel(self):
-        """Cancel and close."""
-        self.result = None
-        self.destroy()

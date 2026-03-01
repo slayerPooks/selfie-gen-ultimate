@@ -19,24 +19,16 @@ def get_output_video_path(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
+    config: dict = None,
     timestamp: Optional[datetime] = None,
 ) -> Path:
-    """Get the output video path using new enhanced filename format.
+    """Get the output video path: {stem}_{model_short}_{index}.mp4
 
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video will be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
-
-    Returns:
-        Path to output video with format:
-        {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
+    The index is determined by scanning output_folder for existing files so
+    each call returns the next available path for this image+model combination.
     """
     image_name = Path(image_path).stem
-    filename = generator.get_output_filename(image_name, config, timestamp)
+    filename = generator.get_output_filename(image_name, output_folder)
     return Path(output_folder) / filename
 
 
@@ -44,66 +36,24 @@ def check_video_exists(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
+    config: dict = None,
 ) -> tuple[bool, Optional[str]]:
-    """
-    Check if a video already exists for this image (any date variant).
+    """Check if any video already exists for this image+model combination.
 
-    Since date changes daily, checks for pattern:
-    {image_name}-{model_name}-{prompt_part}-p{slot}-*.mp4
-
-    We treat either the base render or its looped sibling as "exists" to
-    avoid overwriting/deleting a looped-only output.
-
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
+    Matches pattern: {stem}_{model_short}_*.mp4  (and *_looped.mp4 variant).
 
     Returns:
-        Tuple of (exists: bool, found_path: str | None)
-        - exists: True if any matching video exists
-        - found_path: Path to the first found video, or None if not found
+        (exists: bool, found_path: str | None)
     """
     import glob
 
     image_name = Path(image_path).stem
-    model_name = generator.model_display_name.replace(" ", "_")
-    slot_str = str(generator.prompt_slot)
+    model_short = generator.get_model_short_name()
+    prefix = f"{image_name}_{model_short}_"
 
-    # Get prompt part
-    prompt_titles = config.get("prompt_titles", {})
-    if slot_str in prompt_titles and prompt_titles[slot_str]:
-        # Sanitize shorthand (same logic as in generator)
-        shorthand = prompt_titles[slot_str]
-        prompt_part = ''.join(
-            c if c.isalnum() or c in ('_', '-', ' ') else ''
-            for c in shorthand
-        ).replace(" ", "_")
-    else:
-        saved_prompts = config.get("saved_prompts", {})
-        prompt_text = saved_prompts.get(slot_str, "")
-        if prompt_text:
-            prompt_part = generator.sanitize_prompt_description(prompt_text)
-        else:
-            prompt_part = "prompt"
-
-    # Build glob pattern (match any date)
-    pattern = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*.mp4"
-    pattern_looped = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*_looped.mp4"
-
-    # Search for matching files
-    search_pattern = str(Path(output_folder) / pattern)
-    search_pattern_looped = str(Path(output_folder) / pattern_looped)
-
-    matches = glob.glob(search_pattern)
-    matches_looped = glob.glob(search_pattern_looped)
-
-    # Return first found match
-    all_matches = matches + matches_looped
-    if all_matches:
-        return True, all_matches[0]
+    matches = glob.glob(str(Path(output_folder) / f"{prefix}*.mp4"))
+    if matches:
+        return True, matches[0]
     return False, None
 
 
@@ -201,49 +151,15 @@ def get_next_available_path(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
+    config: dict = None,
     timestamp: Optional[datetime] = None,
 ) -> Path:
+    """Return the next available output path for this image+model combination.
+
+    With the {stem}_{model_short}_{index}.mp4 naming scheme the index is already
+    auto-incremented by get_output_video_path(), so this is a simple delegation.
     """
-    Find the next available filename with increment suffix.
-
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
-
-    Returns:
-        Next available path with increment suffix
-
-    Examples:
-        Image-Model-Prompt-p2-01-17-2026.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_2.mp4
-        Image-Model-Prompt-p2-01-17-2026_2.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_3.mp4
-    """
-    base_path = get_output_video_path(
-        image_path, output_folder, generator, config, timestamp
-    )
-
-    counter = 1
-    while True:
-        if counter == 1:
-            candidate = base_path
-        else:
-            # Insert counter before .mp4 extension
-            candidate = base_path.with_name(f"{base_path.stem}_{counter}{base_path.suffix}")
-
-        candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
-
-        # Return first gap where neither base nor looped variant exists
-        if not candidate.exists() and not candidate_loop.exists():
-            return candidate
-
-        counter += 1
-        if counter > 999:  # Safety limit
-            raise ValueError(f"Too many versions of {base_path.name}")
+    return get_output_video_path(image_path, output_folder, generator, config, timestamp)
 
 
 @dataclass

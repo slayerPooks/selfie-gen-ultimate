@@ -54,13 +54,13 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", "
 
 
 UI_CONFIG_DEFAULTS = {
-    "window": {"width": 1100, "height": 1200, "min_width": 800, "min_height": 900},
+    "window": {"width": 1100, "height": 950, "min_width": 800, "min_height": 700},
     "config_panel": {
         "prompt_preview_height": 6,
         "prompt_preview_font_size": 9,
         "negative_prompt_height": 1,
     },
-    "drop_zone": {"height": 180},
+    "drop_zone": {"height": 560},
     "queue_panel": {"width": 300},
     "history_panel": {"height": 220, "visible_rows": 8},
     "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
@@ -238,11 +238,21 @@ class KlingGUIWindow:
             min_width = int(window_config.get("min_width", 800))
             min_height = int(window_config.get("min_height", 900))
         except (TypeError, ValueError):
-            window_width, window_height, min_width, min_height = 1100, 1200, 800, 900
+            window_width, window_height, min_width, min_height = 1100, 950, 800, 700
 
         saved_geometry = self.config.get("window_geometry", "")
         if saved_geometry:
             try:
+                # Cap saved height to 90% of screen so window never overflows monitor
+                screen_h = self.root.winfo_screenheight()
+                max_h = int(screen_h * 0.90)
+                geom_size = saved_geometry.split("+")[0]
+                if "x" in geom_size:
+                    w_str, h_str = geom_size.split("x", 1)
+                    capped_h = min(int(h_str), max_h)
+                    saved_geometry = saved_geometry.replace(
+                        f"{w_str}x{h_str}", f"{w_str}x{capped_h}", 1
+                    )
                 self.root.geometry(saved_geometry)
             except Exception:
                 self.root.geometry(f"{window_width}x{window_height}")
@@ -253,9 +263,10 @@ class KlingGUIWindow:
         # Set up the UI
         self._setup_ui()
 
-        # Restore sash positions after UI is built (delayed to ensure widgets are ready)
-        self.root.after(100, self._restore_sash_positions)
-        self.root.after(150, self._apply_ui_config)
+        # Apply ui_config first (minsize, config_panel), then restore sash positions
+        # after widgets are fully rendered. _restore_sash_positions must run last.
+        self.root.after(50, self._apply_ui_config)
+        self.root.after(250, self._restore_sash_positions)
 
         # Enable debug hotkeys/inspector if configured
         self._setup_debug_hotkeys()
@@ -331,9 +342,9 @@ class KlingGUIWindow:
             "folder_match_mode": "partial",  # "partial" or "exact"
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
-            "sash_dropzone": 180,  # Height of drop zone pane
+            "sash_dropzone": 560,  # Height of drop zone pane
             "sash_queue": 300,  # Width of queue pane
-            "sash_log": 380,  # Height of log pane (before history)
+            "sash_log": 180,  # Height of log pane (before history)
         }
 
         # Layer 1: apply bundled defaults template (prompts, model, etc.)
@@ -454,13 +465,7 @@ class KlingGUIWindow:
         main_frame = tk.Frame(self.root, bg=COLORS["bg_main"])
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        # Config panel at top (not resizable)
-        self.config_panel = ConfigPanel(
-            main_frame, config=self.config, on_config_changed=self._on_config_changed
-        )
-        self.config_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Main vertical PanedWindow: Drop Zone | Bottom Section
+        # Main vertical PanedWindow: top_section | bottom_section
         self.main_paned = tk.PanedWindow(
             main_frame,
             orient=tk.VERTICAL,
@@ -471,17 +476,43 @@ class KlingGUIWindow:
         )
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
-        # Drop zone pane (top)
-        drop_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
+        # ── Top section: horizontal split (left: options+drop | right: prompt) ──
+        top_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
+        self.main_paned.add(top_frame, minsize=300)
+
+        self.top_h_paned = tk.PanedWindow(
+            top_frame,
+            orient=tk.HORIZONTAL,
+            bg=COLORS["bg_input"],
+            sashwidth=6,
+            sashrelief=tk.RAISED,
+            sashpad=1,
+        )
+        self.top_h_paned.pack(fill=tk.BOTH, expand=True)
+
+        # Left pane: config options (top) + drop zone (bottom, fills remaining height)
+        left_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_main"])
+        self.config_panel = ConfigPanel(
+            left_pane, config=self.config, on_config_changed=self._on_config_changed,
+            build_prompt=False,
+        )
+        self.config_panel.pack(fill=tk.X, pady=(0, 3))
+        drop_frame = tk.Frame(left_pane, bg=COLORS["bg_main"])
         self.drop_zone = DropZone(
             drop_frame,
             on_files_dropped=self._on_files_dropped,
             on_folder_dropped=self._on_folder_dropped,
         )
         self.drop_zone.pack(fill=tk.BOTH, expand=True)
-        self.main_paned.add(drop_frame, minsize=100)
+        drop_frame.pack(fill=tk.BOTH, expand=True)
+        self.top_h_paned.add(left_pane, minsize=480)
 
-        # Bottom section: Horizontal PanedWindow (Queue | Log+History)
+        # Right pane: prompt editor (full height — spans config + drop zone area)
+        right_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_panel"])
+        self.config_panel.build_prompt_panel(right_pane)
+        self.top_h_paned.add(right_pane, minsize=260)
+
+        # ── Bottom section: Horizontal PanedWindow (Queue | Log+History) ──
         self.bottom_paned = tk.PanedWindow(
             self.main_paned,
             orient=tk.HORIZONTAL,
@@ -539,96 +570,18 @@ class KlingGUIWindow:
         except Exception:
             pass
 
-        try:
-            current_geom = self.root.geometry()
-            x_pos = None
-            y_pos = None
-            if "+" in current_geom:
-                parts = current_geom.split("+")
-                if len(parts) >= 3:
-                    x_pos = parts[1]
-                    y_pos = parts[2]
-            if x_pos is not None and y_pos is not None:
-                self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
-            else:
-                self.root.geometry(f"{width}x{height}")
-        except Exception:
-            pass
-
         if hasattr(self, "config_panel") and hasattr(self.config_panel, "apply_ui_config"):
             self.config_panel.apply_ui_config(self.ui_config)
 
-        try:
-            drop_height = int(self.ui_config.get("drop_zone", {}).get("height", 180))
-            queue_width = int(self.ui_config.get("queue_panel", {}).get("width", 300))
-            history_height = int(
-                self.ui_config.get("history_panel", {}).get("height", 220)
-            )
-        except (TypeError, ValueError):
-            drop_height, queue_width, history_height = 180, 300, 220
-
-        sash_positions = self.ui_config.get("sash_positions", {})
-        log_sash_y = None
-        try:
-            if "dropzone" in sash_positions:
-                drop_value = sash_positions.get("dropzone")
-                if isinstance(drop_value, (list, tuple)) and len(drop_value) >= 2:
-                    drop_height = int(drop_value[1])
-                else:
-                    drop_height = int(drop_value)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            if "queue" in sash_positions:
-                queue_value = sash_positions.get("queue")
-                if isinstance(queue_value, (list, tuple)) and len(queue_value) >= 1:
-                    queue_width = int(queue_value[0])
-                else:
-                    queue_width = int(queue_value)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            if "log" in sash_positions:
-                log_value = sash_positions.get("log")
-                if isinstance(log_value, (list, tuple)) and len(log_value) >= 2:
-                    log_sash_y = int(log_value[1])
-        except (TypeError, ValueError):
-            pass
-
+        # Only configure history tree row count here.
+        # Sash positions are handled exclusively by _restore_sash_positions()
+        # which runs after this method to avoid conflicts.
         try:
             visible_rows = int(
                 self.ui_config.get("history_panel", {}).get("visible_rows", 8)
             )
         except (TypeError, ValueError):
             visible_rows = 8
-
-        self.root.update_idletasks()
-
-        if hasattr(self, "main_paned"):
-            try:
-                self.main_paned.sash_place(0, 0, drop_height)
-            except Exception:
-                pass
-
-        if hasattr(self, "bottom_paned"):
-            try:
-                self.bottom_paned.sash_place(0, queue_width, 0)
-            except Exception:
-                pass
-
-        if hasattr(self, "right_paned"):
-            try:
-                total_height = self.right_paned.winfo_height()
-                if total_height > 0:
-                    if log_sash_y is not None:
-                        self.right_paned.sash_place(0, 0, log_sash_y)
-                    else:
-                        log_height = max(50, total_height - history_height)
-                        self.right_paned.sash_place(0, 0, log_height)
-            except Exception:
-                pass
 
         if hasattr(self, "history_tree"):
             try:
@@ -1081,9 +1034,9 @@ class KlingGUIWindow:
         self._log("UI reloaded from ui_config.json", "success")
 
     def _setup_header(self):
-        """Set up the header bar."""
-        header = tk.Frame(self.root, bg=COLORS["bg_panel"], height=40)
-        header.pack(fill=tk.X, padx=10, pady=10)
+        """Set up the header bar (title only — status indicators are in the control bar)."""
+        header = tk.Frame(self.root, bg=COLORS["bg_panel"], height=34)
+        header.pack(fill=tk.X, padx=10, pady=(8, 4))
         header.pack_propagate(False)
 
         title = tk.Label(
@@ -1093,33 +1046,7 @@ class KlingGUIWindow:
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        title.pack(side=tk.LEFT, padx=10, pady=8)
-
-        # DnD status
-        dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
-        dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
-        dnd_label = tk.Label(
-            header,
-            text=dnd_status,
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_panel"],
-            fg=dnd_color,
-        )
-        dnd_label.pack(side=tk.RIGHT, padx=10, pady=8)
-
-        # API key status indicator (green = set, red = not set; click to edit)
-        api_key = self.config.get("falai_api_key", "")
-        api_set = bool(api_key and api_key.strip())
-        self.api_key_indicator = tk.Label(
-            header,
-            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["success"] if api_set else COLORS["error"],
-            cursor="hand2",
-        )
-        self.api_key_indicator.pack(side=tk.RIGHT, padx=(0, 4), pady=8)
-        self.api_key_indicator.bind("<Button-1>", lambda e: self._prompt_api_key())
+        title.pack(side=tk.LEFT, padx=10, pady=6)
 
     def _prompt_api_key(self):
         """Open a dialog to enter / update the fal.ai API key."""
@@ -1136,11 +1063,13 @@ class KlingGUIWindow:
         new_key = new_key.strip()
         self.config["falai_api_key"] = new_key
         self._save_config()
-        # Update indicator colour and text
+        # Update indicator border colour and text
         api_set = bool(new_key)
+        border_color = COLORS["success"] if api_set else COLORS["error"]
+        if hasattr(self, "api_key_frame"):
+            self.api_key_frame.config(bg=border_color)
         self.api_key_indicator.config(
-            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set",
-            fg=COLORS["success"] if api_set else COLORS["error"],
+            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set — click to set",
         )
         # Re-initialise the generator with the new key
         self._init_generator()
@@ -1203,15 +1132,48 @@ class KlingGUIWindow:
         btn_frame = tk.Frame(header, bg=COLORS["bg_panel"])
         btn_frame.pack(side=tk.RIGHT)
 
-        ttk.Button(btn_frame, text="Open File", command=self._open_selected_file).pack(
-            side=tk.LEFT, padx=2
-        )
-        ttk.Button(
-            btn_frame, text="Open Folder", command=self._open_selected_folder
+        tk.Button(
+            btn_frame,
+            text="Open File",
+            command=self._open_selected_file,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
         ).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Refresh", command=self._refresh_history_view).pack(
-            side=tk.LEFT, padx=2
-        )
+        tk.Button(
+            btn_frame,
+            text="Open Folder",
+            command=self._open_selected_folder,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            btn_frame,
+            text="Refresh",
+            command=self._refresh_history_view,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=2)
 
         columns = ("time", "source", "output", "status")
         self.history_tree = ttk.Treeview(
@@ -1258,46 +1220,68 @@ class KlingGUIWindow:
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
-        # Right side: Control buttons
-        self.close_btn = tk.Button(
-            control_frame,
-            text="❌ Close",
-            font=("Segoe UI", 10),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_close,
+        # Left side: API key badge with colored border — click to set key
+        api_key = self.config.get("falai_api_key", "")
+        api_set = bool(api_key and api_key.strip())
+        border_color = COLORS["success"] if api_set else COLORS["error"]
+        self.api_key_frame = tk.Frame(control_frame, bg=border_color, padx=2, pady=2)
+        self.api_key_frame.pack(side=tk.LEFT, padx=(0, 10))
+        self.api_key_indicator = tk.Label(
+            self.api_key_frame,
+            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set — click to set",
+            font=("Segoe UI", 9, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            padx=7, pady=3,
+            cursor="hand2",
         )
-        self.close_btn.pack(side=tk.RIGHT, padx=5)
+        self.api_key_indicator.pack()
+        self.api_key_indicator.bind("<Button-1>", lambda e: self._prompt_api_key())
+
+        dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
+        dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
+        tk.Label(
+            control_frame, text=dnd_status,
+            font=("Segoe UI", 8), bg=COLORS["bg_main"], fg=dnd_color,
+        ).pack(side=tk.LEFT)
+
+        # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
+        _btn_kwargs = dict(
+            font=("Segoe UI", 10), padx=14, pady=4,
+            relief=tk.FLAT, borderwidth=0,
+            activeforeground="white",
+        )
+        self.close_btn = tk.Button(
+            control_frame, text="Close",
+            bg=COLORS["btn_red"], fg="white",
+            activebackground=COLORS["btn_red"],
+            command=self._on_close, **_btn_kwargs,
+        )
+        self.close_btn.pack(side=tk.RIGHT, padx=4)
 
         self.clear_btn = tk.Button(
-            control_frame,
-            text="🗑️ Clear",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._clear_queue,
+            control_frame, text="Clear",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._clear_queue, **_btn_kwargs,
         )
-        self.clear_btn.pack(side=tk.RIGHT, padx=5)
+        self.clear_btn.pack(side=tk.RIGHT, padx=4)
 
         self.retry_btn = tk.Button(
-            control_frame,
-            text="🔄 Retry Failed",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._retry_failed,
+            control_frame, text="Retry Failed",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._retry_failed, **_btn_kwargs,
         )
-        self.retry_btn.pack(side=tk.RIGHT, padx=5)
+        self.retry_btn.pack(side=tk.RIGHT, padx=4)
 
         self.pause_btn = tk.Button(
-            control_frame,
-            text="⏸️ Pause",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._toggle_pause,
+            control_frame, text="Pause",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._toggle_pause, **_btn_kwargs,
         )
-        self.pause_btn.pack(side=tk.RIGHT, padx=5)
+        self.pause_btn.pack(side=tk.RIGHT, padx=4)
 
     def _init_generator(self):
         """Initialize the video generator and queue manager."""
@@ -1684,10 +1668,10 @@ class KlingGUIWindow:
 
         if self.queue_manager.is_paused:
             self.queue_manager.resume_processing()
-            self.pause_btn.config(text="⏸️ Pause")
+            self.pause_btn.config(text="Pause")
         else:
             self.queue_manager.pause_processing()
-            self.pause_btn.config(text="▶️ Resume")
+            self.pause_btn.config(text="Resume")
 
     def _retry_failed(self):
         """Retry all failed items."""
@@ -1743,14 +1727,28 @@ class KlingGUIWindow:
     def _restore_sash_positions(self):
         """Restore saved sash positions for all PanedWindows."""
         try:
+            # Ensure all widgets are rendered before placing sashes
+            self.root.update_idletasks()
+
             # Get saved positions from config (with new defaults)
-            dropzone_pos = self.config.get("sash_dropzone", 180)
+            top_section_pos = self.config.get("sash_dropzone", 450)
+            # Migrate old too-small default to the correct open height
+            if top_section_pos < 500:
+                top_section_pos = 560
+            prompt_split = self.config.get("sash_prompt_split", 590)
             queue_pos = self.config.get("sash_queue", 300)
             log_pos = self.config.get("sash_log", 380)
+            # Migrate old small log height to a reasonable default
+            if log_pos < 200:
+                log_pos = 380
 
-            # Restore main paned (drop zone height)
+            # Restore main paned (top section height)
             if hasattr(self, "main_paned"):
-                self.main_paned.sash_place(0, 0, dropzone_pos)
+                self.main_paned.sash_place(0, 0, top_section_pos)
+
+            # Restore horizontal split (options+drop | prompt)
+            if hasattr(self, "top_h_paned"):
+                self.top_h_paned.sash_place(0, prompt_split, 0)
 
             # Restore bottom paned (queue width)
             if hasattr(self, "bottom_paned"):
@@ -1778,6 +1776,14 @@ class KlingGUIWindow:
                         self.config["sash_dropzone"] = sash_pos[
                             1
                         ]  # Y position for vertical paned
+                except Exception:
+                    pass
+
+            if hasattr(self, "top_h_paned"):
+                try:
+                    sash_pos = self.top_h_paned.sash_coord(0)
+                    if sash_pos:
+                        self.config["sash_prompt_split"] = sash_pos[0]  # X position
                 except Exception:
                     pass
 
