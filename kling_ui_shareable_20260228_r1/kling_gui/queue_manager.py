@@ -29,7 +29,11 @@ def get_output_video_path(
     each call returns the next available path for this image+model combination.
     """
     image_name = Path(image_path).stem
-    filename = generator.get_output_filename(image_name, output_folder)
+    try:
+        filename = generator.get_output_filename(image_name, output_folder)
+    except TypeError:
+        # Backward compatibility for older generator signatures.
+        filename = generator.get_output_filename(image_name, config, timestamp)
     return Path(output_folder) / filename
 
 
