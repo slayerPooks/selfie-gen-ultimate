@@ -9,6 +9,7 @@ import platform
 import subprocess
 import json
 import random
+import re
 from typing import Callable, Dict, List, Optional
 
 from ..theme import COLORS, FONT_FAMILY
@@ -864,10 +865,15 @@ class SelfieTab(tk.Frame):
         self._set_busy(False)
         if result:
             self._last_result_path = result
-            self.image_session.add_image(result, "selfie", label="Selfie")
-            self.log(
-                f"Selfie generated: {os.path.basename(result)}", "success"
-            )
+            similarity = self._extract_similarity_from_result_path(result)
+            selfie_label = "Selfie"
+            if similarity is not None:
+                selfie_label = f"Selfie | sim {similarity}"
+            self.image_session.add_image(result, "selfie", label=selfie_label)
+            message = f"Selfie generated: {os.path.basename(result)}"
+            if similarity is not None:
+                message = f"Selfie generated (Similarity {similarity}): {os.path.basename(result)}"
+            self.log(message, "success")
             self._refresh_result_actions()
         else:
             self.log("Selfie generation failed", "error")
@@ -879,22 +885,45 @@ class SelfieTab(tk.Frame):
             return "Model"
         return text[:18]
 
+    @staticmethod
+    def _extract_similarity_from_result_path(path: str) -> Optional[str]:
+        """Extract similarity token from output filename (e.g. *_sim72_001.png)."""
+        if not path:
+            return None
+        name = os.path.basename(path).lower()
+        match = re.search(r"_sim(\d+|na)_\d{3}\.png$", name)
+        if not match:
+            return None
+        token = match.group(1)
+        return "n/a" if token == "na" else f"{token}%"
+
+    def _format_selfie_label(self, model_label: str, result_path: str) -> str:
+        short_model = self._truncate_model_label(model_label)
+        similarity = self._extract_similarity_from_result_path(result_path)
+        if similarity is None:
+            return short_model
+        return f"{short_model} | sim {similarity}"
+
     def _on_complete_batch(self, results, failed_models):
         self._set_busy(False)
 
         if results:
             for model, result in results:
                 label = model.get("label", model.get("endpoint", "model"))
+                similarity = self._extract_similarity_from_result_path(result)
                 self._last_result_path = result
                 self.image_session.add_image(
                     result,
                     "selfie",
-                    label=self._truncate_model_label(label),
+                    label=self._format_selfie_label(label, result),
                 )
-                self.log(
-                    f"Selfie generated [{label}]: {os.path.basename(result)}",
-                    "success",
-                )
+                message = f"Selfie generated [{label}]: {os.path.basename(result)}"
+                if similarity is not None:
+                    message = (
+                        f"Selfie generated [{label}] (Similarity {similarity}): "
+                        f"{os.path.basename(result)}"
+                    )
+                self.log(message, "success")
             self._refresh_result_actions()
         else:
             self.log("Selfie generation failed for all selected models", "error")
