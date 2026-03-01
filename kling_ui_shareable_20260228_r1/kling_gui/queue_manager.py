@@ -5,6 +5,7 @@ Queue Manager - Thread-safe queue for processing images with status tracking.
 import threading
 import os
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Tuple
 from pathlib import Path
@@ -169,10 +170,28 @@ def get_next_available_path(
 ) -> Path:
     """Return the next available output path for this image+model combination.
 
-    With the {stem}_{model_short}_{index}.mp4 naming scheme the index is already
-    auto-incremented by get_output_video_path(), so this is a simple delegation.
+    Starts from generator-provided naming, then enforces a free candidate locally
+    to keep increment behavior deterministic regardless of generator internals.
     """
-    return get_output_video_path(image_path, output_folder, generator, config, timestamp)
+    candidate = get_output_video_path(image_path, output_folder, generator, config, timestamp)
+    candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
+    if not candidate.exists() and not candidate_loop.exists():
+        return candidate
+
+    match = re.match(r"^(.*_)(\d+)$", candidate.stem)
+    if match:
+        stem_prefix = match.group(1)
+        counter = int(match.group(2))
+    else:
+        stem_prefix = f"{candidate.stem}_"
+        counter = 0
+
+    while True:
+        counter += 1
+        candidate = candidate.with_name(f"{stem_prefix}{counter}{candidate.suffix}")
+        candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
+        if not candidate.exists() and not candidate_loop.exists():
+            return candidate
 
 
 @dataclass
