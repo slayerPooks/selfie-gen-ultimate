@@ -270,7 +270,8 @@ class OutpaintTab(tk.Frame):
             try:
                 from outpaint_generator import OutpaintGenerator
 
-                gen = OutpaintGenerator(api_key)
+                freeimage_key = self.get_config().get("freeimage_api_key")
+                gen = OutpaintGenerator(api_key, freeimage_key=freeimage_key)
                 gen.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)

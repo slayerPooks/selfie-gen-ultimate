@@ -341,6 +341,7 @@ class KlingGUIWindow:
             "loop_videos": True,  # Loop videos ON by default
             "allow_reprocess": True,
             "reprocess_mode": "increment",
+            "freeimage_api_key": "6d207e02198a847aa98d0a2a901485a5",
             # Folder processing settings
             "folder_filter_pattern": "",
             "folder_match_mode": "partial",  # "partial" or "exact"
@@ -1165,35 +1166,77 @@ class KlingGUIWindow:
         )
         title.pack(side=tk.LEFT, padx=10, pady=6)
 
-    def _prompt_api_key(self):
-        """Open a dialog to enter / update the fal.ai API key."""
-        from tkinter import simpledialog
-        current = self.config.get("falai_api_key", "")
+    # -- API key badge helpers ------------------------------------------------
+
+    def _create_api_badge(self, parent, config_key: str, label: str, prompt_text: str):
+        """Create a single API key badge with colored border, stored in _api_badges."""
+        value = self.config.get(config_key, "")
+        is_set = bool(value and value.strip())
+        border_color = COLORS["success"] if is_set else COLORS["error"]
+
+        frame = tk.Frame(parent, bg=border_color, padx=2, pady=2)
+        frame.pack(side=tk.LEFT, padx=(0, 6))
+
+        indicator = tk.Label(
+            frame,
+            text=f"{label}: Set" if is_set else f"{label}: Not Set",
+            font=("Segoe UI", 8, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            padx=5, pady=2,
+            cursor="hand2",
+        )
+        indicator.pack()
+        indicator.bind(
+            "<Button-1>",
+            lambda e, k=config_key, lb=label, pt=prompt_text: self._prompt_key(k, lb, pt),
+        )
+
+        self._api_badges[config_key] = {"frame": frame, "label_widget": indicator, "label": label}
+
+    def _prompt_key(self, config_key: str, label: str, prompt_text: str):
+        """Generic dialog to set/update any API key."""
+        current = self.config.get(config_key, "")
         new_key = simpledialog.askstring(
-            "fal.ai API Key",
-            "Enter your fal.ai API key:\n(Get yours at https://fal.ai/dashboard/keys)",
+            f"{label} API Key",
+            prompt_text,
             initialvalue=current,
             parent=self.root,
         )
         if new_key is None:
             return  # User cancelled
         new_key = new_key.strip()
-        self.config["falai_api_key"] = new_key
+
+        # For freeimage, blank means revert to default guest key
+        if config_key == "freeimage_api_key" and not new_key:
+            new_key = "6d207e02198a847aa98d0a2a901485a5"
+
+        self.config[config_key] = new_key
         self._save_config()
-        # Update indicator border colour and text
-        api_set = bool(new_key)
-        border_color = COLORS["success"] if api_set else COLORS["error"]
-        if hasattr(self, "api_key_frame"):
-            self.api_key_frame.config(bg=border_color)
-        self.api_key_indicator.config(
-            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set — click to set",
-        )
-        # Re-initialise the generator with the new key
-        self._init_generator()
-        if api_set:
-            self._log("API key updated and saved.", "success")
+        self._update_api_badge(config_key)
+
+        # fal.ai key changes need generator re-init
+        if config_key == "falai_api_key":
+            self._init_generator()
+
+        if new_key:
+            self._log(f"{label} key updated and saved.", "success")
         else:
-            self._log("API key cleared.", "warning")
+            self._log(f"{label} key cleared.", "warning")
+
+    def _update_api_badge(self, config_key: str):
+        """Refresh border color and text for one API key badge."""
+        badge = self._api_badges.get(config_key)
+        if not badge:
+            return
+        value = self.config.get(config_key, "")
+        is_set = bool(value and value.strip())
+        border_color = COLORS["success"] if is_set else COLORS["error"]
+        badge["frame"].config(bg=border_color)
+        lbl = badge["label"]
+        badge["label_widget"].config(
+            text=f"{lbl}: Set" if is_set else f"{lbl}: Not Set",
+        )
 
     def _setup_queue_panel_content(self, queue_frame):
         """Set up the queue panel content inside the given frame."""
@@ -1337,23 +1380,18 @@ class KlingGUIWindow:
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
-        # Left side: API key badge with colored border — click to set key
-        api_key = self.config.get("falai_api_key", "")
-        api_set = bool(api_key and api_key.strip())
-        border_color = COLORS["success"] if api_set else COLORS["error"]
-        self.api_key_frame = tk.Frame(control_frame, bg=border_color, padx=2, pady=2)
-        self.api_key_frame.pack(side=tk.LEFT, padx=(0, 10))
-        self.api_key_indicator = tk.Label(
-            self.api_key_frame,
-            text="🔑 API Key: Set" if api_set else "🔑 API Key: Not Set — click to set",
-            font=("Segoe UI", 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            padx=7, pady=3,
-            cursor="hand2",
-        )
-        self.api_key_indicator.pack()
-        self.api_key_indicator.bind("<Button-1>", lambda e: self._prompt_api_key())
+        # Left side: Unified API key badges — click to set each key
+        self._api_badges = {}
+        keys_config = [
+            ("falai_api_key", "Fal.ai",
+             "Enter your fal.ai API key:\n(https://fal.ai/dashboard/keys)"),
+            ("openrouter_api_key", "OpenRouter",
+             "Enter your OpenRouter API key:\n(https://openrouter.ai/keys)"),
+            ("freeimage_api_key", "Freeimage",
+             "Enter Freeimage API key\n(leave blank for default guest key):"),
+        ]
+        for config_key, label, prompt_text in keys_config:
+            self._create_api_badge(control_frame, config_key, label, prompt_text)
 
         dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
         dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]

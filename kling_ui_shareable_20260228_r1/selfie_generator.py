@@ -14,8 +14,9 @@ class SelfieGenerator:
 
     ENDPOINT = "fal-ai/flux-pulid"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, freeimage_key: Optional[str] = None):
         self.api_key = api_key
+        self._freeimage_key = freeimage_key
         self._progress_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
@@ -59,7 +60,8 @@ class SelfieGenerator:
         # Upload identity image
         self._report("Uploading identity reference...", "upload")
         image_url = upload_to_freeimage(
-            image_path, progress_cb=self._progress_callback
+            image_path, progress_cb=self._progress_callback,
+            api_key=self._freeimage_key,
         )
         if not image_url:
             self._report("Failed to upload image", "error")

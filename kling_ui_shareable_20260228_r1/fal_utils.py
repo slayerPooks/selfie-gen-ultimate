@@ -324,6 +324,21 @@ def fal_queue_poll(
     return None
 
 
+def _unwrap_payload(data: dict) -> dict:
+    """Unwrap nested output/data wrappers to find the payload with images/video.
+
+    fal.ai responses may nest the actual result under 'output' or 'data' keys.
+    This helper drills down to the innermost dict containing 'images' or 'video'.
+    """
+    if "output" in data:
+        return data["output"]
+    if "video" in data or "images" in data:
+        return data
+    if "data" in data:
+        return data["data"]
+    return data
+
+
 def _extract_result(
     status_result: dict,
     status_headers: dict,
@@ -338,17 +353,10 @@ def _extract_result(
     - response_url indirection (fetches the actual result)
     Returns the raw result dict so callers can inspect keys they care about.
     """
-    # Structure 1: has an 'output' key
-    if "output" in status_result:
-        return status_result["output"]
-
-    # Structure 2: direct video key
-    if "video" in status_result or "images" in status_result:
-        return status_result
-
-    # Structure 3: has a 'data' key
-    if "data" in status_result:
-        return status_result["data"]
+    # Structures 1-3: output / direct / data wrappers
+    unwrapped = _unwrap_payload(status_result)
+    if unwrapped is not status_result:
+        return unwrapped
 
     # Structure 4: response_url indirection
     response_url = status_result.get("response_url")
@@ -375,9 +383,23 @@ def _extract_result(
                     if progress_cb:
                         progress_cb("API validation error in result", "error")
                     return None
-                return result_data
+                # Unwrap nested wrappers in the fetched result too
+                return _unwrap_payload(result_data)
+            else:
+                logger.error(
+                    "response_url returned HTTP %s: %s",
+                    r.status_code, r.text[:200],
+                )
+                if progress_cb:
+                    progress_cb(
+                        f"response_url failed: HTTP {r.status_code}", "error"
+                    )
+                return None
         except Exception as e:
             logger.warning("Failed to fetch response_url: %s", e)
+            if progress_cb:
+                progress_cb(f"Failed to fetch result: {e}", "error")
+            return None
 
     logger.error("Could not extract result from COMPLETED response")
     if progress_cb:

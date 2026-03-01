@@ -71,49 +71,6 @@ class PrepTab(tk.Frame):
         self._selfie_config_getter = getter
 
     def _build_ui(self):
-        # API Key section
-        key_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        key_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
-
-        tk.Label(
-            key_frame,
-            text="OpenRouter API Key:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).pack(side=tk.LEFT)
-
-        self.api_key_var = tk.StringVar(
-            value=self.config.get("openrouter_api_key", "")
-        )
-        self.key_entry = tk.Entry(
-            key_frame,
-            textvariable=self.api_key_var,
-            show="*",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-            width=30,
-        )
-        self.key_entry.pack(
-            side=tk.LEFT, padx=(5, 0), fill=tk.X, expand=True
-        )
-
-        self.save_key_btn = tk.Button(
-            key_frame,
-            text="Save",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_green"],
-            fg="white",
-            command=self._on_save_key,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
-        )
-        self.save_key_btn.pack(side=tk.LEFT, padx=(5, 0))
-
         # Model selection
         model_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         model_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -295,14 +252,6 @@ class PrepTab(tk.Frame):
         if self._config_saver:
             self._config_saver()
 
-    def _on_save_key(self):
-        key = self.api_key_var.get().strip()
-        if not key:
-            self.log("No API key to save", "warning")
-            return
-        self._save_config_now()
-        self.log("API key saved", "success")
-
     def _refresh_model_combo(self):
         """Rebuild combobox values from _all_models."""
         names = [m[0] for m in self._all_models]
@@ -354,9 +303,9 @@ class PrepTab(tk.Frame):
         if self._busy:
             return
 
-        api_key = self.api_key_var.get().strip()
+        api_key = self.get_config().get("openrouter_api_key", "").strip()
         if not api_key:
-            self.log("OpenRouter API key required", "error")
+            self.log("OpenRouter API key required — set it in the bottom bar", "error")
             return
 
         image_path = self.image_session.active_image_path
@@ -459,9 +408,8 @@ class PrepTab(tk.Frame):
         )
 
     def get_config_updates(self) -> dict:
-        """Return config values to save."""
+        """Return config values to save (openrouter_api_key managed by bottom bar)."""
         return {
-            "openrouter_api_key": self.api_key_var.get().strip(),
             "openrouter_model": self._get_selected_model_endpoint(),
             "openrouter_custom_models": list(self._custom_models),
         }
