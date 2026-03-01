@@ -49,11 +49,24 @@ def check_video_exists(
 
     image_name = Path(image_path).stem
     model_short = generator.get_model_short_name()
-    prefix = f"{image_name}_{model_short}_"
+    prompt_slot = (config or {}).get("current_prompt_slot", getattr(generator, "prompt_slot", 1))
+    try:
+        prompt_slot = max(1, int(prompt_slot))
+    except (TypeError, ValueError):
+        prompt_slot = 1
 
-    matches = glob.glob(str(Path(output_folder) / f"{prefix}*.mp4"))
-    if matches:
-        return True, matches[0]
+    slot_prefix = f"{image_name}_{model_short}_p{prompt_slot}_"
+    slot_matches = sorted(glob.glob(str(Path(output_folder) / f"{slot_prefix}*.mp4")))
+    if slot_matches:
+        return True, slot_matches[0]
+
+    # Backward compatibility: legacy filenames without slot suffix map to slot 1.
+    if prompt_slot == 1:
+        legacy_prefix = f"{image_name}_{model_short}_"
+        legacy_matches = sorted(glob.glob(str(Path(output_folder) / f"{legacy_prefix}*.mp4")))
+        for path in legacy_matches:
+            if f"_{model_short}_p" not in Path(path).stem:
+                return True, path
     return False, None
 
 
@@ -489,8 +502,12 @@ class QueueManager:
 
                     elif reprocess_mode == "overwrite":
                         # Overwrite mode - delete existing file and looped variant
-                        existing_path = get_output_video_path(
-                            item.path, actual_output, self.generator, config, generation_timestamp
+                        existing_path = (
+                            Path(found_video_path)
+                            if found_video_path
+                            else get_output_video_path(
+                                item.path, actual_output, self.generator, config, generation_timestamp
+                            )
                         )
                         looped_path = existing_path.with_name(
                             f"{existing_path.stem}_looped{existing_path.suffix}"
@@ -511,6 +528,9 @@ class QueueManager:
                             if self.on_processing_complete:
                                 self.on_processing_complete(item)
                             continue
+
+                        # Keep overwrite target stable even if generator picks a new indexed filename.
+                        custom_output_path = str(existing_path)
 
                     elif reprocess_mode == "increment":
                         # Increment mode - find next available filename

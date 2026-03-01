@@ -855,8 +855,12 @@ class ConfigPanel(tk.Frame):
                 break
         else:
             current_name = self.config.get("model_display_name", "")
-            if current_name in model_names:
-                selected_index = model_names.index(current_name)
+            name_index = next(
+                (i for i, model in enumerate(self.models) if model.get("name") == current_name),
+                None,
+            )
+            if name_index is not None:
+                selected_index = name_index
 
         if model_names:
             self.model_combo.current(selected_index)
@@ -942,6 +946,36 @@ class ConfigPanel(tk.Frame):
 
         self.config["current_model"] = model_endpoint
         self.config["model_display_name"] = selected_model.get("name", selected_name)
+
+        # Keep duration choices aligned with model metadata even without schema/API access.
+        duration_options = selected_model.get("duration_options", [])
+        if isinstance(duration_options, int):
+            duration_options = [duration_options]
+        if isinstance(duration_options, list):
+            normalized = []
+            for value in duration_options:
+                try:
+                    normalized.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+            if normalized:
+                self.duration_combo.config(values=[f"{value}s" for value in normalized])
+                default_duration = selected_model.get("duration_default", normalized[0])
+                try:
+                    default_duration = int(default_duration)
+                except (TypeError, ValueError):
+                    default_duration = normalized[0]
+
+                current_text = self.duration_var.get().rstrip("s").strip()
+                current_duration = (
+                    int(current_text) if current_text.isdigit() else default_duration
+                )
+                if current_duration not in normalized:
+                    current_duration = default_duration
+
+                self.duration_var.set(f"{current_duration}s")
+                self.config["video_duration"] = current_duration
+                self.duration_label.config(text=f"{current_duration}s duration")
 
         self.update_parameter_visibility(model_endpoint)
 

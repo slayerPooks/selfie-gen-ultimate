@@ -118,11 +118,15 @@ class FalAIKlingGenerator:
                 return "k30pro" if "pro" in endpoint else "k30std"
             elif "v2.6" in endpoint:
                 return "k26pro"
-            elif "v2.5-turbo" in endpoint or "v2.5/turbo" in endpoint:
+            elif (
+                "v2.5-turbo" in endpoint
+                or "v2.5/turbo" in endpoint
+                or "v2.5turbo" in endpoint
+            ):
                 return "k25turbo"
             elif "v2.5" in endpoint:
                 return "k25"
-            elif "v2.1/master" in endpoint or "v2.1/master" in endpoint:
+            elif "v2.1/master" in endpoint:
                 return "k21master"
             elif "v2.1" in endpoint:
                 return "k21pro"
@@ -242,7 +246,11 @@ class FalAIKlingGenerator:
         import glob as _glob
 
         model_short = self.get_model_short_name()
-        prefix = f"{image_stem}_{model_short}_"
+        try:
+            slot = max(1, int(getattr(self, "prompt_slot", 1)))
+        except (TypeError, ValueError):
+            slot = 1
+        prefix = f"{image_stem}_{model_short}_p{slot}_"
 
         max_index = 0
         if output_folder:
@@ -332,8 +340,29 @@ class FalAIKlingGenerator:
             char_name = Path(image_path).stem
             target_folder = output_folder if output_folder else self.downloads_folder
             model_short = self.get_model_short_name()
-            pattern = str(Path(target_folder) / f"{char_name}_{model_short}_*.mp4")
-            return bool(_glob.glob(pattern))
+            try:
+                slot = max(1, int(getattr(self, "prompt_slot", 1)))
+            except (TypeError, ValueError):
+                slot = 1
+
+            slot_pattern = str(
+                Path(target_folder) / f"{char_name}_{model_short}_p{slot}_*.mp4"
+            )
+            slot_matches = _glob.glob(slot_pattern)
+            if slot_matches:
+                return True
+
+            # Backward compatibility: treat legacy (pre-slot) files as slot 1 duplicates.
+            if slot == 1:
+                legacy_pattern = str(Path(target_folder) / f"{char_name}_{model_short}_*.mp4")
+                legacy_matches = [
+                    path
+                    for path in _glob.glob(legacy_pattern)
+                    if f"_{model_short}_p" not in Path(path).stem
+                ]
+                return bool(legacy_matches)
+
+            return False
         except Exception:
             return False
 
