@@ -16,13 +16,77 @@ from path_utils import VALID_EXTENSIONS
 logger = logging.getLogger(__name__)
 
 
+def _model_short_from_endpoint(endpoint: str) -> str:
+    """Derive model short name using the same mapping logic as generator."""
+    endpoint = (endpoint or "").lower()
+    if not endpoint:
+        return "model"
+
+    if "kling" in endpoint:
+        if "v3" in endpoint:
+            return "k30pro" if "pro" in endpoint else "k30std"
+        if "v2.6" in endpoint:
+            return "k26pro"
+        if "v2.5-turbo" in endpoint or "v2.5/turbo" in endpoint or "v2.5turbo" in endpoint:
+            return "k25turbo"
+        if "v2.5" in endpoint:
+            return "k25"
+        if "v2.1/master" in endpoint:
+            return "k21master"
+        if "v2.1" in endpoint:
+            return "k21pro"
+        if "v2/master" in endpoint:
+            return "k20master"
+        if "v1.6" in endpoint:
+            return "k16"
+        if "v1.5" in endpoint:
+            return "k15"
+        if "o1" in endpoint:
+            return "kO1"
+        return "kling"
+
+    if "wan" in endpoint:
+        return "wan25" if "25" in endpoint else "wan"
+    if "veo3" in endpoint:
+        return "veo3"
+    if "veo" in endpoint:
+        return "veo"
+    if "ovi" in endpoint:
+        return "ovi"
+    if "ltx" in endpoint:
+        return "ltx2"
+    if "pixverse" in endpoint:
+        return "pix5" if "v5" in endpoint else "pixverse"
+    if "hunyuan" in endpoint:
+        return "hunyuan"
+    if "minimax" in endpoint:
+        return "minimax"
+
+    parts = endpoint.replace("/image-to-video", "").split("/")
+    for part in reversed(parts):
+        if part and part != "fal-ai":
+            clean = part.replace("-", "").replace("_", "")[:8]
+            return clean if clean else "model"
+    return "model"
+
+
 def _get_model_short_name(generator) -> str:
     """Get model short name with compatibility fallback for older generators."""
-    if hasattr(generator, "get_model_short_name"):
+    getter = getattr(generator, "get_model_short_name", None)
+    if callable(getter):
         try:
-            return str(generator.get_model_short_name())
-        except Exception:
-            pass
+            value = str(getter()).strip()
+            if value:
+                return value
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Falling back to endpoint-based model short name after get_model_short_name() error: %s",
+                exc,
+            )
+
+    endpoint = str(getattr(generator, "model_endpoint", "")).strip()
+    if endpoint:
+        return _model_short_from_endpoint(endpoint)
 
     fallback = str(getattr(generator, "model_display_name", "model"))
     fallback = re.sub(r"[^A-Za-z0-9]+", "", fallback).lower()
@@ -46,7 +110,10 @@ def get_output_video_path(
         filename = generator.get_output_filename(image_name, output_folder)
     except TypeError:
         # Backward compatibility for older generator signatures.
-        filename = generator.get_output_filename(image_name, config or {}, timestamp)
+        try:
+            filename = generator.get_output_filename(image_name, config or {}, timestamp)
+        except TypeError:
+            filename = generator.get_output_filename(image_name)
     return Path(output_folder) / filename
 
 

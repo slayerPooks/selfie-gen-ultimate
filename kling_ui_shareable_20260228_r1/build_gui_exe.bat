@@ -41,7 +41,8 @@ python -m pip install --quiet --upgrade ^
     selenium ^
     webdriver-manager
 if %errorlevel% neq 0 (
-    echo WARNING: pip install reported an error. Attempting to continue...
+    echo ERROR: pip install failed. See messages above.
+    goto :fail
 )
 echo       Done.
 

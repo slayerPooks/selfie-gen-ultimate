@@ -229,6 +229,7 @@ class FalAIKlingGenerator:
         self,
         image_stem: str,
         output_folder: Optional[str] = None,
+        *_legacy_args,
         **_ignored,
     ) -> str:
         """Generate output filename: {stem}_{model_short}_{index}.mp4
@@ -245,7 +246,8 @@ class FalAIKlingGenerator:
         """
         import glob as _glob
 
-        # Backward compatibility: older callers passed config dict as arg #2.
+        # Backward compatibility: older callers passed config dict/timestamp
+        # positionally as args #2/#3. Ignore those legacy values.
         if isinstance(output_folder, dict):
             output_folder = None
 
