@@ -609,7 +609,9 @@ class SelfieTab(tk.Frame):
             if os.path.abspath(target_path) == os.path.abspath(self._last_result_path):
                 self.log("Selected path is the same as existing generated file", "info")
                 return
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            target_dir = os.path.dirname(target_path)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
             shutil.copy2(self._last_result_path, target_path)
             self.log(f"Saved copy: {target_path}", "success")
         except Exception as e:
