@@ -112,6 +112,11 @@ def get_output_video_path(
         # Backward compatibility for older generator signatures.
         # AttributeError can occur when a generator expects a config dict but
         # receives output_folder (a string) and calls .get() on it.
+        # Only treat AttributeError as a legacy-signature indicator when
+        # output_folder is a str (the always-true case); re-raise for anything
+        # else so genuine internal bugs are not silently swallowed.
+        if isinstance(_e, AttributeError) and not isinstance(output_folder, str):
+            raise
         logger.warning("Legacy generator API fallback triggered (%s); trying older signatures", _e)
         try:
             filename = generator.get_output_filename(image_name, config or {}, timestamp)

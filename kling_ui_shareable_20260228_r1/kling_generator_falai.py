@@ -373,7 +373,7 @@ class FalAIKlingGenerator:
             # "Selfie-Kling_V2.5_Turbo_Pro-*-p3-2026-01-17.mp4") for any slot.
             # Pattern anchors on "-Kling_" immediately after the stem to prevent
             # false positives from prefixed filenames and non-Kling legacy files.
-            hyphen_pattern = str(Path(target_folder) / f"{char_name}-Kling_*-p{slot}-*.mp4")
+            hyphen_pattern = str(Path(target_folder) / f"{_glob.escape(char_name)}-Kling_*-p{slot}-*.mp4")
             if _glob.glob(hyphen_pattern):
                 return True
 
