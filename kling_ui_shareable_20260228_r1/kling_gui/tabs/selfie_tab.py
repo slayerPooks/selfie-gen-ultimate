@@ -1,9 +1,12 @@
 """Selfie Tab — Generate selfie-style portraits using FLUX PuLID."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 import threading
 import os
+import shutil
+import platform
+import subprocess
 from typing import Callable
 
 from ..theme import COLORS, FONT_FAMILY
@@ -34,6 +37,7 @@ class SelfieTab(tk.Frame):
         self.get_config = config_getter
         self.log = log_callback
         self._busy = False
+        self._last_result_path = ""
 
         self._build_ui()
 
@@ -241,6 +245,77 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).grid(row=2, column=2, columnspan=2, sticky="w")
 
+        # Save location settings
+        save_frame = tk.LabelFrame(
+            self,
+            text="Save Location",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        save_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        save_mode = self.config.get("selfie_output_mode", "")
+        if save_mode not in ("source", "custom"):
+            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
+        self.output_mode_var = tk.StringVar(value=save_mode)
+        self.output_path_var = tk.StringVar(
+            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
+        )
+
+        mode_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=5, pady=(4, 2))
+        tk.Radiobutton(
+            mode_row,
+            text="Save Next To Source Image",
+            variable=self.output_mode_var,
+            value="source",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Radiobutton(
+            mode_row,
+            text="Save In Custom Folder",
+            variable=self.output_mode_var,
+            value="custom",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+
+        path_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
+        path_row.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.output_entry = tk.Entry(
+            path_row,
+            textvariable=self.output_path_var,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief=tk.FLAT,
+        )
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.browse_btn = tk.Button(
+            path_row,
+            text="Browse",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._browse_output_folder,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+        )
+        self.browse_btn.pack(side=tk.LEFT)
+        self._update_output_entry_state()
+
         # Generate button
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -258,6 +333,48 @@ class SelfieTab(tk.Frame):
             pady=6,
         )
         self.generate_btn.pack(side=tk.LEFT)
+
+        self.save_as_btn = tk.Button(
+            btn_frame,
+            text="Save As...",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_as,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.save_as_btn.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.open_file_btn = tk.Button(
+            btn_frame,
+            text="Open Image",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_open_result_file,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.open_file_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.open_folder_btn = tk.Button(
+            btn_frame,
+            text="Open Folder",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_open_result_folder,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.open_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         self.status_label = tk.Label(
             btn_frame,
@@ -314,9 +431,11 @@ class SelfieTab(tk.Frame):
             self.log("Prompt is empty", "warning")
             return
 
-        output_folder = config.get("output_folder", "")
-        if not output_folder or not os.path.isdir(output_folder):
-            output_folder = os.path.dirname(image_path)
+        try:
+            output_folder = self._resolve_output_folder(image_path)
+        except Exception as e:
+            self.log(f"Invalid output folder: {e}", "error")
+            return
 
         # Read numeric vars BEFORE setting busy — .get() raises TclError
         # if the entry contains non-numeric text.
@@ -364,10 +483,12 @@ class SelfieTab(tk.Frame):
     def _on_complete(self, result):
         self._set_busy(False)
         if result:
+            self._last_result_path = result
             self.image_session.add_image(result, "selfie")
             self.log(
                 f"Selfie generated: {os.path.basename(result)}", "success"
             )
+            self._refresh_result_actions()
         else:
             self.log("Selfie generation failed", "error")
 
@@ -381,10 +502,118 @@ class SelfieTab(tk.Frame):
             state=tk.DISABLED if busy else tk.NORMAL,
             text="Generating..." if busy else "Generate Selfie",
         )
+        if busy:
+            self.save_as_btn.config(state=tk.DISABLED)
+            self.open_file_btn.config(state=tk.DISABLED)
+            self.open_folder_btn.config(state=tk.DISABLED)
+        else:
+            self._refresh_result_actions()
         self.status_label.config(
             text="Processing..." if busy else "",
             fg=COLORS["progress"] if busy else COLORS["text_dim"],
         )
+
+    def _on_output_mode_changed(self):
+        self._update_output_entry_state()
+        mode_desc = (
+            "next to source image"
+            if self.output_mode_var.get() == "source"
+            else "custom folder"
+        )
+        self.log(f"Selfie save mode set to {mode_desc}", "info")
+
+    def _update_output_entry_state(self):
+        use_custom = self.output_mode_var.get() == "custom"
+        self.output_entry.config(state=tk.NORMAL if use_custom else tk.DISABLED)
+        self.browse_btn.config(state=tk.NORMAL if use_custom else tk.DISABLED)
+
+    def _browse_output_folder(self):
+        initial_dir = self.output_path_var.get().strip() or os.path.expanduser("~")
+        folder = filedialog.askdirectory(
+            title="Select Selfie Output Folder",
+            initialdir=initial_dir,
+        )
+        if folder:
+            self.output_path_var.set(folder)
+            self.log(f"Selfie output folder set: {folder}", "success")
+
+    def _resolve_output_folder(self, source_image_path: str) -> str:
+        if self.output_mode_var.get() == "custom":
+            custom_folder = self.output_path_var.get().strip()
+            if not custom_folder:
+                raise ValueError("Custom output folder is empty")
+            os.makedirs(custom_folder, exist_ok=True)
+            return custom_folder
+        source_folder = os.path.dirname(source_image_path)
+        if not source_folder:
+            raise ValueError("Could not resolve source image folder")
+        return source_folder
+
+    def _refresh_result_actions(self):
+        has_result = bool(
+            self._last_result_path and os.path.isfile(self._last_result_path)
+        )
+        self.save_as_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+        self.open_file_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+        self.open_folder_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+
+    def _open_path_in_explorer(self, path: str):
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.run(["open", path], check=True)
+            else:
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self.log(f"Could not open {path}: {e}", "error")
+
+    def _on_open_result_file(self):
+        if not self._last_result_path or not os.path.isfile(self._last_result_path):
+            self.log("No generated selfie file to open", "warning")
+            return
+        self._open_path_in_explorer(self._last_result_path)
+
+    def _on_open_result_folder(self):
+        if not self._last_result_path:
+            self.log("No generated selfie folder to open", "warning")
+            return
+        folder = os.path.dirname(self._last_result_path)
+        if not folder or not os.path.isdir(folder):
+            self.log("Generated selfie folder does not exist", "warning")
+            return
+        self._open_path_in_explorer(folder)
+
+    def _on_save_as(self):
+        if not self._last_result_path or not os.path.isfile(self._last_result_path):
+            self.log("No generated selfie to save", "warning")
+            return
+        initial_dir = os.path.dirname(self._last_result_path)
+        initial_file = os.path.basename(self._last_result_path)
+        target_path = filedialog.asksaveasfilename(
+            title="Save Selfie As",
+            initialdir=initial_dir,
+            initialfile=initial_file,
+            defaultextension=".png",
+            filetypes=[
+                ("PNG Image", "*.png"),
+                ("JPEG Image", "*.jpg;*.jpeg"),
+                ("WebP Image", "*.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not target_path:
+            return
+        try:
+            if os.path.abspath(target_path) == os.path.abspath(self._last_result_path):
+                self.log("Selected path is the same as existing generated file", "info")
+                return
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            shutil.copy2(self._last_result_path, target_path)
+            self.log(f"Saved copy: {target_path}", "success")
+        except Exception as e:
+            self.log(f"Save failed: {e}", "error")
 
     def get_config_updates(self) -> dict:
         width, height = self._get_selected_dimensions()
@@ -396,4 +625,6 @@ class SelfieTab(tk.Frame):
             "selfie_height": height,
             "selfie_seed": self.seed_var.get(),
             "selfie_random_seed": self.random_seed_var.get(),
+            "selfie_output_mode": self.output_mode_var.get(),
+            "selfie_output_folder": self.output_path_var.get().strip(),
         }

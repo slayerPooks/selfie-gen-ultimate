@@ -343,6 +343,8 @@ class KlingGUIWindow:
             "reprocess_mode": "increment",
             "freeimage_api_key": "",
             "openrouter_vision_system_prompt": "",
+            "selfie_output_mode": "source",
+            "selfie_output_folder": "",
             # Folder processing settings
             "folder_filter_pattern": "",
             "folder_match_mode": "partial",  # "partial" or "exact"
