@@ -64,9 +64,12 @@ class SelfieTab(tk.Frame):
         self._build_ui()
 
     def _build_ui(self):
+        content_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
         # Prompt section (uses composed prompt or custom)
         prompt_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Selfie Prompt",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
@@ -183,7 +186,7 @@ class SelfieTab(tk.Frame):
         scene_templates_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
         self.scene_templates_text = tk.Text(
             scene_templates_frame,
-            height=4,
+            height=3,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -209,7 +212,7 @@ class SelfieTab(tk.Frame):
 
         # Settings
         settings_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Generation Settings",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
@@ -244,7 +247,7 @@ class SelfieTab(tk.Frame):
             highlightthickness=0,
             length=150,
         )
-        id_scale.grid(row=0, column=1, columnspan=3, padx=5, pady=2, sticky="w")
+        id_scale.grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
         # Aspect Ratio (replaces manual Width/Height)
         self._aspect_ratios = {
@@ -258,7 +261,7 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=1, column=0, sticky="w")
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
 
         # Determine saved selection from config dimensions
         default_ratio_name = "Portrait (3:4)"
@@ -282,7 +285,7 @@ class SelfieTab(tk.Frame):
             state="readonly",
             width=18,
         )
-        aspect_combo.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="w")
+        aspect_combo.grid(row=0, column=3, padx=5, pady=2, sticky="w")
 
         # Seed
         tk.Label(
@@ -291,7 +294,7 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=2, column=0, sticky="w")
+        ).grid(row=1, column=0, sticky="w")
         self.seed_var = tk.IntVar(value=self.config.get("selfie_seed", -1))
         tk.Entry(
             grid,
@@ -301,7 +304,7 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
             insertbackground=COLORS["text_light"],
             font=(FONT_FAMILY, 9),
-        ).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        ).grid(row=1, column=1, sticky="w", padx=5, pady=2)
 
         self.random_seed_var = tk.BooleanVar(
             value=self.config.get("selfie_random_seed", True)
@@ -315,17 +318,19 @@ class SelfieTab(tk.Frame):
             selectcolor=COLORS["bg_input"],
             activebackground=COLORS["bg_panel"],
             font=(FONT_FAMILY, 9),
-        ).grid(row=2, column=2, columnspan=2, sticky="w")
+        ).grid(row=1, column=2, columnspan=2, sticky="w", padx=(12, 0))
 
         # Model selection
         models_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Step 2 Models (Fal.ai)",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
         models_frame.pack(fill=tk.X, padx=10, pady=5)
+        models_frame.grid_columnconfigure(0, weight=1)
+        models_frame.grid_columnconfigure(1, weight=1)
 
         saved_models = self.config.get("selfie_selected_models", {})
         for idx, model in enumerate(self._model_options):
@@ -337,19 +342,25 @@ class SelfieTab(tk.Frame):
             self._model_vars[endpoint] = var
             tk.Checkbutton(
                 models_frame,
-                text=f"{label} ({endpoint})",
+                text=label,
                 variable=var,
                 bg=COLORS["bg_panel"],
                 fg=COLORS["text_light"],
                 selectcolor=COLORS["bg_input"],
                 activebackground=COLORS["bg_panel"],
-                font=(FONT_FAMILY, 9),
+                font=(FONT_FAMILY, 8),
                 anchor="w",
-            ).pack(fill=tk.X, padx=8, pady=1)
+            ).grid(
+                row=idx // 2,
+                column=idx % 2,
+                sticky="w",
+                padx=(8, 20),
+                pady=1,
+            )
 
         # Save location settings
         save_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Save Location",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
@@ -420,7 +431,7 @@ class SelfieTab(tk.Frame):
 
         # Generate button
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
 
         self.generate_btn = tk.Button(
             btn_frame,
