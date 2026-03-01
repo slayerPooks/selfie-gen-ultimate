@@ -18,6 +18,15 @@ class PrepTab(tk.Frame):
         ("Claude 3.5 Haiku", "anthropic/claude-3.5-haiku"),
         ("Gemini 2.0 Flash", "google/gemini-2.0-flash-001"),
     ]
+    DEFAULT_VISION_PROMPT = (
+        "You are a portrait photo analyzer for AI image generation. "
+        "Analyze the provided portrait image and generate a detailed prompt that "
+        "describes the person's physical appearance, facial features, expression, "
+        "hair, clothing, pose, and lighting for a static portrait photo. "
+        "DO NOT mention video, animation, or movement. Focus strictly on physical "
+        "identity, expression, and lighting to be used as an image generation prompt. "
+        "Return ONLY the prompt text, no explanations or formatting."
+    )
 
     def __init__(
         self,
@@ -53,6 +62,7 @@ class PrepTab(tk.Frame):
         self._selfie_config_getter = None  # set via set_selfie_config_getter
         self._busy = False
         self._last_result = ""
+        self._default_vision_prompt = self._resolve_default_vision_prompt()
 
         # Build combined model list: built-in + custom from config
         self._custom_models = list(config.get("openrouter_custom_models", []))
@@ -69,6 +79,15 @@ class PrepTab(tk.Frame):
     def set_selfie_config_getter(self, getter: Callable[[], dict]):
         """Set a getter for live Step 2 composer options (gender, style)."""
         self._selfie_config_getter = getter
+
+    def _resolve_default_vision_prompt(self) -> str:
+        """Resolve shared default prompt from VisionAnalyzer when available."""
+        try:
+            from vision_analyzer import VisionAnalyzer
+
+            return VisionAnalyzer.DEFAULT_SYSTEM_PROMPT
+        except Exception:
+            return self.DEFAULT_VISION_PROMPT
 
     def _build_ui(self):
         # Model selection
@@ -160,6 +179,63 @@ class PrepTab(tk.Frame):
             pady=1,
         )
         self.add_model_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Editable system prompt (persisted)
+        tk.Label(
+            self,
+            text="Vision Prompt (System):",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(fill=tk.X, padx=10, pady=(2, 2))
+
+        prompt_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        prompt_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        self.system_prompt_text = tk.Text(
+            prompt_frame,
+            wrap=tk.WORD,
+            height=5,
+            bg=COLORS["bg_main"],
+            fg=COLORS["text_light"],
+            font=("Consolas", 9),
+            insertbackground=COLORS["text_light"],
+            padx=5,
+            pady=5,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        prompt_scroll = ttk.Scrollbar(
+            prompt_frame, command=self.system_prompt_text.yview
+        )
+        self.system_prompt_text.config(yscrollcommand=prompt_scroll.set)
+        prompt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.system_prompt_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        saved_prompt = self.config.get(
+            "openrouter_vision_system_prompt", self._default_vision_prompt
+        )
+        self.system_prompt_text.insert(
+            "1.0", (saved_prompt or self._default_vision_prompt).strip()
+        )
+        self.system_prompt_text.bind("<FocusOut>", self._on_system_prompt_focus_out)
+
+        prompt_actions = tk.Frame(self, bg=COLORS["bg_panel"])
+        prompt_actions.pack(fill=tk.X, padx=10, pady=(0, 4))
+
+        self.reset_prompt_btn = tk.Button(
+            prompt_actions,
+            text="Reset Prompt",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["btn_red"],
+            fg="white",
+            command=self._on_reset_system_prompt,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+        )
+        self.reset_prompt_btn.pack(side=tk.LEFT)
 
         # Analyze button
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
@@ -299,6 +375,19 @@ class PrepTab(tk.Frame):
         if self.custom_model_var.get() == "org/model-name":
             self.custom_model_var.set("")
 
+    def _get_system_prompt_text(self) -> str:
+        prompt = self.system_prompt_text.get("1.0", tk.END).strip()
+        return prompt if prompt else self._default_vision_prompt
+
+    def _on_system_prompt_focus_out(self, _event):
+        self._save_config_now()
+
+    def _on_reset_system_prompt(self):
+        self.system_prompt_text.delete("1.0", tk.END)
+        self.system_prompt_text.insert("1.0", self._default_vision_prompt)
+        self._save_config_now()
+        self.log("Vision prompt reset to default", "info")
+
     def _on_analyze(self):
         if self._busy:
             return
@@ -316,12 +405,16 @@ class PrepTab(tk.Frame):
         self._set_busy(True)
         self.write_btn.config(state=tk.DISABLED)
         model = self._get_selected_model_endpoint()
+        system_prompt = self._get_system_prompt_text()
+        self._save_config_now()
 
         def _run():
             try:
                 from vision_analyzer import VisionAnalyzer
 
-                analyzer = VisionAnalyzer(api_key, model)
+                analyzer = VisionAnalyzer(
+                    api_key, model, system_prompt=system_prompt
+                )
                 analyzer.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)
@@ -412,4 +505,5 @@ class PrepTab(tk.Frame):
         return {
             "openrouter_model": self._get_selected_model_endpoint(),
             "openrouter_custom_models": list(self._custom_models),
+            "openrouter_vision_system_prompt": self._get_system_prompt_text(),
         }

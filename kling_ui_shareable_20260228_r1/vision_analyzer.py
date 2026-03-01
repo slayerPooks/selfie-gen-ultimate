@@ -13,10 +13,34 @@ class VisionAnalyzer:
     """Analyze portrait images using OpenRouter vision models."""
 
     ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+    DEFAULT_SYSTEM_PROMPT = (
+        "You are a portrait photo analyzer for AI image generation. "
+        "Analyze the provided portrait image and generate a detailed prompt that "
+        "describes the person's physical appearance, facial features, expression, "
+        "hair, clothing, pose, and lighting for a static portrait photo. "
+        "DO NOT mention video, animation, or movement. Focus strictly on physical "
+        "identity, expression, and lighting to be used as an image generation prompt. "
+        "Return ONLY the prompt text, no explanations or formatting."
+    )
+    DEFAULT_USER_PROMPT = (
+        "Analyze this portrait and generate a static portrait photo prompt."
+    )
 
-    def __init__(self, api_key: str, model: str = "bytedance-seed/seed-1.6-flash"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "bytedance-seed/seed-1.6-flash",
+        system_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
+    ):
         self.api_key = api_key
         self.model = model
+        self.system_prompt = (
+            system_prompt.strip() if system_prompt and system_prompt.strip() else self.DEFAULT_SYSTEM_PROMPT
+        )
+        self.user_prompt = (
+            user_prompt.strip() if user_prompt and user_prompt.strip() else self.DEFAULT_USER_PROMPT
+        )
         self._progress_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
@@ -58,20 +82,10 @@ class VisionAnalyzer:
 
         self._report(f"Sending to {self.model}...", "api")
 
-        system_prompt = (
-            "You are a portrait photo analyzer for AI image generation. "
-            "Analyze the provided portrait image and generate a detailed prompt that "
-            "describes the person's physical appearance, facial features, expression, "
-            "hair, clothing, pose, and lighting for a static portrait photo. "
-            "DO NOT mention video, animation, or movement. Focus strictly on physical "
-            "identity, expression, and lighting to be used as an image generation prompt. "
-            "Return ONLY the prompt text, no explanations or formatting."
-        )
-
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": self.system_prompt},
                 {
                     "role": "user",
                     "content": [
@@ -81,7 +95,7 @@ class VisionAnalyzer:
                         },
                         {
                             "type": "text",
-                            "text": "Analyze this portrait and generate a static portrait photo prompt.",
+                            "text": self.user_prompt,
                         },
                     ],
                 },

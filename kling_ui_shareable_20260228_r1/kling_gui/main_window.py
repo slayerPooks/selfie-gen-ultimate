@@ -342,6 +342,7 @@ class KlingGUIWindow:
             "allow_reprocess": True,
             "reprocess_mode": "increment",
             "freeimage_api_key": "6d207e02198a847aa98d0a2a901485a5",
+            "openrouter_vision_system_prompt": "",
             # Folder processing settings
             "folder_filter_pattern": "",
             "folder_match_mode": "partial",  # "partial" or "exact"
