@@ -22,6 +22,9 @@ from .drop_zone import DropZone, create_dnd_root, HAS_DND
 from .log_display import LogDisplay
 from .config_panel import ConfigPanel
 from .queue_manager import QueueManager, QueueItem
+from .image_state import ImageSession
+from .carousel_widget import ImageCarousel
+from .tabs import PrepTab, SelfieTab, OutpaintTab, VideoTab
 
 # Try to import the generator
 try:
@@ -221,6 +224,7 @@ class KlingGUIWindow:
         self.history: List[dict] = self._load_history()
         self.generator: Optional["FalAIKlingGenerator"] = None
         self.queue_manager: Optional[QueueManager] = None
+        self.image_session = ImageSession()
 
         # Create root window with DnD support if available
         self.root = create_dnd_root()
@@ -453,6 +457,25 @@ class KlingGUIWindow:
         style.configure("TPanedwindow", background=COLORS["bg_main"])
         style.configure("Sash", sashthickness=6, sashrelief=tk.FLAT)
 
+        # Dark theme for Notebook tabs
+        style.configure(
+            "TNotebook",
+            background=COLORS["bg_main"],
+            borderwidth=0,
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=COLORS["bg_input"],
+            foreground=COLORS["text_dim"],
+            padding=[10, 4],
+            font=("Segoe UI", 9),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", COLORS["bg_panel"])],
+            foreground=[("selected", COLORS["text_light"])],
+        )
+
         # Header
         self._setup_header()
 
@@ -476,7 +499,7 @@ class KlingGUIWindow:
         )
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
-        # ── Top section: horizontal split (left: options+drop | right: prompt) ──
+        # ── Top section: horizontal split (left: notebook | right: prompt) ──
         top_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
         self.main_paned.add(top_frame, minsize=300)
 
@@ -490,29 +513,81 @@ class KlingGUIWindow:
         )
         self.top_h_paned.pack(fill=tk.BOTH, expand=True)
 
-        # Left pane: config options (top) + drop zone (bottom, fills remaining height)
+        # Left pane: Notebook with 4 tabs
         left_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_main"])
+
+        # Create ConfigPanel (not packed yet — reparented into VideoTab below)
         self.config_panel = ConfigPanel(
-            left_pane, config=self.config, on_config_changed=self._on_config_changed,
+            left_pane,
+            config=self.config,
+            on_config_changed=self._on_config_changed,
             build_prompt=False,
         )
-        self.config_panel.pack(fill=tk.X, pady=(0, 3))
-        drop_frame = tk.Frame(left_pane, bg=COLORS["bg_main"])
+
+        # Create DropZone container (not packed yet — reparented into VideoTab below)
+        drop_container = tk.Frame(left_pane, bg=COLORS["bg_main"])
         self.drop_zone = DropZone(
-            drop_frame,
+            drop_container,
             on_files_dropped=self._on_files_dropped,
             on_folder_dropped=self._on_folder_dropped,
         )
         self.drop_zone.pack(fill=tk.BOTH, expand=True)
-        drop_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Create Notebook
+        self.notebook = ttk.Notebook(left_pane)
+
+        # Tab 1: Prep Photo
+        self.prep_tab = PrepTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            prompt_writer=self._write_to_active_prompt,
+        )
+        self.notebook.add(self.prep_tab, text="1. Prep Photo")
+
+        # Tab 2: Generate Selfie
+        self.selfie_tab = SelfieTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+        )
+        self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
+
+        # Tab 3: Expand (Outpaint)
+        self.outpaint_tab = OutpaintTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+        )
+        self.notebook.add(self.outpaint_tab, text="3. Expand")
+
+        # Tab 4: Video Settings (wraps ConfigPanel + DropZone)
+        self.video_tab = VideoTab(
+            self.notebook,
+            config_panel=self.config_panel,
+            drop_zone_container=drop_container,
+            queue_frame=None,  # Queue frame added below after video_tab exists
+            image_session=self.image_session,
+            log_callback=self._log,
+            on_files_dropped=self._on_files_dropped,
+        )
+        self.notebook.add(self.video_tab, text="4. Video")
+
+        self.notebook.pack(fill=tk.BOTH, expand=True)
         self.top_h_paned.add(left_pane, minsize=480)
 
-        # Right pane: prompt editor (full height — spans config + drop zone area)
+        # Right pane: prompt editor (UNCHANGED — spans full height)
         right_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_panel"])
         self.config_panel.build_prompt_panel(right_pane)
         self.top_h_paned.add(right_pane, minsize=260)
 
-        # ── Bottom section: Horizontal PanedWindow (Queue | Log+History) ──
+        # ── Bottom section: Horizontal PanedWindow (Carousel | Log+History) ──
         self.bottom_paned = tk.PanedWindow(
             self.main_paned,
             orient=tk.HORIZONTAL,
@@ -523,10 +598,22 @@ class KlingGUIWindow:
         )
         self.main_paned.add(self.bottom_paned, minsize=200)
 
-        # Queue panel (left pane)
-        self.queue_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+        # Carousel panel (replaces queue in bottom-left)
+        carousel_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+        self.carousel = ImageCarousel(
+            carousel_frame,
+            image_session=self.image_session,
+            log_callback=self._log,
+        )
+        self.carousel.pack(fill=tk.BOTH, expand=True)
+        self.bottom_paned.add(carousel_frame, minsize=150)
+
+        # Queue panel — lives inside VideoTab (below the drop zone)
+        self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
-        self.bottom_paned.add(self.queue_frame, minsize=150)
+        self.queue_frame.pack(
+            in_=self.video_tab, fill=tk.X, padx=0, pady=(3, 0)
+        )
 
         # Right side: Vertical PanedWindow (Log | History)
         self.right_paned = tk.PanedWindow(
@@ -550,6 +637,11 @@ class KlingGUIWindow:
         self._setup_history_panel_content(self.history_frame)
         self.right_paned.add(self.history_frame, minsize=100)
 
+
+    def _write_to_active_prompt(self, text: str):
+        """Write text to the active prompt slot (used by PrepTab vision analysis)."""
+        if hasattr(self, "config_panel") and self.config_panel:
+            self.config_panel.set_active_prompt_text(text)
 
     def _apply_ui_config(self):
         """Apply UI layout configuration to existing widgets."""
@@ -1594,6 +1686,16 @@ class KlingGUIWindow:
     ):
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
+        # Collect and merge any tab-specific config
+        for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+            tab_widget = getattr(self, tab, None)
+            if tab_widget and hasattr(tab_widget, "get_config_updates"):
+                try:
+                    self.config.update(tab_widget.get_config_updates())
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "Failed to get config from %s: %s", tab, exc
+                    )
         self._save_config()
 
         # Update generator with new model if it exists and NOT currently processing
@@ -1820,6 +1922,15 @@ class KlingGUIWindow:
                 return
 
             self.queue_manager.stop_processing()
+
+        # Collect tab configs before saving
+        for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+            tab_widget = getattr(self, tab, None)
+            if tab_widget and hasattr(tab_widget, "get_config_updates"):
+                try:
+                    self.config.update(tab_widget.get_config_updates())
+                except Exception:
+                    pass
 
         # Save layout (geometry + sash positions) before closing
         self._save_layout()
