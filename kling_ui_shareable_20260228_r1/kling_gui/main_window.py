@@ -501,7 +501,7 @@ class KlingGUIWindow:
 
         # ── Top section: horizontal split (left: notebook | right: prompt) ──
         top_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
-        self.main_paned.add(top_frame, minsize=300)
+        self.main_paned.add(top_frame, minsize=280)
 
         self.top_h_paned = tk.PanedWindow(
             top_frame,
@@ -544,6 +544,7 @@ class KlingGUIWindow:
             config_getter=lambda: self.config,
             log_callback=self._log,
             prompt_writer=self._write_to_active_prompt,
+            config_saver=self._save_config,
         )
         self.notebook.add(self.prep_tab, text="1. Prep Photo")
 
@@ -596,7 +597,7 @@ class KlingGUIWindow:
             sashrelief=tk.RAISED,
             sashpad=1,
         )
-        self.main_paned.add(self.bottom_paned, minsize=200)
+        self.main_paned.add(self.bottom_paned, minsize=250)
 
         # Carousel panel (replaces queue in bottom-left)
         carousel_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
@@ -1914,14 +1915,31 @@ class KlingGUIWindow:
 
     def _on_close(self):
         """Handle window close."""
-        if self.queue_manager and self.queue_manager.is_running:
+        # Check both queue and tab worker threads
+        busy_tabs = []
+        for tab_name in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+            tab_widget = getattr(self, tab_name, None)
+            if tab_widget and getattr(tab_widget, "_busy", False):
+                busy_tabs.append(tab_name.replace("_tab", "").title())
+
+        is_processing = (
+            (self.queue_manager and self.queue_manager.is_running)
+            or bool(busy_tabs)
+        )
+
+        if is_processing:
+            detail = ""
+            if busy_tabs:
+                detail = f" ({', '.join(busy_tabs)} running)"
             if not messagebox.askyesno(
                 "Confirm Close",
-                "Processing is in progress. Are you sure you want to close?",
+                f"Processing is in progress{detail}. "
+                "Are you sure you want to close?",
             ):
                 return
 
-            self.queue_manager.stop_processing()
+            if self.queue_manager and self.queue_manager.is_running:
+                self.queue_manager.stop_processing()
 
         # Collect tab configs before saving
         for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:

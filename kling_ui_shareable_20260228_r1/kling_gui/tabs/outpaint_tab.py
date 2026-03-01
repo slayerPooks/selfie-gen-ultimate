@@ -250,13 +250,21 @@ class OutpaintTab(tk.Frame):
         if not output_folder or not os.path.isdir(output_folder):
             output_folder = os.path.dirname(image_path)
 
-        self._set_busy(True)
         prompt = self.prompt_text.get("1.0", tk.END).strip()
-        expand_left = self.left_var.get()
-        expand_right = self.right_var.get()
-        expand_top = self.top_var.get()
-        expand_bottom = self.bottom_var.get()
+
+        # Read numeric vars BEFORE setting busy — .get() raises TclError
+        # if the entry contains non-numeric text.
+        try:
+            expand_left = self.left_var.get()
+            expand_right = self.right_var.get()
+            expand_top = self.top_var.get()
+            expand_bottom = self.bottom_var.get()
+        except (tk.TclError, ValueError):
+            self.log("Invalid numeric value in expand settings", "error")
+            return
+
         output_format = self.format_var.get()
+        self._set_busy(True)
 
         def _run():
             try:

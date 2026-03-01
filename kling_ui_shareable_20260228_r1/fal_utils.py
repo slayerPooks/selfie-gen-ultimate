@@ -22,16 +22,21 @@ def upload_to_freeimage(
     image_path: str,
     max_size: int = 1200,
     progress_cb: ProgressCallback = None,
+    api_key: Optional[str] = None,
 ) -> Optional[str]:
     """Upload image to freeimage.host, return public URL.
 
     Resizes image if larger than max_size on longest side.
     Converts transparent images to RGB JPEG before upload.
     Returns None on failure.
+
+    Args:
+        api_key: Explicit freeimage key. Falls back to FREEIMAGE_API_KEY env var.
     """
-    if not _FREEIMAGE_KEY:
+    key = api_key or _FREEIMAGE_KEY
+    if not key:
         if progress_cb:
-            progress_cb("FREEIMAGE_API_KEY not set — set via environment", "error")
+            progress_cb("FREEIMAGE_API_KEY not set — set via environment or config", "error")
         return None
 
     try:
@@ -71,7 +76,7 @@ def upload_to_freeimage(
         response = requests.post(
             "https://freeimage.host/api/1/upload",
             data={
-                "key": _FREEIMAGE_KEY,
+                "key": key,
                 "action": "upload",
                 "source": image_base64,
                 "format": "json",
@@ -407,11 +412,20 @@ def fal_download_file(
                         )
                     return False
 
-                os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-                with open(output_path, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                out_dir = os.path.dirname(os.path.abspath(output_path))
+                os.makedirs(out_dir, exist_ok=True)
+                tmp_path = output_path + ".tmp"
+                try:
+                    with open(tmp_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                    os.replace(tmp_path, output_path)
+                except BaseException:
+                    # Clean up partial temp file on any failure
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                    raise
 
             file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
             if progress_cb:
