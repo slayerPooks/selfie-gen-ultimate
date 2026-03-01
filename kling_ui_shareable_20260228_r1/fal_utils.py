@@ -12,7 +12,7 @@ import base64
 
 logger = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[str, str], None]  # (message, level)
+ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
 # Freeimage.host guest API key (same as in kling_generator_falai.py)
 _FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5")
@@ -277,7 +277,7 @@ def fal_queue_poll(
                     progress_cb("Generation complete", "success")
 
                 # Try to extract result — handle response_url indirection
-                result = _extract_result(data, status_headers, api_key, progress_cb)
+                result = _extract_result(data, status_headers, progress_cb)
                 return result
 
             elif status in ("FAILED", "ERROR"):
@@ -315,7 +315,6 @@ def fal_queue_poll(
 def _extract_result(
     status_result: dict,
     status_headers: dict,
-    api_key: str,
     progress_cb: ProgressCallback = None,
 ) -> Optional[dict]:
     """Extract the final result payload from a COMPLETED status response.

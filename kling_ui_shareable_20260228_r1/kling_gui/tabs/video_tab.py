@@ -16,7 +16,7 @@ class VideoTab(tk.Frame):
         parent,
         config_panel,
         drop_zone_container,
-        queue_frame,
+        queue_frame,  # noqa: ARG002 — packed by main_window after init
         image_session: ImageSession,
         log_callback: Callable[[str, str], None],
         on_files_dropped: Optional[Callable[[List[str]], None]] = None,

@@ -1,7 +1,6 @@
 """Compose selfie prompts from configurable data arrays."""
 
 from typing import Optional, List
-import random
 
 
 # Camera/pose styles

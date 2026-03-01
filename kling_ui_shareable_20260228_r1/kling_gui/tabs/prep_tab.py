@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
@@ -103,7 +103,7 @@ class PrepTab(tk.Frame):
         saved_model = self.config.get(
             "openrouter_model", "bytedance-seed/seed-1.6-flash"
         )
-        for i, (name, endpoint) in enumerate(self.OPENROUTER_MODELS):
+        for i, (_name, endpoint) in enumerate(self.OPENROUTER_MODELS):
             if endpoint == saved_model:
                 self.model_combo.current(i)
                 break
