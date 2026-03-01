@@ -108,11 +108,13 @@ def get_output_video_path(
     image_name = Path(image_path).stem
     try:
         filename = generator.get_output_filename(image_name, output_folder)
-    except TypeError:
+    except (TypeError, AttributeError):
         # Backward compatibility for older generator signatures.
+        # AttributeError can occur when a generator expects a config dict but
+        # receives output_folder (a string) and calls .get() on it.
         try:
             filename = generator.get_output_filename(image_name, config or {}, timestamp)
-        except TypeError:
+        except (TypeError, AttributeError):
             filename = generator.get_output_filename(image_name)
     return Path(output_folder) / filename
 
