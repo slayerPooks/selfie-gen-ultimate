@@ -59,12 +59,12 @@ class VisionAnalyzer:
         self._report(f"Sending to {self.model}...", "api")
 
         system_prompt = (
-            "You are a portrait photo analyzer for AI video generation. "
-            "Analyze the provided portrait image and generate a detailed prompt "
-            "that describes the subject's appearance, pose, expression, clothing, "
-            "hair, and setting. The prompt should be suitable for generating a "
-            "realistic video of this person with natural subtle movements like "
-            "breathing, blinking, and slight head movement. "
+            "You are a portrait photo analyzer for AI image generation. "
+            "Analyze the provided portrait image and generate a detailed prompt that "
+            "describes the person's physical appearance, facial features, expression, "
+            "hair, clothing, pose, and lighting for a static portrait photo. "
+            "DO NOT mention video, animation, or movement. Focus strictly on physical "
+            "identity, expression, and lighting to be used as an image generation prompt. "
             "Return ONLY the prompt text, no explanations or formatting."
         )
 
@@ -81,7 +81,7 @@ class VisionAnalyzer:
                         },
                         {
                             "type": "text",
-                            "text": "Analyze this portrait and generate a video animation prompt.",
+                            "text": "Analyze this portrait and generate a static portrait photo prompt.",
                         },
                     ],
                 },
