@@ -1,117 +1,162 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 :: ============================================================
-::  Kling UI - Build Direct GUI Executable
-::  Creates a standalone .exe that launches Tkinter GUI directly
-::  (bypasses CLI menu system)
+::  Kling UI - Build Distributable Executable
+::  Creates dist\KlingUI\KlingUI.exe  +  dist\KlingUI.zip
 ::
-::  SECURITY IMPROVEMENTS:
-::  - Does NOT copy .py files externally (prevents code hijacking)
-::  - All code bundled internally by PyInstaller
-::  - UPX disabled to avoid AV false positives
+::  Requirements: Python 3.8+
+::  Run this file from its own directory.
 :: ============================================================
 
-echo.
-echo ============================================
-echo   Kling UI - Build Direct GUI Launcher
-echo   (Hardened Build)
-echo ============================================
-echo.
-
-:: Get script directory
 set SCRIPT_DIR=%~dp0
+cd /d "%SCRIPT_DIR%"
 
-:: Check for Python
+echo.
+echo ================================================
+echo   Kling UI  ^|  Build Script
+echo ================================================
+echo.
+
+:: -------- Step 1: Verify Python --------
+echo [1/6] Checking Python...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ERROR: Python is not installed or not in PATH
-    echo Please install Python 3.8+ from https://python.org
-    pause
-    exit /b 1
+    echo ERROR: Python not found in PATH.
+    echo Install Python 3.8+ from https://python.org and try again.
+    goto :fail
 )
+for /f "tokens=*" %%v in ('python --version 2^>^&1') do set PYVER=%%v
+echo       Found: %PYVER%
 
-:: Check/install PyInstaller
-echo [1/4] Checking PyInstaller...
-python -c "import PyInstaller" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Installing PyInstaller...
-    python -m pip install pyinstaller
-    if %errorlevel% neq 0 (
-        echo ERROR: Failed to install PyInstaller
-        pause
-        exit /b 1
-    )
-)
-
-:: Install dependencies needed for build
-echo [2/4] Installing build dependencies...
-python -m pip install requests Pillow rich tkinterdnd2 selenium webdriver-manager --quiet
-
-:: Clean previous builds
-echo [3/4] Cleaning previous builds...
-if exist "%SCRIPT_DIR%build" rmdir /s /q "%SCRIPT_DIR%build"
-if exist "%SCRIPT_DIR%dist\KlingGUI_Direct" rmdir /s /q "%SCRIPT_DIR%dist\KlingGUI_Direct"
-
-:: Build the executable
-echo [4/4] Building GUI executable...
+:: -------- Step 2: Install / Upgrade Dependencies --------
 echo.
-cd /d "%SCRIPT_DIR%"
-python -m pyinstaller kling_gui_direct.spec --noconfirm
+echo [2/6] Installing dependencies...
+python -m pip install --quiet --upgrade ^
+    pyinstaller ^
+    Pillow ^
+    requests ^
+    rich ^
+    tkinterdnd2 ^
+    selenium ^
+    webdriver-manager
+if %errorlevel% neq 0 (
+    echo ERROR: pip install failed. See messages above.
+    goto :fail
+)
+echo       Done.
 
+:: -------- Step 3: Generate Icon --------
+echo.
+echo [3/6] Generating app icon...
+python create_icon.py
+if %errorlevel% neq 0 (
+    echo WARNING: Icon generation failed. Build will continue without icon.
+)
+if not exist "kling_ui.ico" (
+    echo WARNING: kling_ui.ico not found. Build will continue without icon.
+)
+
+:: -------- Step 4: Clean Previous Build --------
+echo.
+echo [4/6] Cleaning previous build artefacts...
+if exist "build"           rmdir /s /q "build"
+if exist "dist\KlingUI"    rmdir /s /q "dist\KlingUI"
+if exist "dist\KlingUI.zip" del /q "dist\KlingUI.zip"
+echo       Done.
+
+:: -------- Step 5: PyInstaller --------
+echo.
+echo [5/6] Running PyInstaller...
+echo       (This may take 2-5 minutes on first run)
+echo.
+python -m PyInstaller kling_gui_direct.spec --noconfirm
 if %errorlevel% neq 0 (
     echo.
-    echo ============================================
-    echo   BUILD FAILED
-    echo ============================================
-    echo Check the errors above for details.
-    pause
-    exit /b 1
+    echo ================================================
+    echo   PYINSTALLER FAILED
+    echo ================================================
+    echo Check the output above for errors.
+    echo Common fixes:
+    echo   - Ensure all imports in the spec hiddenimports list exist
+    echo   - Delete __pycache__ folders and retry
+    goto :fail
 )
 
-:: Create a README for the distribution
-echo.
-echo Creating distribution README...
-echo Kling UI - Direct GUI Launcher > "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo This executable launches the Tkinter GUI directly. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo No CLI menu - just drag and drop images to generate videos! >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo Double-click KlingGUI_Direct.exe to start. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo First run will prompt for fal.ai API key. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo Configuration saved in kling_config.json. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo SECURITY NOTE: All code is bundled internally. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
-echo Do NOT add .py files to this directory - they will be ignored. >> "%SCRIPT_DIR%dist\KlingGUI_Direct\README.txt"
+:: Verify the exe was created
+if not exist "dist\KlingUI\KlingUI.exe" (
+    echo.
+    echo ERROR: dist\KlingUI\KlingUI.exe was not created.
+    echo Check PyInstaller output above.
+    goto :fail
+)
 
+:: -------- Step 6: Package into ZIP --------
 echo.
-echo ============================================
-echo   BUILD SUCCESSFUL!
-echo ============================================
-echo.
-echo Output location: %SCRIPT_DIR%dist\KlingGUI_Direct\
-echo.
-echo Files created:
-echo   - KlingGUI_Direct.exe (main executable)
-echo   - _internal\ (bundled dependencies)
-echo   - README.txt (usage instructions)
-echo.
-echo To distribute:
-echo   1. Copy the entire 'dist\KlingGUI_Direct' folder
-echo   2. Users run KlingGUI_Direct.exe
-echo   3. No external .py files needed (all bundled)
-echo.
-echo SECURITY FEATURES:
-echo   - All code bundled internally (prevents tampering)
-echo   - UPX disabled (reduces AV false positives)
-echo   - No external module loading (secure by default)
-echo.
-echo NOTE: First run will create kling_config.json for settings
-echo.
+echo [6/6] Creating distribution ZIP...
 
-:: Open the output folder
-explorer "%SCRIPT_DIR%dist\KlingGUI_Direct"
+:: Write README into the dist folder
+(
+echo Kling UI - AI Video Generator
+echo ================================
+echo.
+echo Double-click KlingUI.exe to launch.
+echo.
+echo FIRST RUN:
+echo   You will be prompted to enter your fal.ai API key.
+echo   Get your key at: https://fal.ai/dashboard/keys
+echo.
+echo USAGE:
+echo   - Drag and drop images onto the drop zone
+echo   - Right-click the drop zone to process a whole folder
+echo   - Configure model, prompt, and output folder in the settings panel
+echo   - Click "Start Queue" to begin generating videos
+echo.
+echo NOTES:
+echo   - Configuration is saved in kling_config.json (next to the exe)
+echo   - Logs are saved in kling_gui.log
+echo   - If the app crashes, check crash_log.txt for details
+echo.
+echo SYSTEM REQUIREMENTS:
+echo   - Windows 10 or later (64-bit)
+echo   - Internet connection required
+echo   - No Python installation needed - fully self-contained
+echo.
+echo Version: 2026-02-28
+) > "dist\KlingUI\README.txt"
+
+:: Use PowerShell to create the ZIP (available on all modern Windows)
+powershell -NoProfile -Command ^
+    "Compress-Archive -Path 'dist\KlingUI' -DestinationPath 'dist\KlingUI.zip' -Force"
+if %errorlevel% neq 0 (
+    echo WARNING: ZIP creation failed. The folder dist\KlingUI\ is still usable.
+) else (
+    echo       ZIP created: dist\KlingUI.zip
+)
+
+:: -------- Done --------
+echo.
+echo ================================================
+echo   BUILD SUCCESSFUL
+echo ================================================
+echo.
+echo Executable:  dist\KlingUI\KlingUI.exe
+if exist "dist\KlingUI.zip" (
+    echo   ZIP file:    dist\KlingUI.zip
+    echo   ^> Share the ZIP with your colleagues.
+    echo   ^> They just unzip and double-click KlingUI.exe
+)
+echo.
+echo Opening output folder...
+explorer "dist\KlingUI"
 
 pause
 endlocal
+exit /b 0
+
+:fail
+echo.
+echo Build failed. See messages above.
+pause
+endlocal
+exit /b 1

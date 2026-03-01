@@ -113,8 +113,16 @@ class FalAIKlingGenerator:
 
         # Common model mappings
         if "kling" in endpoint:
-            # Extract version info
-            if "v2.5-turbo" in endpoint or "v2.5turbo" in endpoint:
+            # Extract version info — ordered most-specific to least-specific
+            if "v3" in endpoint:
+                return "k30pro" if "pro" in endpoint else "k30std"
+            elif "v2.6" in endpoint:
+                return "k26pro"
+            elif (
+                "v2.5-turbo" in endpoint
+                or "v2.5/turbo" in endpoint
+                or "v2.5turbo" in endpoint
+            ):
                 return "k25turbo"
             elif "v2.5" in endpoint:
                 return "k25"
@@ -122,6 +130,12 @@ class FalAIKlingGenerator:
                 return "k21master"
             elif "v2.1" in endpoint:
                 return "k21pro"
+            elif "v2/master" in endpoint:
+                return "k20master"
+            elif "v1.6" in endpoint:
+                return "k16"
+            elif "v1.5" in endpoint:
+                return "k15"
             elif "o1" in endpoint:
                 return "kO1"
             else:
@@ -214,70 +228,45 @@ class FalAIKlingGenerator:
     def get_output_filename(
         self,
         image_stem: str,
-        config: Optional[Dict[str, Any]] = None,
-        timestamp: Optional[datetime] = None
+        output_folder: Optional[str] = None,
+        *_legacy_args,
+        **_ignored,
     ) -> str:
-        """Generate enhanced filename with model, prompt info, and date.
+        """Generate output filename: {stem}_{model_short}_{index}.mp4
 
-        Format: {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
+        Index is determined by scanning output_folder for existing files with the
+        same stem and model so that each generation gets a unique sequential number.
 
         Args:
-            image_stem: Image filename without extension (e.g., 'selfie')
-            config: Config dict containing prompt_titles and saved_prompts
-            timestamp: Generation start time (defaults to now)
+            image_stem: Image filename without extension (e.g. 'selfie')
+            output_folder: Folder to scan for existing files (index starts at 1 if None)
 
         Returns:
-            Filename like: Selfie-Kling_V2.5_Turbo_Pro-Left_Right_1-2-3-4-5-6-p3-2026-01-17.mp4
-
-        Examples:
-            With prompt shorthand:
-                "Selfie-Kling_V2.5_Turbo_Pro-Left_Right_1-2-3-4-5-6-p3-2026-01-17.mp4"
-            Without shorthand (fallback to prompt text extraction):
-                "Portrait-Kling_V2.5_Turbo_Pro-Turn_head_right_slowly-p1-2026-01-17.mp4"
+            Filename like: selfie_k30pro_1.mp4, selfie_k30pro_2.mp4, …
         """
-        if timestamp is None:
-            timestamp = datetime.now()
+        import glob as _glob
 
-        # Default config if not provided
-        if config is None:
-            config = {}
-            logger.debug(" get_output_filename called with config=None, using empty dict")
+        # Backward compatibility: older callers passed config dict/timestamp
+        # positionally as args #2/#3. Ignore those legacy values.
+        if isinstance(output_folder, dict):
+            output_folder = None
 
-        logger.debug(f" get_output_filename inputs:")
-        logger.info(f"  image_stem: {image_stem}")
-        logger.info(f"  config keys: {config.keys() if config else 'None'}")
-        logger.info(f"  timestamp: {timestamp}")
-        logger.info(f"  model_display_name: {self.model_display_name}")
+        model_short = self.get_model_short_name()
+        try:
+            slot = max(1, int(getattr(self, "prompt_slot", 1)))
+        except (TypeError, ValueError):
+            slot = 1
+        prefix = f"{image_stem}_{model_short}_p{slot}_"
 
-        # 1. Model name: spaces to underscores
-        model_name = self.model_display_name.replace(" ", "_")
+        max_index = 0
+        if output_folder:
+            pattern = str(Path(output_folder) / f"{prefix}*.mp4")
+            for fpath in _glob.glob(pattern):
+                remainder = Path(fpath).stem[len(prefix):]
+                if remainder.isdigit():
+                    max_index = max(max_index, int(remainder))
 
-        # 2. Prompt info: try shorthand first, fallback to description
-        slot_str = str(self.prompt_slot)
-        prompt_titles = config.get("prompt_titles", {})
-
-        if slot_str in prompt_titles and prompt_titles[slot_str]:
-            # Use shorthand from prompt_titles and sanitize it
-            shorthand = prompt_titles[slot_str]
-            # Replace spaces with underscores, remove special chars except _ and -
-            prompt_part = ''.join(
-                c if c.isalnum() or c in ('_', '-', ' ') else ''
-                for c in shorthand
-            ).replace(" ", "_")
-        else:
-            # Fallback: extract from prompt text
-            saved_prompts = config.get("saved_prompts", {})
-            prompt_text = saved_prompts.get(slot_str, "")
-            if prompt_text:
-                prompt_part = self.sanitize_prompt_description(prompt_text)
-            else:
-                prompt_part = "prompt"  # Ultimate fallback
-
-        # 3. Date: YYYY-MM-DD format (ISO 8601 for international compatibility)
-        date_str = timestamp.strftime("%Y-%m-%d")
-
-        # 4. Build filename
-        return f"{image_stem}-{model_name}-{prompt_part}-p{self.prompt_slot}-{date_str}.mp4"
+        return f"{prefix}{max_index + 1}.mp4"
 
     def _report_progress(self, message: str, level: str = "info"):
         """Report progress to callback if set."""
@@ -351,15 +340,35 @@ class FalAIKlingGenerator:
     def check_duplicate_exists(
         self, image_path: str, output_folder: Optional[str] = None
     ) -> bool:
-        """Check if video already exists in the target output folder"""
+        """Check if any video already exists for this image+model combination."""
+        import glob as _glob
         try:
             char_name = Path(image_path).stem
-            # Use provided output folder, or default to downloads folder
             target_folder = output_folder if output_folder else self.downloads_folder
-            # Use new filename format with model and prompt slot
-            output_filename = self.get_output_filename(char_name)
-            output_path = Path(target_folder) / output_filename
-            return output_path.exists()
+            model_short = self.get_model_short_name()
+            try:
+                slot = max(1, int(getattr(self, "prompt_slot", 1)))
+            except (TypeError, ValueError):
+                slot = 1
+
+            slot_pattern = str(
+                Path(target_folder) / f"{char_name}_{model_short}_p{slot}_*.mp4"
+            )
+            slot_matches = _glob.glob(slot_pattern)
+            if slot_matches:
+                return True
+
+            # Backward compatibility: treat legacy (pre-slot) files as slot 1 duplicates.
+            if slot == 1:
+                legacy_pattern = str(Path(target_folder) / f"{char_name}_{model_short}_*.mp4")
+                legacy_matches = [
+                    path
+                    for path in _glob.glob(legacy_pattern)
+                    if f"_{model_short}_p" not in Path(path).stem
+                ]
+                return bool(legacy_matches)
+
+            return False
         except Exception:
             return False
 
@@ -904,14 +913,11 @@ class FalAIKlingGenerator:
                                 # DEBUG: Log parameters before filename generation
                                 logger.debug(f" About to generate filename:")
                                 logger.info(f"  char_name: {char_name}")
-                                logger.info(f"  config type: {type(config)}, value: {config}")
-                                logger.info(f"  timestamp type: {type(timestamp)}, value: {timestamp}")
-                                logger.info(f"  model_display_name: {self.model_display_name}")
-                                logger.info(f"  prompt_slot: {self.prompt_slot}")
+                                logger.info(f"  model: {self.model_display_name}")
 
                                 try:
                                     output_filename = self.get_output_filename(
-                                        char_name, config, timestamp
+                                        char_name, actual_output_folder
                                     )
                                     logger.debug(f" Generated filename: {output_filename}")
                                 except Exception as e:

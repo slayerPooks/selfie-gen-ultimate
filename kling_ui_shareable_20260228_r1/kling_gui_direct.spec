@@ -1,50 +1,59 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec file for Kling UI - Direct GUI Launcher
-Build with: pyinstaller kling_gui_direct.spec
-Creates a standalone executable that launches the Tkinter GUI directly (no CLI menu)
+Build with: pyinstaller kling_gui_direct.spec --noconfirm
 
-SECURITY & RELIABILITY IMPROVEMENTS:
-- Uses collect_submodules for Selenium to avoid missing imports
-- UPX disabled to prevent AV false positives
-- No redundant external .py file bundling (security risk)
-- All code bundled internally via PyInstaller
+Produces: dist/KlingUI/KlingUI.exe  (one-folder mode for reliability)
 """
 
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
-# Get the distribution directory
-dist_dir = Path(SPECPATH)
+SPEC_DIR = Path(SPECPATH)
+ICON_PATH = str(SPEC_DIR / 'kling_ui.ico')
 
-# Data files to include (NON-CODE files only)
-# NOTE: Python modules are bundled via Analysis, not as data files
-datas = [
-    # NOTE: kling_gui package is auto-discovered by Analysis
-    # NOTE: .py files are NOT bundled as data - they're compiled into the exe
-    # Only include non-code resources here if needed
-]
-
-# Hidden imports that PyInstaller might miss
+# -----------------------------------------------------------------------
+# Hidden imports
+# -----------------------------------------------------------------------
 hiddenimports = [
-    # Path utilities
+    # App-local modules
     'path_utils',
-    
-    # Tkinter and GUI
+    'model_metadata',
+    'model_schema_manager',
+    'kling_generator_falai',
+    'balance_tracker',
+    'selenium_balance_checker',
+    'dependency_checker',
+
+    # Kling GUI package (explicit)
+    'kling_gui',
+    'kling_gui.main_window',
+    'kling_gui.config_panel',
+    'kling_gui.drop_zone',
+    'kling_gui.log_display',
+    'kling_gui.queue_manager',
+    'kling_gui.video_looper',
+
+    # Tkinter
     'tkinter',
     'tkinter.ttk',
     'tkinter.filedialog',
     'tkinter.messagebox',
+    'tkinter.simpledialog',
     'tkinterdnd2',
-    
-    # Image processing
+    'tkinterdnd2.TkinterDnD',
+
+    # PIL / Pillow
     'PIL',
     'PIL.Image',
-    
-    # Rich console (for generator)
+    'PIL.ImageTk',
+    'PIL.ImageDraw',
+    'PIL.ImageFont',
+
+    # Rich
     'rich',
     'rich.console',
     'rich.progress',
@@ -53,76 +62,77 @@ hiddenimports = [
     'rich.table',
     'rich.live',
     'rich.spinner',
-    
+    'rich.markup',
+
+    # Requests
+    'requests',
+    'requests.adapters',
+    'requests.auth',
+    'requests.packages',
+    'urllib3',
+    'urllib3.util',
+    'certifi',
+
     # Standard library
     'json',
     'logging',
+    'logging.handlers',
     'threading',
     'concurrent.futures',
     'urllib.request',
     'urllib.parse',
     'base64',
     'hashlib',
-    
-    # Requests
-    'requests',
-    
-    # Kling GUI modules (explicit)
-    'kling_gui',
-    'kling_gui.main_window',
-    'kling_gui.config_panel',
-    'kling_gui.drop_zone',
-    'kling_gui.log_display',
-    'kling_gui.queue_manager',
-    'kling_gui.video_looper',
-    
-    # Generator and checkers
-    'kling_generator_falai',
-    'balance_tracker',
-    'selenium_balance_checker',
-    'dependency_checker',
+    'webbrowser',
+    'copy',
 ]
 
-# Selenium: Use collect_submodules to get ALL selenium modules
-# This prevents runtime import failures for selenium.webdriver.* submodules
-selenium_imports = collect_submodules('selenium')
-hiddenimports.extend(selenium_imports)
+# Selenium submodules (all of them - avoids runtime import failures)
+hiddenimports += collect_submodules('selenium')
+hiddenimports += collect_submodules('webdriver_manager')
 
-# WebDriver Manager: Collect all submodules
-webdriver_manager_imports = collect_submodules('webdriver_manager')
-hiddenimports.extend(webdriver_manager_imports)
+# -----------------------------------------------------------------------
+# Data files (non-Python resources)
+# -----------------------------------------------------------------------
 
+# tkinterdnd2 platform libraries (DLLs + TCL scripts)
+datas = collect_data_files('tkinterdnd2')
+
+# certifi CA bundle
+datas += collect_data_files('certifi')
+
+# App icon (bundled so _set_app_icon can find it in _MEIPASS)
+if Path(ICON_PATH).exists():
+    datas.append((ICON_PATH, '.'))
+
+# Default config template (prompts, model defaults - no API key)
+template_path = str(SPEC_DIR / 'default_config_template.json')
+if Path(template_path).exists():
+    datas.append((template_path, '.'))
+
+# -----------------------------------------------------------------------
+# Analysis
+# -----------------------------------------------------------------------
 a = Analysis(
-    [str(dist_dir / 'gui_launcher.py')],  # Direct GUI entry point
-    pathex=[str(dist_dir)],
+    [str(SPEC_DIR / 'gui_launcher.py')],
+    pathex=[str(SPEC_DIR)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[str(dist_dir / 'hooks')],
+    hookspath=[str(SPEC_DIR / 'hooks')],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Cut down bloat - these are never used at runtime
+        'matplotlib', 'numpy', 'pandas', 'scipy',
+        'IPython', 'notebook', 'jupyter',
+        'PyQt5', 'PyQt6', 'wx',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Try to add tkinterdnd2 DLLs and TCL files
-try:
-    import tkinterdnd2
-    tkdnd_path = Path(tkinterdnd2.__file__).parent
-
-    # Find and add tkdnd DLLs
-    for dll_file in tkdnd_path.glob('**/*.dll'):
-        rel_path = dll_file.relative_to(tkdnd_path).parent
-        a.datas.append((str(dll_file), str(Path('tkinterdnd2') / rel_path), 'DATA'))
-
-    for tcl_file in tkdnd_path.glob('**/*.tcl'):
-        rel_path = tcl_file.relative_to(tkdnd_path).parent
-        a.datas.append((str(tcl_file), str(Path('tkinterdnd2') / rel_path), 'DATA'))
-except ImportError:
-    print("Warning: tkinterdnd2 not found, drag-drop may not work in built exe")
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -131,18 +141,18 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='KlingGUI_Direct',  # Distinct name from CLI version
+    name='KlingUI',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # DISABLED: UPX causes AV false positives and can break runtime
-    console=False,  # No console window for GUI-only version
+    upx=False,       # UPX disabled: reduces AV false positives
+    console=False,   # No console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add icon path here if you have one: icon='icon.ico'
+    icon=ICON_PATH if Path(ICON_PATH).exists() else None,
 )
 
 coll = COLLECT(
@@ -151,7 +161,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,  # DISABLED: Consistent with EXE setting
+    upx=False,
     upx_exclude=[],
-    name='KlingGUI_Direct',
+    name='KlingUI',
 )
