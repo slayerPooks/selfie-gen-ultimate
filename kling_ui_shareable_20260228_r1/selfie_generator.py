@@ -246,8 +246,12 @@ class SelfieGenerator:
             }
 
         if model_endpoint == "fal-ai/nano-banana-pro/edit":
+            nano_prompt = (
+                "zoomed out, full upper body visible, arm's length distance, "
+                f"{prompt}"
+            )
             return {
-                "prompt": prompt,
+                "prompt": nano_prompt,
                 "image_urls": [image_url],
                 "num_images": 1,
                 "aspect_ratio": SelfieGenerator._closest_aspect_ratio(width, height),
