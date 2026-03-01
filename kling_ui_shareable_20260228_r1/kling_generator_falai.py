@@ -52,10 +52,8 @@ class FalAIKlingGenerator:
             )
             self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
 
-        # Freeimage.host guest API key
-        self.freeimage_key = os.getenv(
-            "FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5"
-        )
+        # Freeimage.host API key (optional; can be overridden by GUI config)
+        self.freeimage_key = os.getenv("FREEIMAGE_API_KEY", "")
 
         # Default prompt for head movement
         self.default_prompt = (
@@ -275,6 +273,14 @@ class FalAIKlingGenerator:
 
     def upload_to_freeimage(self, image_path: str) -> Optional[str]:
         """Upload image to freeimage.host"""
+        if not self.freeimage_key:
+            logger.error("FREEIMAGE_API_KEY not set")
+            self._report_progress(
+                "FREEIMAGE_API_KEY not set — configure Freeimage key in UI or env",
+                "error",
+            )
+            return None
+
         try:
             img = Image.open(image_path)
 

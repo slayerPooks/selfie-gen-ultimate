@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
-# Freeimage.host API key — env override, else public guest key
-_FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5")
+# Freeimage.host API key from environment (optional)
+_FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
 
 
 def upload_to_freeimage(

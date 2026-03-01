@@ -387,17 +387,7 @@ class ConfigPanel(tk.Frame):
             ],
         )
 
-        # Configure the dropdown listbox colors (affects all comboboxes)
-        try:
-            root = self.winfo_toplevel()
-            root.option_add("*TCombobox*Listbox.background", COLORS["bg_main"])
-            root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
-            root.option_add(
-                "*TCombobox*Listbox.selectBackground", COLORS["accent_blue"]
-            )
-            root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
-        except tk.TclError:
-            pass  # Ignore if can't set listbox options
+        # Dropdown listbox colors are configured centrally in main_window.py.
 
     def _setup_ui(self):
         """Set up the configuration UI — two-column layout."""
@@ -1569,4 +1559,3 @@ class ConfigPanel(tk.Frame):
                     text="⚠ Schema fetch failed - check logs",
                     fg=COLORS.get("error", "#FF6464")
                 )
-

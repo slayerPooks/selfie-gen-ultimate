@@ -341,7 +341,7 @@ class KlingGUIWindow:
             "loop_videos": True,  # Loop videos ON by default
             "allow_reprocess": True,
             "reprocess_mode": "increment",
-            "freeimage_api_key": "6d207e02198a847aa98d0a2a901485a5",
+            "freeimage_api_key": "",
             "openrouter_vision_system_prompt": "",
             # Folder processing settings
             "folder_filter_pattern": "",
@@ -1208,10 +1208,6 @@ class KlingGUIWindow:
             return  # User cancelled
         new_key = new_key.strip()
 
-        # For freeimage, blank means revert to default guest key
-        if config_key == "freeimage_api_key" and not new_key:
-            new_key = "6d207e02198a847aa98d0a2a901485a5"
-
         self.config[config_key] = new_key
         self._save_config()
         self._update_api_badge(config_key)
@@ -1389,7 +1385,7 @@ class KlingGUIWindow:
             ("openrouter_api_key", "OpenRouter",
              "Enter your OpenRouter API key:\n(https://openrouter.ai/keys)"),
             ("freeimage_api_key", "Freeimage",
-             "Enter Freeimage API key\n(leave blank for default guest key):"),
+             "Enter Freeimage API key\n(leave blank to clear key):"),
         ]
         for config_key, label, prompt_text in keys_config:
             self._create_api_badge(control_frame, config_key, label, prompt_text)

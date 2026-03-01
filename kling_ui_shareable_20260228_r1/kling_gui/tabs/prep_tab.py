@@ -8,6 +8,12 @@ from typing import Callable, Optional
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
 
+try:
+    from selfie_prompt_composer import DEFAULT_GENDER, DEFAULT_CAMERA_STYLE
+except Exception:
+    DEFAULT_GENDER = "female"
+    DEFAULT_CAMERA_STYLE = "phone_selfie"
+
 
 class PrepTab(tk.Frame):
     """Tab 1: Analyze portrait images using vision AI."""
@@ -27,6 +33,7 @@ class PrepTab(tk.Frame):
         "identity, expression, and lighting to be used as an image generation prompt. "
         "Return ONLY the prompt text, no explanations or formatting."
     )
+    PRIMARY_TEXT_COLOR = "#111111"
 
     def __init__(
         self,
@@ -61,6 +68,7 @@ class PrepTab(tk.Frame):
         self._selfie_prompt_writer = selfie_prompt_writer
         self._selfie_config_getter = None  # set via set_selfie_config_getter
         self._busy = False
+        self._prompt_edit_mode = False
         self._last_result = ""
         self._default_vision_prompt = self._resolve_default_vision_prompt()
 
@@ -171,7 +179,7 @@ class PrepTab(tk.Frame):
             text="Add",
             font=(FONT_FAMILY, 8),
             bg=COLORS["accent_blue"],
-            fg="white",
+            fg=self.PRIMARY_TEXT_COLOR,
             command=self._on_add_model,
             cursor="hand2",
             relief=tk.FLAT,
@@ -218,10 +226,39 @@ class PrepTab(tk.Frame):
         self.system_prompt_text.insert(
             "1.0", (saved_prompt or self._default_vision_prompt).strip()
         )
-        self.system_prompt_text.bind("<FocusOut>", self._on_system_prompt_focus_out)
+        self.system_prompt_text.config(state=tk.DISABLED)
 
         prompt_actions = tk.Frame(self, bg=COLORS["bg_panel"])
         prompt_actions.pack(fill=tk.X, padx=10, pady=(0, 4))
+
+        self.edit_prompt_btn = tk.Button(
+            prompt_actions,
+            text="Edit Prompt",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_edit_system_prompt,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+        )
+        self.edit_prompt_btn.pack(side=tk.LEFT)
+
+        self.save_prompt_btn = tk.Button(
+            prompt_actions,
+            text="Save Prompt",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg=self.PRIMARY_TEXT_COLOR,
+            command=self._on_save_system_prompt,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+            state=tk.DISABLED,
+        )
+        self.save_prompt_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         self.reset_prompt_btn = tk.Button(
             prompt_actions,
@@ -246,14 +283,14 @@ class PrepTab(tk.Frame):
             text="Analyze Image",
             font=(FONT_FAMILY, 11, "bold"),
             bg=COLORS["accent_blue"],
-            fg="white",
+            fg=self.PRIMARY_TEXT_COLOR,
             command=self._on_analyze,
             cursor="hand2",
             relief=tk.FLAT,
             padx=20,
             pady=6,
         )
-        self.analyze_btn.pack(side=tk.LEFT)
+        self.analyze_btn.pack(anchor="center")
 
         self.status_label = tk.Label(
             btn_frame,
@@ -262,7 +299,7 @@ class PrepTab(tk.Frame):
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
         )
-        self.status_label.pack(side=tk.LEFT, padx=10)
+        self.status_label.pack(anchor="center", pady=(4, 0))
 
         # Result display
         tk.Label(
@@ -314,7 +351,7 @@ class PrepTab(tk.Frame):
             pady=3,
             state=tk.DISABLED,
         )
-        self.write_btn.pack(side=tk.LEFT)
+        self.write_btn.pack(anchor="center")
 
     def _get_selected_model_endpoint(self) -> str:
         idx = self.model_combo.current()
@@ -379,17 +416,39 @@ class PrepTab(tk.Frame):
         prompt = self.system_prompt_text.get("1.0", tk.END).strip()
         return prompt if prompt else self._default_vision_prompt
 
-    def _on_system_prompt_focus_out(self, _event):
+    def _set_prompt_edit_mode(self, enabled: bool):
+        self._prompt_edit_mode = enabled
+        self.system_prompt_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        self.edit_prompt_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self.save_prompt_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _on_edit_system_prompt(self):
+        self._set_prompt_edit_mode(True)
+        self.system_prompt_text.focus_set()
+        self.system_prompt_text.mark_set(tk.INSERT, tk.END)
+
+    def _on_save_system_prompt(self):
+        prompt = self._get_system_prompt_text()
+        self.system_prompt_text.config(state=tk.NORMAL)
+        self.system_prompt_text.delete("1.0", tk.END)
+        self.system_prompt_text.insert("1.0", prompt)
         self._save_config_now()
+        self._set_prompt_edit_mode(False)
+        self.log("Vision prompt saved", "success")
 
     def _on_reset_system_prompt(self):
+        self.system_prompt_text.config(state=tk.NORMAL)
         self.system_prompt_text.delete("1.0", tk.END)
         self.system_prompt_text.insert("1.0", self._default_vision_prompt)
         self._save_config_now()
+        self._set_prompt_edit_mode(False)
         self.log("Vision prompt reset to default", "info")
 
     def _on_analyze(self):
         if self._busy:
+            return
+        if self._prompt_edit_mode:
+            self.log("Save the Vision Prompt before analyzing", "warning")
             return
 
         api_key = self.get_config().get("openrouter_api_key", "").strip()
@@ -460,11 +519,11 @@ class PrepTab(tk.Frame):
         # Use live Step 2 widget values if available, else fall back to config
         if self._selfie_config_getter:
             live = self._selfie_config_getter()
-            gender = live.get("composer_gender", "female")
-            camera_style = live.get("composer_camera_style", "phone_selfie")
+            gender = live.get("composer_gender", DEFAULT_GENDER)
+            camera_style = live.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
         else:
-            gender = self.config.get("composer_gender", "female")
-            camera_style = self.config.get("composer_camera_style", "phone_selfie")
+            gender = self.config.get("composer_gender", DEFAULT_GENDER)
+            camera_style = self.config.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
 
         try:
             from selfie_prompt_composer import SelfiePromptComposer

@@ -9,6 +9,12 @@ from typing import Callable
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
 
+try:
+    from selfie_prompt_composer import DEFAULT_GENDER, DEFAULT_CAMERA_STYLE
+except Exception:
+    DEFAULT_GENDER = "female"
+    DEFAULT_CAMERA_STYLE = "phone_selfie"
+
 
 class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
@@ -56,7 +62,7 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
         ).grid(row=0, column=0, sticky="w", padx=2)
         self.gender_var = tk.StringVar(
-            value=self.config.get("composer_gender", "female")
+            value=self.config.get("composer_gender", DEFAULT_GENDER)
         )
         gender_combo = ttk.Combobox(
             composer_frame,
@@ -76,7 +82,7 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
         ).grid(row=0, column=2, sticky="w", padx=2)
         self.style_var = tk.StringVar(
-            value=self.config.get("composer_camera_style", "phone_selfie")
+            value=self.config.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
         )
         styles = [
             "phone_selfie",
@@ -179,13 +185,19 @@ class SelfieTab(tk.Frame):
         ).grid(row=1, column=0, sticky="w")
 
         # Determine saved selection from config dimensions
-        saved_w = self.config.get("selfie_width", 896)
-        saved_h = self.config.get("selfie_height", 1152)
-        saved_ratio = "Portrait (3:4)"
-        for name, (w, h) in self._aspect_ratios.items():
-            if w == saved_w and h == saved_h:
-                saved_ratio = name
-                break
+        default_ratio_name = "Portrait (3:4)"
+        default_w, default_h = self._aspect_ratios[default_ratio_name]
+        try:
+            saved_w = int(self.config.get("selfie_width", default_w))
+            saved_h = int(self.config.get("selfie_height", default_h))
+        except (TypeError, ValueError):
+            saved_w, saved_h = default_w, default_h
+        dims_to_name = {dims: name for name, dims in self._aspect_ratios.items()}
+        saved_ratio = dims_to_name.get((saved_w, saved_h))
+        if not saved_ratio:
+            custom_ratio = f"Custom ({saved_w}x{saved_h})"
+            self._aspect_ratios[custom_ratio] = (saved_w, saved_h)
+            saved_ratio = custom_ratio
         self.aspect_var = tk.StringVar(value=saved_ratio)
         aspect_combo = ttk.Combobox(
             grid,
@@ -263,7 +275,7 @@ class SelfieTab(tk.Frame):
 
     def _get_selected_dimensions(self) -> tuple:
         """Return (width, height) for the currently selected aspect ratio."""
-        return self._aspect_ratios.get(self.aspect_var.get(), (896, 1152))
+        return self._aspect_ratios.get(self.aspect_var.get(), self._aspect_ratios["Portrait (3:4)"])
 
     def _compose_prompt(self):
         """Compose prompt from selected options."""
