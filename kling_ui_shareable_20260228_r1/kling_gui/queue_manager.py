@@ -16,6 +16,19 @@ from path_utils import VALID_EXTENSIONS
 logger = logging.getLogger(__name__)
 
 
+def _get_model_short_name(generator) -> str:
+    """Get model short name with compatibility fallback for older generators."""
+    if hasattr(generator, "get_model_short_name"):
+        try:
+            return str(generator.get_model_short_name())
+        except Exception:
+            pass
+
+    fallback = str(getattr(generator, "model_display_name", "model"))
+    fallback = re.sub(r"[^A-Za-z0-9]+", "", fallback).lower()
+    return fallback[:16] if fallback else "model"
+
+
 def get_output_video_path(
     image_path: str,
     output_folder: str,
@@ -33,7 +46,7 @@ def get_output_video_path(
         filename = generator.get_output_filename(image_name, output_folder)
     except TypeError:
         # Backward compatibility for older generator signatures.
-        filename = generator.get_output_filename(image_name, config, timestamp)
+        filename = generator.get_output_filename(image_name, config or {}, timestamp)
     return Path(output_folder) / filename
 
 
@@ -53,7 +66,7 @@ def check_video_exists(
     import glob
 
     image_name = Path(image_path).stem
-    model_short = generator.get_model_short_name()
+    model_short = _get_model_short_name(generator)
     prompt_slot = (config or {}).get("current_prompt_slot", getattr(generator, "prompt_slot", 1))
     try:
         prompt_slot = max(1, int(prompt_slot))
