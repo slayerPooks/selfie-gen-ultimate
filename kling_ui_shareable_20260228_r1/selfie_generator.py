@@ -434,6 +434,8 @@ class SelfieGenerator:
         self._report("Encoding image for BFL upload...", "upload")
         try:
             img = Image.open(image_path)
+            if img.mode in ("RGBA", "P", "LA"):
+                img = img.convert("RGB")
             img.thumbnail((1024, 1024), Image.LANCZOS)
             buf = BytesIO()
             img.save(buf, format="JPEG", quality=90)
@@ -442,14 +444,14 @@ class SelfieGenerator:
             self._report(f"Failed to encode image: {exc}", "error")
             return False
 
-        # Submit to BFL
+        # Submit to BFL — field is "input_image" with data URI prefix
         headers = {
             "x-key": self._bfl_api_key,
             "Content-Type": "application/json",
         }
         payload = {
             "prompt": prompt,
-            "image": image_b64,
+            "input_image": f"data:image/jpeg;base64,{image_b64}",
         }
 
         self._report(f"Submitting to {resolved_label}...", "task")
@@ -457,22 +459,34 @@ class SelfieGenerator:
             resp = requests.post(api_url, json=payload, headers=headers, timeout=60)
             resp.raise_for_status()
             submit_data = resp.json()
+        except requests.exceptions.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.response.text[:300]
+            except Exception:
+                pass
+            self._report(f"BFL submit failed ({exc.response.status_code}): {body}", "error")
+            return False
         except Exception as exc:
             self._report(f"BFL submit failed: {exc}", "error")
             return False
 
         polling_url = submit_data.get("polling_url")
-        if not polling_url:
-            # Some BFL endpoints return the result directly
-            sample_url = submit_data.get("sample") or (
-                submit_data.get("result", {}).get("sample") if isinstance(submit_data.get("result"), dict) else None
-            )
+        task_id = submit_data.get("id", "")
+        if polling_url:
+            self._report(f"BFL task {task_id} queued, polling...", "task")
+        else:
+            # Some BFL endpoints may return the result directly
+            result_obj = submit_data.get("result")
+            sample_url = (
+                result_obj.get("sample") if isinstance(result_obj, dict) else None
+            ) or submit_data.get("sample")
             if sample_url:
                 return self._bfl_download(sample_url, temp_output_path)
             self._report(f"No polling_url in BFL response: {submit_data}", "error")
             return False
 
-        # Poll for result
+        # Poll for result (BFL status values: Pending, Ready, Error)
         self._report("Waiting for BFL generation...", "progress")
         max_polls = 120
         for i in range(max_polls):
@@ -485,14 +499,18 @@ class SelfieGenerator:
                 self._report(f"BFL poll error: {exc}", "warning")
                 continue
 
-            status = poll_data.get("status", "").lower()
-            if status in ("ready", "succeeded"):
-                sample_url = poll_data.get("result", {}).get("sample") if isinstance(poll_data.get("result"), dict) else poll_data.get("sample")
+            status = poll_data.get("status", "")
+            status_lower = status.lower()
+            if status_lower in ("ready", "succeeded"):
+                result_obj = poll_data.get("result")
+                sample_url = (
+                    result_obj.get("sample") if isinstance(result_obj, dict) else None
+                ) or poll_data.get("sample")
                 if sample_url:
                     return self._bfl_download(sample_url, temp_output_path)
-                self._report("BFL result missing sample URL", "error")
+                self._report(f"BFL result missing sample URL: {poll_data}", "error")
                 return False
-            elif status in ("error", "failed"):
+            elif status_lower in ("error", "failed"):
                 err_msg = poll_data.get("error", "Unknown BFL error")
                 self._report(f"BFL generation failed: {err_msg}", "error")
                 return False
