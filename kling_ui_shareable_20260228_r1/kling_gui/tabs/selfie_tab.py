@@ -306,12 +306,18 @@ class SelfieTab(tk.Frame):
         if not output_folder or not os.path.isdir(output_folder):
             output_folder = os.path.dirname(image_path)
 
-        self._set_busy(True)
-        seed = -1 if self.random_seed_var.get() else self.seed_var.get()
+        # Read numeric vars BEFORE setting busy — .get() raises TclError
+        # if the entry contains non-numeric text.
+        try:
+            seed = -1 if self.random_seed_var.get() else self.seed_var.get()
+            id_weight = self.id_weight_var.get()
+            width = self.width_var.get()
+            height = self.height_var.get()
+        except (tk.TclError, ValueError):
+            self.log("Invalid numeric value in settings", "error")
+            return
 
-        id_weight = self.id_weight_var.get()
-        width = self.width_var.get()
-        height = self.height_var.get()
+        self._set_busy(True)
 
         def _run():
             try:

@@ -1915,14 +1915,31 @@ class KlingGUIWindow:
 
     def _on_close(self):
         """Handle window close."""
-        if self.queue_manager and self.queue_manager.is_running:
+        # Check both queue and tab worker threads
+        busy_tabs = []
+        for tab_name in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+            tab_widget = getattr(self, tab_name, None)
+            if tab_widget and getattr(tab_widget, "_busy", False):
+                busy_tabs.append(tab_name.replace("_tab", "").title())
+
+        is_processing = (
+            (self.queue_manager and self.queue_manager.is_running)
+            or bool(busy_tabs)
+        )
+
+        if is_processing:
+            detail = ""
+            if busy_tabs:
+                detail = f" ({', '.join(busy_tabs)} running)"
             if not messagebox.askyesno(
                 "Confirm Close",
-                "Processing is in progress. Are you sure you want to close?",
+                f"Processing is in progress{detail}. "
+                "Are you sure you want to close?",
             ):
                 return
 
-            self.queue_manager.stop_processing()
+            if self.queue_manager and self.queue_manager.is_running:
+                self.queue_manager.stop_processing()
 
         # Collect tab configs before saving
         for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
