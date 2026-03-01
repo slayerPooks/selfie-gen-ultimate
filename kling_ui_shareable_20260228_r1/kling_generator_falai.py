@@ -114,7 +114,7 @@ class FalAIKlingGenerator:
         # Common model mappings
         if "kling" in endpoint:
             # Extract version info — ordered most-specific to least-specific
-            if "v3" in endpoint:
+            if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
                 return "k30pro" if "pro" in endpoint else "k30std"
             elif "v2.6" in endpoint:
                 return "k26pro"
@@ -358,7 +358,7 @@ class FalAIKlingGenerator:
             if slot_matches:
                 return True
 
-            # Backward compatibility: treat legacy (pre-slot) files as slot 1 duplicates.
+            # Backward compatibility: treat legacy (pre-slot) underscore files as slot 1 duplicates.
             if slot == 1:
                 legacy_pattern = str(Path(target_folder) / f"{char_name}_{model_short}_*.mp4")
                 legacy_matches = [
@@ -366,7 +366,16 @@ class FalAIKlingGenerator:
                     for path in _glob.glob(legacy_pattern)
                     if f"_{model_short}_p" not in Path(path).stem
                 ]
-                return bool(legacy_matches)
+                if legacy_matches:
+                    return True
+
+            # Backward compatibility: check older hyphenated-format filenames (e.g.
+            # "Selfie-Kling_V2.5_Turbo_Pro-*-p3-2026-01-17.mp4") for any slot.
+            # Pattern anchors on "-Kling_" immediately after the stem to prevent
+            # false positives from prefixed filenames and non-Kling legacy files.
+            hyphen_pattern = str(Path(target_folder) / f"{_glob.escape(char_name)}-Kling_*-p{slot}-*.mp4")
+            if _glob.glob(hyphen_pattern):
+                return True
 
             return False
         except Exception:
