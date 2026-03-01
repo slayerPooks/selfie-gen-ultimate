@@ -342,10 +342,14 @@ class KlingGUIWindow:
             "allow_reprocess": True,
             "reprocess_mode": "increment",
             "freeimage_api_key": "",
+            "bfl_api_key": "",
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
             "selfie_selected_models": {
+                "bfl/flux-kontext-pro": False,
+                "bfl/flux-kontext-max": False,
+                "bfl/flux-2-pro": False,
                 "fal-ai/flux-pulid": True,
                 "fal-ai/pulid": False,
                 "fal-ai/instant-character": False,
@@ -1395,6 +1399,8 @@ class KlingGUIWindow:
         keys_config = [
             ("falai_api_key", "Fal.ai",
              "Enter your fal.ai API key:\n(https://fal.ai/dashboard/keys)"),
+            ("bfl_api_key", "BFL",
+             "Enter your BFL API key:\n(https://api.bfl.ai/)"),
             ("openrouter_api_key", "OpenRouter",
              "Enter your OpenRouter API key:\n(https://openrouter.ai/keys)"),
             ("freeimage_api_key", "Freeimage",

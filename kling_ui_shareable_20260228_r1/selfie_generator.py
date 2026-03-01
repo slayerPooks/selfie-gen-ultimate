@@ -4,6 +4,8 @@ import os
 import random
 import logging
 import re
+import base64
+import time
 from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
 
@@ -28,7 +30,36 @@ class SelfieGenerator:
         "Photorealistic, natural skin texture, amateur photography aesthetic, "
         "unfiltered iPhone 7 quality. Not illustrated, not anime, not painting."
     )
+    @staticmethod
+    def resolve_wildcards(template: str) -> str:
+        """Resolve {opt1|opt2|opt3} blocks by randomly picking one option per block."""
+        def _pick(match):
+            options = [o.strip() for o in match.group(1).split("|") if o.strip()]
+            return random.choice(options) if options else ""
+        return re.sub(r"\{([^{}]+)\}", _pick, template)
+
     AVAILABLE_MODELS = [
+        {
+            "endpoint": "bfl/flux-kontext-pro",
+            "label": "FLUX Kontext Pro (BFL)",
+            "slug": "flux-kontext-pro",
+            "provider": "bfl",
+            "api_url": "https://api.bfl.ai/v1/flux-kontext-pro",
+        },
+        {
+            "endpoint": "bfl/flux-kontext-max",
+            "label": "FLUX Kontext Max (BFL)",
+            "slug": "flux-kontext-max",
+            "provider": "bfl",
+            "api_url": "https://api.bfl.ai/v1/flux-kontext-max",
+        },
+        {
+            "endpoint": "bfl/flux-2-pro",
+            "label": "FLUX 2 Pro (BFL)",
+            "slug": "flux-2-pro",
+            "provider": "bfl",
+            "api_url": "https://api.bfl.ai/v1/flux-2-pro",
+        },
         {
             "endpoint": "fal-ai/flux-pulid",
             "label": "FLUX.1 + PuLID",
@@ -87,9 +118,10 @@ class SelfieGenerator:
         },
     ]
 
-    def __init__(self, api_key: str, freeimage_key: Optional[str] = None):
+    def __init__(self, api_key: str, freeimage_key: Optional[str] = None, bfl_api_key: Optional[str] = None):
         self.api_key = api_key
         self._freeimage_key = freeimage_key
+        self._bfl_api_key = bfl_api_key or ""
         self._progress_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
@@ -288,32 +320,27 @@ class SelfieGenerator:
 
         raise ValueError(f"Unsupported selfie model endpoint: {model_endpoint}")
 
-    def generate(
+    @classmethod
+    def _get_model_provider(cls, endpoint: str) -> str:
+        """Return 'bfl' or 'fal' based on the model's provider field."""
+        for model in cls.AVAILABLE_MODELS:
+            if model["endpoint"] == endpoint:
+                return model.get("provider", "fal")
+        return "fal"
+
+    def _generate_fal_raw(
         self,
         image_path: str,
         prompt: str,
-        output_folder: str,
-        id_weight: float = 0.8,
-        width: int = 896,
-        height: int = 1152,
-        seed: int = -1,
-        model_endpoint: str = "",
-        model_label: str = "",
-    ) -> Optional[str]:
-        """Generate a selfie from an identity reference image.
-
-        Args:
-            image_path: Path to identity reference image
-            prompt: Text prompt for the selfie
-            output_folder: Where to save output
-            id_weight: Identity preservation strength (0.0–1.0)
-            width: Output width in pixels
-            height: Output height in pixels
-            seed: Random seed (-1 for random)
-
-        Returns:
-            Absolute path to generated image, or None on failure.
-        """
+        temp_output_path: str,
+        resolved_endpoint: str,
+        resolved_label: str,
+        id_weight: float,
+        width: int,
+        height: int,
+        actual_seed: int,
+    ) -> bool:
+        """Run the fal.ai generation pipeline. Returns True on success."""
         from fal_utils import (
             upload_to_freeimage,
             fal_queue_submit,
@@ -321,7 +348,6 @@ class SelfieGenerator:
             fal_download_file,
         )
 
-        # Upload identity image
         self._report("Uploading identity reference...", "upload")
         image_url = upload_to_freeimage(
             image_path, progress_cb=self._progress_callback,
@@ -329,14 +355,8 @@ class SelfieGenerator:
         )
         if not image_url:
             self._report("Failed to upload image", "error")
-            return None
+            return False
 
-        # Resolve seed
-        actual_seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
-        resolved_endpoint = model_endpoint or self.DEFAULT_ENDPOINT
-        resolved_label = model_label or self.get_model_label(resolved_endpoint)
-
-        # Build payload
         payload = self._build_payload(
             model_endpoint=resolved_endpoint,
             prompt=prompt,
@@ -352,37 +372,176 @@ class SelfieGenerator:
             "task",
         )
 
-        # Submit to queue
         result = fal_queue_submit(
             self.api_key, resolved_endpoint, payload, self._progress_callback
         )
         if not result:
             self._report("Failed to submit job", "error")
-            return None
+            return False
 
         status_url = result.get("status_url")
         if not status_url:
             self._report("No status URL in response", "error")
-            return None
+            return False
 
         self._report("Waiting for generation...", "progress")
         final = fal_queue_poll(self.api_key, status_url, self._progress_callback)
         if not final:
             self._report("Generation failed or timed out", "error")
-            return None
+            return False
 
-        # Extract image URL from result
         images = final.get("images", [])
         if not images:
             self._report("No images in result", "error")
-            return None
+            return False
 
         image_url_result = images[0].get("url") if isinstance(images[0], dict) else images[0]
         if not image_url_result:
             self._report("No image URL in result", "error")
-            return None
+            return False
 
-        # Download to a temp path first; final name includes similarity + index.
+        self._report("Downloading result...", "download")
+        return fal_download_file(image_url_result, temp_output_path, self._progress_callback)
+
+    def _generate_bfl_raw(
+        self,
+        image_path: str,
+        prompt: str,
+        temp_output_path: str,
+        resolved_endpoint: str,
+        resolved_label: str,
+    ) -> bool:
+        """Run the BFL (api.bfl.ai) generation pipeline. Returns True on success."""
+        import requests
+        from PIL import Image
+        from io import BytesIO
+
+        if not self._bfl_api_key:
+            self._report("BFL API key is not set", "error")
+            return False
+
+        # Determine API URL from model metadata
+        api_url = None
+        for model in self.AVAILABLE_MODELS:
+            if model["endpoint"] == resolved_endpoint:
+                api_url = model.get("api_url")
+                break
+        if not api_url:
+            self._report(f"No API URL for BFL model: {resolved_endpoint}", "error")
+            return False
+
+        # Base64-encode the image (resize to fit reasonable bounds, JPEG for size)
+        self._report("Encoding image for BFL upload...", "upload")
+        try:
+            img = Image.open(image_path)
+            img.thumbnail((1024, 1024), Image.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        except Exception as exc:
+            self._report(f"Failed to encode image: {exc}", "error")
+            return False
+
+        # Submit to BFL
+        headers = {
+            "x-key": self._bfl_api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "prompt": prompt,
+            "image": image_b64,
+        }
+
+        self._report(f"Submitting to {resolved_label}...", "task")
+        try:
+            resp = requests.post(api_url, json=payload, headers=headers, timeout=60)
+            resp.raise_for_status()
+            submit_data = resp.json()
+        except Exception as exc:
+            self._report(f"BFL submit failed: {exc}", "error")
+            return False
+
+        polling_url = submit_data.get("polling_url")
+        if not polling_url:
+            # Some BFL endpoints return the result directly
+            sample_url = submit_data.get("sample") or (
+                submit_data.get("result", {}).get("sample") if isinstance(submit_data.get("result"), dict) else None
+            )
+            if sample_url:
+                return self._bfl_download(sample_url, temp_output_path)
+            self._report(f"No polling_url in BFL response: {submit_data}", "error")
+            return False
+
+        # Poll for result
+        self._report("Waiting for BFL generation...", "progress")
+        max_polls = 120
+        for i in range(max_polls):
+            time.sleep(5)
+            try:
+                poll_resp = requests.get(polling_url, headers={"x-key": self._bfl_api_key}, timeout=30)
+                poll_resp.raise_for_status()
+                poll_data = poll_resp.json()
+            except Exception as exc:
+                self._report(f"BFL poll error: {exc}", "warning")
+                continue
+
+            status = poll_data.get("status", "").lower()
+            if status in ("ready", "succeeded"):
+                sample_url = poll_data.get("result", {}).get("sample") if isinstance(poll_data.get("result"), dict) else poll_data.get("sample")
+                if sample_url:
+                    return self._bfl_download(sample_url, temp_output_path)
+                self._report("BFL result missing sample URL", "error")
+                return False
+            elif status in ("error", "failed"):
+                err_msg = poll_data.get("error", "Unknown BFL error")
+                self._report(f"BFL generation failed: {err_msg}", "error")
+                return False
+            else:
+                if i % 6 == 0:
+                    self._report(f"BFL status: {status} (poll {i+1})...", "progress")
+
+        self._report("BFL generation timed out", "error")
+        return False
+
+    def _bfl_download(self, url: str, output_path: str) -> bool:
+        """Download a BFL result image to disk."""
+        import requests
+
+        self._report("Downloading BFL result...", "download")
+        try:
+            resp = requests.get(url, timeout=120)
+            resp.raise_for_status()
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+            return True
+        except Exception as exc:
+            self._report(f"BFL download failed: {exc}", "error")
+            return False
+
+    def generate(
+        self,
+        image_path: str,
+        prompt: str,
+        output_folder: str,
+        id_weight: float = 0.8,
+        width: int = 896,
+        height: int = 1152,
+        seed: int = -1,
+        model_endpoint: str = "",
+        model_label: str = "",
+    ) -> Optional[str]:
+        """Generate a selfie from an identity reference image.
+
+        Dispatches to fal.ai or BFL depending on the model's provider.
+
+        Returns:
+            Absolute path to generated image, or None on failure.
+        """
+        actual_seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
+        resolved_endpoint = model_endpoint or self.DEFAULT_ENDPOINT
+        resolved_label = model_label or self.get_model_label(resolved_endpoint)
+        provider = self._get_model_provider(resolved_endpoint)
+
         os.makedirs(output_folder, exist_ok=True)
         stem = Path(image_path).stem
         model_short = self._model_short_name(resolved_endpoint)
@@ -396,30 +555,51 @@ class SelfieGenerator:
                 output_folder, f"{stem}_{model_short}_tmp_{actual_seed}_{temp_counter}.png"
             )
 
-        self._report("Downloading result...", "download")
-        if fal_download_file(image_url_result, temp_output_path, self._progress_callback):
-            similarity = self._compute_similarity_percent(image_path, temp_output_path)
-            if similarity is None:
-                self._report(f"[{resolved_label}] Similarity: n/a", "info")
-                similarity_tag = "simna"
-            else:
-                self._report(f"[{resolved_label}] Similarity: {similarity}%", "info")
-                similarity_tag = f"sim{similarity}"
+        # Provider dispatch
+        if provider == "bfl":
+            success = self._generate_bfl_raw(
+                image_path=image_path,
+                prompt=prompt,
+                temp_output_path=temp_output_path,
+                resolved_endpoint=resolved_endpoint,
+                resolved_label=resolved_label,
+            )
+        else:
+            success = self._generate_fal_raw(
+                image_path=image_path,
+                prompt=prompt,
+                temp_output_path=temp_output_path,
+                resolved_endpoint=resolved_endpoint,
+                resolved_label=resolved_label,
+                id_weight=id_weight,
+                width=width,
+                height=height,
+                actual_seed=actual_seed,
+            )
 
-            final_prefix = f"{stem}_{model_short}_{similarity_tag}_"
-            final_output_path = self._next_indexed_output_path(output_folder, final_prefix)
+        if not success:
+            return None
+
+        # Shared post-processing: similarity + final rename
+        similarity = self._compute_similarity_percent(image_path, temp_output_path)
+        if similarity is None:
+            self._report(f"[{resolved_label}] Similarity: n/a", "info")
+            similarity_tag = "simna"
+        else:
+            self._report(f"[{resolved_label}] Similarity: {similarity}%", "info")
+            similarity_tag = f"sim{similarity}"
+
+        final_prefix = f"{stem}_{model_short}_{similarity_tag}_"
+        final_output_path = self._next_indexed_output_path(output_folder, final_prefix)
+        try:
+            os.replace(temp_output_path, final_output_path)
+        except Exception:
             try:
-                os.replace(temp_output_path, final_output_path)
+                os.remove(temp_output_path)
             except Exception:
-                try:
-                    os.remove(temp_output_path)
-                except Exception:
-                    pass
-                self._report("Download finalization failed", "error")
-                return None
+                pass
+            self._report("Download finalization failed", "error")
+            return None
 
-            self._report(f"Saved: {os.path.basename(final_output_path)}", "success")
-            return final_output_path
-
-        self._report("Download failed", "error")
-        return None
+        self._report(f"Saved: {os.path.basename(final_output_path)}", "success")
+        return final_output_path

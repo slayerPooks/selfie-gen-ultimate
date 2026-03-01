@@ -40,6 +40,17 @@ class SelfieTab(tk.Frame):
         "cafe, soft window light",
         "outdoor street, urban daylight",
     ]
+    DEFAULT_WILDCARD_TEMPLATE = (
+        "A raw, unedited iPhone 7 front-camera selfie of a {young adult|middle-aged} "
+        "{woman|man} wearing a {black|gray|white|maroon|navy} "
+        "{hoodie|t-shirt|sweater|jacket|blouse}. "
+        "{Neutral|Slight smile|Relaxed|Confident} expression. "
+        "Phone held at arm's length, slightly off-center, natural edge distortion. "
+        "Background is {sunny park with green trees|cozy kitchen with warm light|"
+        "living room with TV glow|outdoor street in urban daylight|"
+        "cafe with soft window light}. "
+        "Warm practical lighting. Amateur photography aesthetic, unfiltered iPhone 7 quality."
+    )
     DISABLED_BY_DEFAULT_ENDPOINTS = {
         "fal-ai/bytedance/seedream/v5/edit",
     }
@@ -66,6 +77,9 @@ class SelfieTab(tk.Frame):
         self._handoff_scene: Optional[str] = None
         self._scene_roll_counter = 0
         self._prompt_template_edit_mode = False
+        self._prompt_mode_var = tk.StringVar(
+            value=config.get("selfie_prompt_mode", "json_handoff")
+        )
 
         self._build_ui()
 
@@ -84,9 +98,45 @@ class SelfieTab(tk.Frame):
         )
         prompt_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        # Composer controls
-        composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        composer_frame.pack(fill=tk.X, padx=4, pady=4)
+        # Prompt mode toggle
+        mode_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=4, pady=(4, 2))
+        tk.Label(
+            mode_row,
+            text="Mode:",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Radiobutton(
+            mode_row,
+            text="JSON Handoff (Vision)",
+            variable=self._prompt_mode_var,
+            value="json_handoff",
+            command=self._on_prompt_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Radiobutton(
+            mode_row,
+            text="Dynamic Wildcards",
+            variable=self._prompt_mode_var,
+            value="wildcards",
+            command=self._on_prompt_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+
+        # Composer controls (JSON Handoff mode)
+        self._composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        self._composer_frame.pack(fill=tk.X, padx=4, pady=4)
+        composer_frame = self._composer_frame
 
         # Gender
         tk.Label(
@@ -148,9 +198,10 @@ class SelfieTab(tk.Frame):
         )
         compose_btn.grid(row=0, column=4, padx=5)
 
-        # Prompt text + randomize scene
-        prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+        # Prompt text + randomize scene (JSON Handoff mode)
+        self._prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        self._prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+        prompt_editor_frame = self._prompt_editor_frame
 
         self.prompt_text = tk.Text(
             prompt_editor_frame,
@@ -179,8 +230,9 @@ class SelfieTab(tk.Frame):
         )
         self.randomize_scene_btn.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
 
-        templates_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self._templates_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        self._templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+        templates_row = self._templates_row
 
         scene_templates_frame = tk.LabelFrame(
             templates_row,
@@ -286,6 +338,52 @@ class SelfieTab(tk.Frame):
             pady=1,
         )
         self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Wildcard template (Dynamic Wildcards mode — hidden by default)
+        self._wildcard_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Wildcard Template  {option1|option2|option3}",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        # Don't pack yet — managed by _apply_prompt_mode_ui()
+
+        self._wildcard_text = tk.Text(
+            self._wildcard_frame,
+            height=4,
+            wrap=tk.WORD,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=("Consolas", 9),
+            insertbackground=COLORS["text_light"],
+            padx=5,
+            pady=4,
+        )
+        self._wildcard_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
+
+        saved_wildcard = self.config.get(
+            "selfie_wildcard_template", self.DEFAULT_WILDCARD_TEMPLATE
+        )
+        self._wildcard_text.insert("1.0", (saved_wildcard or self.DEFAULT_WILDCARD_TEMPLATE).strip())
+
+        wildcard_actions = tk.Frame(self._wildcard_frame, bg=COLORS["bg_panel"])
+        wildcard_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
+        tk.Button(
+            wildcard_actions,
+            text="Reset to Default",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["btn_red"],
+            fg="white",
+            command=self._on_reset_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        ).pack(side=tk.LEFT)
+
+        # Apply initial prompt mode visibility
+        self._apply_prompt_mode_ui()
 
         # Settings
         settings_frame = tk.LabelFrame(
@@ -400,7 +498,7 @@ class SelfieTab(tk.Frame):
         # Model selection
         models_frame = tk.LabelFrame(
             content_frame,
-            text="Step 2 Models (Fal.ai)",
+            text="Step 2 Models",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
@@ -707,6 +805,29 @@ class SelfieTab(tk.Frame):
         self._set_prompt_template_edit_mode(False)
         self.log("Selfie prompt template reset to default", "info")
 
+    def _on_prompt_mode_changed(self):
+        self._apply_prompt_mode_ui()
+        mode_label = "JSON Handoff" if self._prompt_mode_var.get() == "json_handoff" else "Dynamic Wildcards"
+        self.log(f"Prompt mode: {mode_label}", "info")
+
+    def _apply_prompt_mode_ui(self):
+        """Show/hide widgets based on the active prompt mode."""
+        if self._prompt_mode_var.get() == "wildcards":
+            self._composer_frame.pack_forget()
+            self._prompt_editor_frame.pack_forget()
+            self._templates_row.pack_forget()
+            self._wildcard_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+        else:
+            self._wildcard_frame.pack_forget()
+            self._composer_frame.pack(fill=tk.X, padx=4, pady=4)
+            self._prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+            self._templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+    def _on_reset_wildcard_template(self):
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", self.DEFAULT_WILDCARD_TEMPLATE)
+        self.log("Wildcard template reset to default", "info")
+
     def _apply_handoff_scene_prompt(self, reroll: bool):
         if not self._handoff_identity_data:
             return
@@ -768,16 +889,23 @@ class SelfieTab(tk.Frame):
 
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
-        if not api_key:
-            self.log("fal.ai API key required (set in Video tab)", "error")
-            return
+        bfl_api_key = config.get("bfl_api_key", "")
 
         image_path = self.image_session.active_image_path
         if not image_path:
             self.log("No image selected in carousel", "warning")
             return
 
-        if self._handoff_identity_data:
+        mode = self._prompt_mode_var.get()
+        if mode == "wildcards":
+            from selfie_generator import SelfieGenerator
+            raw = self._wildcard_text.get("1.0", tk.END).strip()
+            if not raw:
+                self.log("Wildcard template is empty", "warning")
+                return
+            prompt = SelfieGenerator.resolve_wildcards(raw)
+            self.log(f"Resolved wildcard prompt: {prompt[:120]}...", "debug")
+        elif self._handoff_identity_data:
             prompt = self._build_handoff_prompt().strip()
             if not prompt:
                 self.log("Prompt template is empty", "warning")
@@ -791,6 +919,16 @@ class SelfieTab(tk.Frame):
         selected_models = self._get_selected_models()
         if not selected_models:
             self.log("Select at least one Step 2 model", "warning")
+            return
+
+        # Validate API keys per provider
+        needs_fal = any(m.get("provider", "fal") == "fal" for m in selected_models)
+        needs_bfl = any(m.get("provider") == "bfl" for m in selected_models)
+        if needs_fal and not api_key:
+            self.log("fal.ai API key required for selected fal.ai models", "error")
+            return
+        if needs_bfl and not bfl_api_key:
+            self.log("BFL API key required for selected BFL models", "error")
             return
 
         try:
@@ -816,7 +954,7 @@ class SelfieTab(tk.Frame):
                 from selfie_generator import SelfieGenerator
 
                 freeimage_key = self.get_config().get("freeimage_api_key")
-                gen = SelfieGenerator(api_key, freeimage_key=freeimage_key)
+                gen = SelfieGenerator(api_key, freeimage_key=freeimage_key, bfl_api_key=bfl_api_key)
                 gen.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)
@@ -866,9 +1004,7 @@ class SelfieTab(tk.Frame):
         if result:
             self._last_result_path = result
             similarity = self._extract_similarity_from_result_path(result)
-            selfie_label = "Selfie"
-            if similarity is not None:
-                selfie_label = f"Selfie | sim {similarity}"
+            selfie_label = f"Selfie (Sim: {similarity})" if similarity is not None else "Selfie (Sim: N/A)"
             self.image_session.add_image(result, "selfie", label=selfie_label)
             message = f"Selfie generated: {os.path.basename(result)}"
             if similarity is not None:
@@ -901,8 +1037,8 @@ class SelfieTab(tk.Frame):
         short_model = self._truncate_model_label(model_label)
         similarity = self._extract_similarity_from_result_path(result_path)
         if similarity is None:
-            return short_model
-        return f"{short_model} | sim {similarity}"
+            return f"{short_model} (Sim: N/A)"
+        return f"{short_model} (Sim: {similarity})"
 
     def _on_complete_batch(self, results, failed_models):
         self._set_busy(False)
@@ -1099,4 +1235,6 @@ class SelfieTab(tk.Frame):
                 endpoint: bool(var.get())
                 for endpoint, var in self._model_vars.items()
             },
+            "selfie_prompt_mode": self._prompt_mode_var.get(),
+            "selfie_wildcard_template": self._wildcard_text.get("1.0", tk.END).strip(),
         }
