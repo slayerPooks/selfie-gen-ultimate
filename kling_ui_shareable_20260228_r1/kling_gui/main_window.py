@@ -501,7 +501,7 @@ class KlingGUIWindow:
 
         # ── Top section: horizontal split (left: notebook | right: prompt) ──
         top_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
-        self.main_paned.add(top_frame, minsize=300)
+        self.main_paned.add(top_frame, minsize=280)
 
         self.top_h_paned = tk.PanedWindow(
             top_frame,
@@ -596,7 +596,7 @@ class KlingGUIWindow:
             sashrelief=tk.RAISED,
             sashpad=1,
         )
-        self.main_paned.add(self.bottom_paned, minsize=200)
+        self.main_paned.add(self.bottom_paned, minsize=250)
 
         # Carousel panel (replaces queue in bottom-left)
         carousel_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])

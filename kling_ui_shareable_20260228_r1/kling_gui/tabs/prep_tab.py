@@ -177,9 +177,10 @@ class PrepTab(tk.Frame):
         self.write_btn = tk.Button(
             write_frame,
             text="Write to Active Prompt Slot",
-            font=(FONT_FAMILY, 9),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
+            disabledforeground="#8FBC8F",
             command=self._on_write_prompt,
             cursor="hand2",
             relief=tk.FLAT,
