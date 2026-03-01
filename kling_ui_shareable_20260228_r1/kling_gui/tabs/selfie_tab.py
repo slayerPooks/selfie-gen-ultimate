@@ -163,10 +163,7 @@ class SelfieTab(tk.Frame):
             pady=4,
         )
         self.prompt_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.prompt_text.insert(
-            "1.0",
-            "Photo of a person, casual phone selfie, photorealistic",
-        )
+        self.prompt_text.insert("1.0", "")
         self.randomize_scene_btn = tk.Button(
             prompt_editor_frame,
             text="Randomize Scene",
@@ -622,11 +619,7 @@ class SelfieTab(tk.Frame):
             self.prompt_text.delete("1.0", tk.END)
             return
 
-        payload = None
-        try:
-            payload = json.loads(raw_text)
-        except json.JSONDecodeError:
-            payload = None
+        payload = self._extract_handoff_json(raw_text)
 
         normalized = None
         if payload is not None:
@@ -641,14 +634,34 @@ class SelfieTab(tk.Frame):
             self._handoff_scene = None
             self._scene_roll_counter = 0
             self._apply_handoff_scene_prompt(reroll=False)
-            # Keep compose/manual prompt box out of JSON flow.
             self.prompt_text.delete("1.0", tk.END)
+            self.prompt_text.insert("1.0", json.dumps(normalized, indent=2))
             return
 
         self._handoff_identity_data = None
         self._handoff_scene = None
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", text)
+
+    def _extract_handoff_json(self, raw_text: str) -> Optional[dict]:
+        """Parse JSON payload even when Step 1 sends wrapper text around it."""
+        if not raw_text:
+            return None
+
+        candidates = [raw_text]
+        first_brace = raw_text.find("{")
+        last_brace = raw_text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidates.append(raw_text[first_brace : last_brace + 1])
+
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate.strip())
+                if isinstance(payload, dict):
+                    return payload
+            except Exception:
+                continue
+        return None
 
     def _get_selected_dimensions(self) -> tuple:
         """Return (width, height) for the currently selected aspect ratio."""
