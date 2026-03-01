@@ -388,6 +388,18 @@ class ConfigPanel(tk.Frame):
         )
 
         # Dropdown listbox colors are configured centrally in main_window.py.
+        # Keep a local defensive fallback to avoid styling regressions if panel
+        # is ever instantiated before the main window applies global options.
+        try:
+            root = self.winfo_toplevel()
+            root.option_add("*TCombobox*Listbox.background", COLORS["bg_main"])
+            root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
+            root.option_add(
+                "*TCombobox*Listbox.selectBackground", COLORS["accent_blue"]
+            )
+            root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        except tk.TclError:
+            pass
 
     def _setup_ui(self):
         """Set up the configuration UI — two-column layout."""
