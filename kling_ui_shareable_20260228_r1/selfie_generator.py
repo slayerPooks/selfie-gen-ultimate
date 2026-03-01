@@ -20,6 +20,7 @@ class SelfieGenerator:
         "eyes",
         "face_shape",
         "age_range",
+        "gender",
         "clothing",
         "expression",
     )

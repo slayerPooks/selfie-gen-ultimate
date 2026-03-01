@@ -25,8 +25,12 @@ class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
 
     HANDOFF_SCENE_PROMPT_TEMPLATE = (
-        "{age_range}, {face_shape} face, {hair} hair, {skin} skin, {eyes} eyes, "
-        "{clothing}, {expression}, {scene}"
+        "A raw, unedited iPhone 7 front-camera selfie of a {age_range} {gender} "
+        "wearing {clothing}. {expression} expression. Hair is {hair}. Skin is {skin}. "
+        "Eyes are {eyes}. Face is {face_shape}. The phone is held at arm's length, "
+        "slightly off-center, one arm extended creating natural edge distortion. "
+        "The background is {scene}. Warm practical indoor lighting. Amateur photography "
+        "aesthetic, unfiltered iPhone 7 quality."
     )
     DEFAULT_SCENE_TEMPLATES = [
         "sunny park, green trees bokeh background",
