@@ -24,13 +24,13 @@ except Exception:
 class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
 
-    HANDOFF_SCENE_PROMPT_TEMPLATE = (
-        "A raw, unedited iPhone 7 front-camera selfie of a {age_range} {gender} "
-        "wearing {clothing}. {expression} expression. Hair is {hair}. Skin is {skin}. "
-        "Eyes are {eyes}. Face is {face_shape}. The phone is held at arm's length, "
-        "slightly off-center, one arm extended creating natural edge distortion. "
-        "The background is {scene}. Warm practical indoor lighting. Amateur photography "
-        "aesthetic, unfiltered iPhone 7 quality."
+    DEFAULT_PROMPT_TEMPLATE = (
+        "A raw, unedited iPhone 7 front-camera selfie of a {age_range} {gender} \n"
+        "wearing {clothing}. {expression} expression. Hair is {hair}. Skin is {skin}. \n"
+        "Eyes are {eyes}. Face is {face_shape}. Phone held at arm's length, slightly \n"
+        "off-center, natural edge distortion from extended arm. Background is {scene}. \n"
+        "Warm practical indoor lighting. Amateur photography aesthetic, unfiltered \n"
+        "iPhone 7 quality."
     )
     DEFAULT_SCENE_TEMPLATES = [
         "sunny park, green trees bokeh background",
@@ -39,6 +39,9 @@ class SelfieTab(tk.Frame):
         "cafe, soft window light",
         "outdoor street, urban daylight",
     ]
+    DISABLED_BY_DEFAULT_ENDPOINTS = {
+        "fal-ai/bytedance/seedream/v5/edit",
+    }
 
     def __init__(
         self,
@@ -60,6 +63,7 @@ class SelfieTab(tk.Frame):
         self._model_vars: Dict[str, tk.BooleanVar] = {}
         self._handoff_identity_data: Optional[Dict[str, str]] = None
         self._scene_roll_counter = 0
+        self._prompt_template_edit_mode = False
 
         self._build_ui()
 
@@ -210,6 +214,77 @@ class SelfieTab(tk.Frame):
             scene_templates = list(self.DEFAULT_SCENE_TEMPLATES)
         self.scene_templates_text.insert("1.0", "\n".join(scene_templates))
 
+        template_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Prompt Template (JSON Handoff)",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        template_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.prompt_template_text = tk.Text(
+            template_frame,
+            height=4,
+            wrap=tk.WORD,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=("Consolas", 9),
+            insertbackground=COLORS["text_light"],
+            padx=5,
+            pady=5,
+        )
+        self.prompt_template_text.pack(fill=tk.X, padx=5, pady=(4, 4))
+        saved_template = self.config.get(
+            "selfie_prompt_template", self.DEFAULT_PROMPT_TEMPLATE
+        )
+        self.prompt_template_text.insert(
+            "1.0", (saved_template or self.DEFAULT_PROMPT_TEMPLATE).strip()
+        )
+        self.prompt_template_text.config(state=tk.DISABLED)
+
+        template_actions = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        template_actions.pack(fill=tk.X, padx=5, pady=(0, 2))
+        self.edit_template_btn = tk.Button(
+            template_actions,
+            text="Edit Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_edit_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+        )
+        self.edit_template_btn.pack(side=tk.LEFT)
+        self.save_template_btn = tk.Button(
+            template_actions,
+            text="Save Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+            state=tk.DISABLED,
+        )
+        self.save_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self.reset_template_btn = tk.Button(
+            template_actions,
+            text="Reset Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["btn_red"],
+            fg="white",
+            command=self._on_reset_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+        )
+        self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+
         # Settings
         settings_frame = tk.LabelFrame(
             content_frame,
@@ -336,7 +411,10 @@ class SelfieTab(tk.Frame):
         for idx, model in enumerate(self._model_options):
             endpoint = model.get("endpoint", "")
             label = model.get("label", endpoint)
-            default_checked = endpoint == "fal-ai/flux-pulid"
+            default_checked = (
+                endpoint == "fal-ai/flux-pulid"
+                and endpoint not in self.DISABLED_BY_DEFAULT_ENDPOINTS
+            )
             checked = bool(saved_models.get(endpoint, default_checked))
             var = tk.BooleanVar(value=checked)
             self._model_vars[endpoint] = var
@@ -541,6 +619,38 @@ class SelfieTab(tk.Frame):
         templates = [line.strip() for line in lines if line.strip()]
         return templates or list(self.DEFAULT_SCENE_TEMPLATES)
 
+    def _get_prompt_template_text(self) -> str:
+        if not hasattr(self, "prompt_template_text"):
+            return self.DEFAULT_PROMPT_TEMPLATE
+        text = self.prompt_template_text.get("1.0", tk.END).strip()
+        return text if text else self.DEFAULT_PROMPT_TEMPLATE
+
+    def _set_prompt_template_edit_mode(self, enabled: bool):
+        self._prompt_template_edit_mode = enabled
+        self.prompt_template_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        self.edit_template_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self.save_template_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _on_edit_prompt_template(self):
+        self._set_prompt_template_edit_mode(True)
+        self.prompt_template_text.focus_set()
+        self.prompt_template_text.mark_set(tk.INSERT, tk.END)
+
+    def _on_save_prompt_template(self):
+        text = self._get_prompt_template_text()
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", text)
+        self._set_prompt_template_edit_mode(False)
+        self.log("Selfie prompt template saved", "success")
+
+    def _on_reset_prompt_template(self):
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", self.DEFAULT_PROMPT_TEMPLATE)
+        self._set_prompt_template_edit_mode(False)
+        self.log("Selfie prompt template reset to default", "info")
+
     def _apply_handoff_scene_prompt(self, reroll: bool):
         if not self._handoff_identity_data:
             return
@@ -558,7 +668,7 @@ class SelfieTab(tk.Frame):
             seed_value = 0
         rng = random.Random(seed_value + self._scene_roll_counter)
         scene = rng.choice(scene_templates)
-        prompt = self.HANDOFF_SCENE_PROMPT_TEMPLATE.format(
+        prompt = self._get_prompt_template_text().format(
             scene=scene,
             **self._handoff_identity_data,
         )
@@ -881,6 +991,7 @@ class SelfieTab(tk.Frame):
             "selfie_output_mode": self.output_mode_var.get(),
             "selfie_output_folder": self.output_path_var.get().strip(),
             "selfie_scene_templates": self._get_scene_templates(),
+            "selfie_prompt_template": self._get_prompt_template_text(),
             "selfie_selected_models": {
                 endpoint: bool(var.get())
                 for endpoint, var in self._model_vars.items()
