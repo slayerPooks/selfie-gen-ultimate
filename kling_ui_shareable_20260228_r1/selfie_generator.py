@@ -222,7 +222,11 @@ class SelfieGenerator:
             threshold = float(result.get("threshold", 0.0))
             if threshold <= 0:
                 return None
-            similarity = max(0, round((1 - distance / threshold) * 100))
+            # Scale over 2x threshold so scores degrade gracefully rather
+            # than cliff-dropping to 0% at the verification boundary.
+            # distance=0 → 100%, distance=threshold → 50%, distance=2*threshold → 0%.
+            max_distance = threshold * 2.0
+            similarity = max(0, round((1 - distance / max_distance) * 100))
             return min(100, similarity)
         except Exception:
             return None
@@ -276,7 +280,7 @@ class SelfieGenerator:
                 "prompt": prompt,
                 "image_url": image_url,
                 "image_size": {"width": width, "height": height},
-                "strength": 0.6,
+                "strength": 0.85,
                 "num_images": 1,
                 "output_format": "png",
                 "seed": seed,
