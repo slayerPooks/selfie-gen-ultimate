@@ -301,8 +301,8 @@ class PrepTab(tk.Frame):
         if not endpoint or endpoint == "org/model-name":
             self.log("Enter a model endpoint (e.g. meta-llama/llama-3-70b)", "warning")
             return
-        if "/" not in endpoint:
-            self.log("Model endpoint should be org/model format", "warning")
+        if "/" not in endpoint or not endpoint.isascii() or " " in endpoint:
+            self.log("Model endpoint should be org/model format (ASCII, no spaces)", "warning")
             return
         # Check for duplicates
         for _name, ep in self._all_models:

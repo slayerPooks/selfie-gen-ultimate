@@ -3,13 +3,20 @@
 import os
 import sys
 
-# Ensure the app root (parent of kling_gui/) is on sys.path so that
-# top-level modules (vision_analyzer, selfie_generator, etc.) can be
-# imported from within tab background threads — same pattern used by
-# main_window.py, config_panel.py, queue_manager.py, and drop_zone.py.
-_app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _app_root not in sys.path:
-    sys.path.insert(0, _app_root)
+# Ensure top-level modules (vision_analyzer, selfie_generator, etc.) are
+# importable from within tab background threads.
+# In frozen (PyInstaller) builds, use the bundled directory; otherwise
+# append the app root so it doesn't shadow stdlib/installed packages.
+if getattr(sys, "frozen", False):
+    _bundle_dir = getattr(sys, "_MEIPASS", None)
+    if _bundle_dir and _bundle_dir not in sys.path:
+        sys.path.insert(0, _bundle_dir)
+else:
+    _app_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if _app_root not in sys.path:
+        sys.path.append(_app_root)
 
 from .prep_tab import PrepTab
 from .selfie_tab import SelfieTab
