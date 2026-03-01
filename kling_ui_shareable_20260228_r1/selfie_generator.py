@@ -24,6 +24,10 @@ class SelfieGenerator:
         "clothing",
         "expression",
     )
+    FLUX_PULID_PROMPT_APPEND = (
+        "Photorealistic, natural skin texture, amateur photography aesthetic, "
+        "unfiltered iPhone 7 quality. Not illustrated, not anime, not painting."
+    )
     AVAILABLE_MODELS = [
         {
             "endpoint": "fal-ai/flux-pulid",
@@ -203,8 +207,9 @@ class SelfieGenerator:
         seed: int,
     ) -> dict:
         if model_endpoint == "fal-ai/flux-pulid":
+            flux_prompt = f"{prompt.strip()} {cls.FLUX_PULID_PROMPT_APPEND}".strip()
             return {
-                "prompt": prompt,
+                "prompt": flux_prompt,
                 "reference_image_url": image_url,
                 "id_weight": id_weight,
                 "width": width,
