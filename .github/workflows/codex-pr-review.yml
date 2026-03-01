@@ -16,8 +16,10 @@ permissions:
 
 jobs:
   codex-review:
-    # Skip if PR is draft/fork or if no API key is configured.
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && (secrets.OPENROUTER_API_KEY != '' || secrets.OPENAI_API_KEY != '')
+    # Only run on pull_request events when an API key is configured.
+    # Keep this expression free of pull_request-only fields so push-triggered
+    # invocations skip cleanly instead of failing expression evaluation.
+    if: github.event_name == 'pull_request' && (secrets.OPENROUTER_API_KEY != '' || secrets.OPENAI_API_KEY != '')
     runs-on: ubuntu-latest
 
     steps:
