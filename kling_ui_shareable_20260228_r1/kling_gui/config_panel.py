@@ -1292,6 +1292,31 @@ class ConfigPanel(tk.Frame):
                 font=(FONT_FAMILY, max(6, preview_font_size)),
             )
 
+    def set_active_prompt_text(self, text: str):
+        """Set the text of the active prompt slot (called by PrepTab vision analysis).
+
+        Writes into the currently selected slot and persists to config.
+        """
+        if not hasattr(self, "prompt_preview") or self.prompt_preview is None:
+            return
+        # Temporarily enter edit mode to allow modification
+        was_edit_mode = self._prompt_edit_mode
+        slot = str(self.slot_var.get()) if hasattr(self, "slot_var") else "1"
+
+        self.prompt_preview.config(state="normal")
+        self.prompt_preview.delete("1.0", tk.END)
+        self.prompt_preview.insert("1.0", text)
+        if not was_edit_mode:
+            self.prompt_preview.config(state="disabled", fg=COLORS["text_dim"])
+
+        # Persist to config
+        saved_prompts = self.config.setdefault("saved_prompts", {})
+        saved_prompts[slot] = text
+        self.config["saved_prompts"] = saved_prompts
+        self._update_prompt_char_count()
+        if self.on_config_changed:
+            self.on_config_changed(self.config, f"Prompt slot {slot} updated from vision analysis")
+
     def get_config(self) -> dict:
         """Get current configuration."""
         return self.config.copy()
