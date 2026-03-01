@@ -6,7 +6,7 @@ import threading
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
@@ -37,7 +37,7 @@ def check_video_exists(
     output_folder: str,
     generator,
     config: dict = None,
-) -> tuple[bool, Optional[str]]:
+) -> Tuple[bool, Optional[str]]:
     """Check if any video already exists for this image+model combination.
 
     Matches pattern: {stem}_{model_short}_*.mp4  (and *_looped.mp4 variant).

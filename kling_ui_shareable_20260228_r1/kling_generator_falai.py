@@ -245,6 +245,10 @@ class FalAIKlingGenerator:
         """
         import glob as _glob
 
+        # Backward compatibility: older callers passed config dict as arg #2.
+        if isinstance(output_folder, dict):
+            output_folder = None
+
         model_short = self.get_model_short_name()
         try:
             slot = max(1, int(getattr(self, "prompt_slot", 1)))
