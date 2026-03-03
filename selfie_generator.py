@@ -17,6 +17,11 @@ BFL_MAX_WAIT_SECONDS = 180  # 3-minute wall-clock cap
 BFL_POLL_INTERVAL = 5
 BFL_MAX_CONSECUTIVE_ERRORS = 5
 
+# InsightFace singleton (ArcFace model is ~300 MB, load once)
+_insightface_app = None
+_insightface_init_lock = threading.Lock()
+_insightface_infer_lock = threading.Lock()
+
 
 class SelfieGenerator:
     """Generate selfie images using fal.ai image-to-image identity models."""
@@ -219,35 +224,56 @@ class SelfieGenerator:
             output_path = os.path.join(output_folder, f"{prefix}{next_index:03d}.png")
         return output_path
 
-    @staticmethod
     def _compute_similarity_percent(
+        self,
         source_image_path: str,
         generated_image_path: str,
     ) -> Optional[int]:
-        try:
-            from deepface import DeepFace
-        except Exception:
-            return None
+        """Compute face similarity using InsightFace (ArcFace).
+
+        Uses RetinaFace detection + alignment + ArcFace embedding.
+        Returns cosine similarity as 0-100 integer, or None if a face
+        cannot be detected in either image.
+        """
+        global _insightface_app
 
         try:
-            result = DeepFace.verify(
-                img1_path=source_image_path,
-                img2_path=generated_image_path,
-                model_name="Facenet",
-                enforce_detection=False,
-            )
-            distance = float(result.get("distance", 0.0))
-            threshold = float(result.get("threshold", 0.0))
-            if threshold <= 0:
-                return None
-            # Scale over 2x threshold so scores degrade gracefully rather
-            # than cliff-dropping to 0% at the verification boundary.
-            # distance=0 → 100%, distance=threshold → 50%, distance=2*threshold → 0%.
-            max_distance = threshold * 2.0
-            similarity = max(0, round((1 - distance / max_distance) * 100))
-            return min(100, similarity)
-        except Exception:
+            import insightface.app  # noqa: F811
+            import numpy as np
+            import cv2
+        except ImportError:
             return None
+
+        # One-time model init (downloads ~300 MB to ~/.insightface/models/)
+        with _insightface_init_lock:
+            if _insightface_app is None:
+                self._report("InsightFace: loading ArcFace model (first run)...", "info")
+                app = insightface.app.FaceAnalysis(
+                    name="buffalo_l",
+                    providers=["CPUExecutionProvider"],
+                )
+                app.prepare(ctx_id=-1, det_size=(640, 640))
+                _insightface_app = app
+
+        def _best_face(img_path: str):
+            img = cv2.imread(img_path)
+            if img is None:
+                return None
+            with _insightface_infer_lock:
+                faces = _insightface_app.get(img)
+            if not faces:
+                return None
+            # Pick highest detection confidence when multiple faces found
+            return max(faces, key=lambda f: f.det_score)
+
+        face1 = _best_face(source_image_path)
+        face2 = _best_face(generated_image_path)
+        if face1 is None or face2 is None:
+            return None
+
+        # Cosine similarity on L2-normalised ArcFace embeddings
+        sim = float(np.dot(face1.normed_embedding, face2.normed_embedding))
+        return min(100, max(0, round(sim * 100)))
 
     @classmethod
     def _build_payload(

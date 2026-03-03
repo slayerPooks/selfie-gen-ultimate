@@ -3,7 +3,9 @@
 requests>=2.31,<3
 Pillow>=10.0,<12
 rich>=13.0,<14
-deepface>=0.0.93
+insightface>=0.7
+onnxruntime>=1.16
+opencv-python-headless>=4.8
 
 # GUI drag-and-drop support
 tkinterdnd2>=0.3,<1

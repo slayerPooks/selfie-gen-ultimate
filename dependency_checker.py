@@ -63,6 +63,27 @@ PYTHON_DEPENDENCIES = [
         required=False,
         description="Automatic ChromeDriver management"
     ),
+    Dependency(
+        name="InsightFace",
+        import_name="insightface",
+        pip_name="insightface",
+        required=False,
+        description="Face detection, alignment & ArcFace embeddings (face similarity)"
+    ),
+    Dependency(
+        name="ONNX Runtime",
+        import_name="onnxruntime",
+        pip_name="onnxruntime",
+        required=False,
+        description="ML inference backend for InsightFace"
+    ),
+    Dependency(
+        name="OpenCV",
+        import_name="cv2",
+        pip_name="opencv-python-headless",
+        required=False,
+        description="Image loading for InsightFace face analysis"
+    ),
 ]
 
 
