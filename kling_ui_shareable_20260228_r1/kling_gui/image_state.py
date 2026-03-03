@@ -107,7 +107,7 @@ class ImageSession:
         entry = ImageEntry(path=path, source_type=source_type, label=label)
         self._images.append(entry)
         new_idx = len(self._images) - 1
-        if source_type == "input":
+        if entry.source_type == "input":
             self._reference_index = new_idx
         if make_active:
             self._current_index = new_idx
@@ -212,8 +212,10 @@ class ImageSession:
                 current_pos = pos
                 break
         if current_pos < 0:
-            current_pos = 0
-        new_pos = current_pos + delta
+            # Reference is unset — jump to first or last input directly
+            new_pos = 0 if delta >= 0 else len(inputs) - 1
+        else:
+            new_pos = current_pos + delta
         if 0 <= new_pos < len(inputs):
             self._reference_index = inputs[new_pos][0]
             self._notify()

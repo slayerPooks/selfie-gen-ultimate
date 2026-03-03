@@ -249,10 +249,10 @@ class CropPolisher:
         try:
             out_dir = os.path.dirname(output_path) or "."
             os.makedirs(out_dir, exist_ok=True)
+            resp = requests.get(url, stream=True, timeout=120)
+            resp.raise_for_status()
             fd, tmp_path = tempfile.mkstemp(dir=out_dir, suffix=".tmp")
             try:
-                resp = requests.get(url, stream=True, timeout=120)
-                resp.raise_for_status()
                 with os.fdopen(fd, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=65536):
                         f.write(chunk)
