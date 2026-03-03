@@ -613,27 +613,34 @@ class ModelSchemaManager:
         return self.get_model_schema(model_endpoint, use_cache=True, force_refresh=True)
 
 
-def check_endpoint_health(api_key: str, endpoint: str, timeout: float = 5.0) -> bool:
+def check_endpoint_health(api_key: str, endpoint: str, timeout: float = 5.0) -> Optional[bool]:
     """Check if a fal.ai model endpoint is alive.
 
     Sends an empty POST to the sync endpoint (fal.run). Alive models return
     422 (validation error — they tried to parse input). Dead/removed models
     return 404. This is free (no inference, no credits).
 
-    Returns True if alive, False if dead/unreachable.
+    Returns:
+        True  – endpoint is alive (422 or similar non-auth, non-404 response)
+        False – endpoint is dead/removed (404)
+        None  – could not determine (auth failure 401/403, or network error)
     """
     url = f"https://fal.run/{endpoint}"
     headers = {"Authorization": f"Key {api_key}", "Content-Type": "application/json"}
     try:
         resp = requests.post(url, headers=headers, json={}, timeout=timeout)
-        # 422 = validation error = model exists and tried to process
-        # 404 = "Path ... not found" = model removed
-        return resp.status_code != 404
+        if resp.status_code == 404:
+            return False
+        if resp.status_code in (401, 403):
+            # Auth failure — can't distinguish alive vs dead without a valid key
+            return None
+        # 422 = validation error = model exists and tried to process input
+        return True
     except Exception:
-        return True  # network error — assume alive, don't block the user
+        return None  # network error — could not determine
 
 
-def check_all_endpoints(api_key: str, models: list, timeout: float = 5.0) -> Dict[str, bool]:
+def check_all_endpoints(api_key: str, models: list, timeout: float = 5.0) -> Dict[str, Optional[bool]]:
     """Check health of all model endpoints in parallel.
 
     Args:
@@ -642,11 +649,11 @@ def check_all_endpoints(api_key: str, models: list, timeout: float = 5.0) -> Dic
         timeout: Per-request timeout
 
     Returns:
-        Dict mapping endpoint -> is_alive (True/False)
+        Dict mapping endpoint -> True (alive), False (dead), or None (unknown/auth error)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    results: Dict[str, bool] = {}
+    results: Dict[str, Optional[bool]] = {}
     endpoints = [m["endpoint"] for m in models if m.get("endpoint")]
 
     def _check(ep):
@@ -659,9 +666,9 @@ def check_all_endpoints(api_key: str, models: list, timeout: float = 5.0) -> Dic
                 ep, alive = future.result()
                 results[ep] = alive
             except Exception:
-                results[futures[future]] = True  # assume alive on error
+                results[futures[future]] = None  # could not determine on error
 
-    dead = [ep for ep, alive in results.items() if not alive]
+    dead = [ep for ep, alive in results.items() if alive is False]
     if dead:
         logger.warning(f"Dead/unavailable model endpoints: {dead}")
 

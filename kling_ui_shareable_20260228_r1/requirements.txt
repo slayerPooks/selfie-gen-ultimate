@@ -3,7 +3,6 @@
 requests>=2.31,<3
 Pillow>=10.0,<12
 rich>=13.0,<14
-deepface>=0.0.93
 
 # GUI drag-and-drop support
 tkinterdnd2>=0.3,<1
@@ -11,3 +10,7 @@ tkinterdnd2>=0.3,<1
 # Optional balance tracker support
 selenium>=4.15,<5
 webdriver-manager>=4.0,<5
+
+# Optional: similarity scoring for selfie generation (adds ~1-2 GB of ML deps)
+# Install separately if needed: pip install deepface>=0.0.93
+# deepface>=0.0.93
