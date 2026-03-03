@@ -197,10 +197,10 @@ class ImageSession:
         ]
 
     def navigate_reference(self, delta: int) -> bool:
-        """Cycle through input images only by delta (+1/-1).
+        """Navigate through input images only by delta (+1/-1).
 
-        Updates _reference_index and notifies listeners.
-        Returns True if the reference changed.
+        Clamps at boundaries (does not wrap). Updates _reference_index
+        and notifies listeners. Returns True if the reference changed.
         """
         inputs = self.input_images
         if not inputs:
@@ -285,5 +285,13 @@ class ImageSession:
         raw_cur = data.get("current_index", -1)
         raw_ref = data.get("reference_index", -1)
         session._current_index = raw_cur if 0 <= raw_cur < count else (count - 1 if count else -1)
-        session._reference_index = raw_ref if 0 <= raw_ref < count else -1
+
+        # Validate reference_index points to an actual input entry
+        if 0 <= raw_ref < count and session._images[raw_ref].source_type == "input":
+            session._reference_index = raw_ref
+        else:
+            # Fall back to first input entry
+            inputs = session.input_images
+            session._reference_index = inputs[0][0] if inputs else -1
+
         return session

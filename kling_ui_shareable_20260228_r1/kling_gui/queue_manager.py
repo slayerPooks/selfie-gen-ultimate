@@ -583,13 +583,13 @@ class QueueManager:
                 if use_source_folder:
                     actual_output = get_gen_images_folder(item.path)
                     os.makedirs(actual_output, exist_ok=True)
-                    self.log_verbose(f"  Output: gen-images/", "debug")
+                    self.log_verbose("  Output: gen-images/", "debug")
                 elif not output_folder or not os.path.isdir(output_folder):
                     # Custom folder selected but not set or invalid - use gen-images/
                     actual_output = get_gen_images_folder(item.path)
                     os.makedirs(actual_output, exist_ok=True)
                     self.log(
-                        f"No valid output folder set - saving to gen-images/",
+                        "No valid output folder set - saving to gen-images/",
                         "warning",
                     )
                 else:

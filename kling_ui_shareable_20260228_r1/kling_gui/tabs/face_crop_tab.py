@@ -451,7 +451,7 @@ class FaceCropTab(tk.Frame):
 
             pil_img.thumbnail((400, 400))
             self._source_pil = pil_img.copy()
-            self._show_on_canvas(self._source_canvas, pil_img)
+            self._source_photo = self._show_on_canvas(self._source_canvas, pil_img)
             self._crop_canvas.delete("all")
             self._status_label.config(
                 text=f"Loaded ({pil_img.width}x{pil_img.height} preview)",

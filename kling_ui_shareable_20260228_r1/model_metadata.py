@@ -247,7 +247,7 @@ _DEFAULT_PROMPT_LIMIT = 2500
 def get_prompt_limit(endpoint: str) -> int:
     """Return the maximum prompt length (chars) for the given model endpoint.
 
-    Returns None for models with no known limit.
+    Falls back to _DEFAULT_PROMPT_LIMIT (2500) for unknown models.
     """
     ep = endpoint.lower()
     for pattern, limit in _PROMPT_LIMITS:

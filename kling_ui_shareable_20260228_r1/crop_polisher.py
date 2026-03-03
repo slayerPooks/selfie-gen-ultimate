@@ -243,14 +243,26 @@ class CropPolisher:
 
     def _bfl_download(self, url: str, output_path: str) -> bool:
         import requests
+        import tempfile
 
         self._report("Downloading BFL result...", "download")
         try:
-            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            resp = requests.get(url, timeout=120)
-            resp.raise_for_status()
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
+            out_dir = os.path.dirname(output_path) or "."
+            os.makedirs(out_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=out_dir, suffix=".tmp")
+            try:
+                resp = requests.get(url, stream=True, timeout=120)
+                resp.raise_for_status()
+                with os.fdopen(fd, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                os.replace(tmp_path, output_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             self._report(f"Saved: {os.path.basename(output_path)}", "success")
             return True
         except Exception as exc:

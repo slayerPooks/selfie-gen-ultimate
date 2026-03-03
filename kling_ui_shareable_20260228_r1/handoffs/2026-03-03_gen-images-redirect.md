@@ -94,7 +94,7 @@ while out_path.exists():
 
 To continue this work in a fresh session:
 
-```
+```text
 Read handoffs/2026-03-03_gen-images-redirect.md and resume the work.
 
 CRITICAL:

@@ -593,15 +593,27 @@ class SelfieGenerator:
                     )
 
     def _bfl_download(self, url: str, output_path: str) -> bool:
-        """Download a BFL result image to disk."""
+        """Download a BFL result image to disk (atomic: temp file + rename)."""
         import requests
+        import tempfile
 
         self._report("Downloading BFL result...", "download")
         try:
-            resp = requests.get(url, timeout=120)
+            resp = requests.get(url, stream=True, timeout=120)
             resp.raise_for_status()
-            with open(output_path, "wb") as f:
-                f.write(resp.content)
+            out_dir = os.path.dirname(output_path) or "."
+            fd, tmp_path = tempfile.mkstemp(dir=out_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                os.replace(tmp_path, output_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             return True
         except Exception as exc:
             self._report(f"BFL download failed: {exc}", "error")
