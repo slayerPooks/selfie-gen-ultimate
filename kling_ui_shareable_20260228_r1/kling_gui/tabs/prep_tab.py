@@ -203,7 +203,7 @@ class PrepTab(tk.Frame):
         self.system_prompt_text = tk.Text(
             prompt_frame,
             wrap=tk.WORD,
-            height=5,
+            height=10,
             bg=COLORS["bg_main"],
             fg=COLORS["text_light"],
             font=("Consolas", 9),

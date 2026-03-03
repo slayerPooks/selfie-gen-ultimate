@@ -3,7 +3,7 @@
 import os
 import logging
 from dataclasses import dataclass
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +56,35 @@ class ImageSession:
     def __init__(self):
         self._images: List[ImageEntry] = []
         self._current_index: int = -1
-        self._on_change: Optional[Callable[[], None]] = None
+        self._reference_index: int = -1
+        self._on_change_listeners: List[Callable] = []
+        self._primary_listener: Optional[Callable] = None
 
     def set_on_change(self, callback: Callable[[], None]):
-        """Set callback fired whenever the session state changes."""
-        self._on_change = callback
+        """Set the primary on_change listener (replaces any previous set_on_change call).
+        For additional listeners, use add_on_change() instead."""
+        if self._primary_listener and self._primary_listener in self._on_change_listeners:
+            self._on_change_listeners.remove(self._primary_listener)
+        self._primary_listener = callback
+        if callback and callback not in self._on_change_listeners:
+            self._on_change_listeners.append(callback)
+
+    def add_on_change(self, callback: Callable[[], None]):
+        """Add an additional change listener."""
+        if callback not in self._on_change_listeners:
+            self._on_change_listeners.append(callback)
+
+    def remove_on_change(self, callback: Callable[[], None]):
+        """Remove a change listener."""
+        if callback in self._on_change_listeners:
+            self._on_change_listeners.remove(callback)
 
     def _notify(self):
-        if self._on_change:
+        for cb in self._on_change_listeners[:]:  # copy to allow removal during iteration
             try:
-                self._on_change()
+                cb()
             except Exception as e:
-                logger.error("ImageSession on_change callback error: %s", e)
+                logger.error("ImageSession on_change listener error: %s", e)
 
     def add_image(
         self,
@@ -89,20 +106,23 @@ class ImageSession:
         """
         entry = ImageEntry(path=path, source_type=source_type, label=label)
         self._images.append(entry)
+        new_idx = len(self._images) - 1
+        if source_type == "input":
+            self._reference_index = new_idx
         if make_active:
-            self._current_index = len(self._images) - 1
+            self._current_index = new_idx
         self._notify()
         return entry
 
     def navigate(self, delta: int) -> bool:
-        """Navigate by delta positions (e.g. +1 or -1).
+        """Cycle through all images by *delta* (wraps around).
 
         Returns True if the position changed.
         """
         if not self._images:
             return False
-        new_index = self._current_index + delta
-        if 0 <= new_index < len(self._images):
+        new_index = (self._current_index + delta) % len(self._images)
+        if new_index != self._current_index:
             self._current_index = new_index
             self._notify()
             return True
@@ -148,10 +168,63 @@ class ImageSession:
         """Return a shallow copy of the image list."""
         return list(self._images)
 
+    @property
+    def reference_index(self) -> int:
+        """Index of the currently selected reference (input) image, or -1."""
+        return self._reference_index
+
+    @property
+    def reference_entry(self) -> Optional[ImageEntry]:
+        """The currently selected reference (input) image entry."""
+        if 0 <= self._reference_index < len(self._images):
+            entry = self._images[self._reference_index]
+            if entry.source_type == "input":
+                return entry
+        return None
+
+    @property
+    def input_images(self) -> List[Tuple[int, ImageEntry]]:
+        """List of (global_index, entry) for all input images."""
+        return [
+            (i, e) for i, e in enumerate(self._images) if e.source_type == "input"
+        ]
+
+    @property
+    def generated_images(self) -> List[Tuple[int, ImageEntry]]:
+        """List of (global_index, entry) for all non-input images."""
+        return [
+            (i, e) for i, e in enumerate(self._images) if e.source_type != "input"
+        ]
+
+    def navigate_reference(self, delta: int) -> bool:
+        """Cycle through input images only by delta (+1/-1).
+
+        Updates _reference_index and notifies listeners.
+        Returns True if the reference changed.
+        """
+        inputs = self.input_images
+        if not inputs:
+            return False
+        # Find current position within inputs list
+        current_pos = -1
+        for pos, (idx, _entry) in enumerate(inputs):
+            if idx == self._reference_index:
+                current_pos = pos
+                break
+        if current_pos < 0:
+            current_pos = 0
+        new_pos = current_pos + delta
+        if 0 <= new_pos < len(inputs):
+            self._reference_index = inputs[new_pos][0]
+            self._notify()
+            return True
+        return False
+
     def clear(self):
         """Remove all images from the session."""
         self._images.clear()
         self._current_index = -1
+        self._reference_index = -1
         self._notify()
 
     def remove_current(self) -> bool:
@@ -161,9 +234,17 @@ class ImageSession:
         """
         if not self._images or self._current_index < 0:
             return False
+        removed_index = self._current_index
         self._images.pop(self._current_index)
-        # Clamp index to valid range
+        # Clamp current index to valid range
         if self._current_index >= len(self._images):
             self._current_index = len(self._images) - 1
+        # Fix reference index after removal
+        if self._reference_index == removed_index:
+            # The reference itself was removed — find another input
+            inputs = self.input_images
+            self._reference_index = inputs[0][0] if inputs else -1
+        elif self._reference_index > removed_index:
+            self._reference_index -= 1
         self._notify()
         return True

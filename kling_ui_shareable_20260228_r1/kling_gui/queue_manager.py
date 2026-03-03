@@ -17,30 +17,39 @@ logger = logging.getLogger(__name__)
 
 
 def _model_short_from_endpoint(endpoint: str) -> str:
-    """Derive model short name using the same mapping logic as generator."""
+    """Derive model short name using the same mapping logic as generator.
+
+    Each model variant (pro/standard/master) gets a distinct name so filenames
+    are unambiguous.  E.g. k25tPro vs k25tStd for 2.5 Turbo Pro vs Standard.
+    """
     endpoint = (endpoint or "").lower()
     if not endpoint:
         return "model"
 
+    def _tier(ep: str) -> str:
+        if "/master/" in ep or ep.endswith("/master"):
+            return "Master"
+        if "/standard/" in ep or ep.endswith("/standard"):
+            return "Std"
+        return "Pro"
+
     if "kling" in endpoint:
         if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
             return "k30pro" if "pro" in endpoint else "k30std"
-        if "v2.6" in endpoint:
-            return "k26pro"
         if "v2.5-turbo" in endpoint or "v2.5/turbo" in endpoint or "v2.5turbo" in endpoint:
-            return "k25turbo"
+            return f"k25t{_tier(endpoint)}"
+        if "v2.6" in endpoint:
+            return f"k26{_tier(endpoint).lower()}"
         if "v2.5" in endpoint:
             return "k25"
-        if "v2.1/master" in endpoint:
-            return "k21master"
         if "v2.1" in endpoint:
-            return "k21pro"
-        if "v2/master" in endpoint:
-            return "k20master"
+            return f"k21{_tier(endpoint).lower()}"
+        if "v2/" in endpoint or endpoint.endswith("/v2"):
+            return f"k20{_tier(endpoint).lower()}"
         if "v1.6" in endpoint:
-            return "k16"
+            return f"k16{_tier(endpoint).lower()}"
         if "v1.5" in endpoint:
-            return "k15"
+            return f"k15{_tier(endpoint).lower()}"
         if "o1" in endpoint:
             return "kO1"
         return "kling"

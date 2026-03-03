@@ -122,7 +122,7 @@ echo   - Windows 10 or later (64-bit)
 echo   - Internet connection required
 echo   - No Python installation needed - fully self-contained
 echo.
-echo Version: 2026-02-28
+echo Version: 2026-03-02
 ) > "dist\KlingUI\README.txt"
 
 :: Use PowerShell to create the ZIP (available on all modern Windows)

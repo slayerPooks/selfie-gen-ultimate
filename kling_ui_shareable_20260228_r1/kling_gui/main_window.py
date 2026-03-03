@@ -18,13 +18,14 @@ from datetime import datetime
 # Import path utilities
 from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir
 
-from .drop_zone import DropZone, create_dnd_root, HAS_DND
+from .drop_zone import create_dnd_root, HAS_DND
 from .log_display import LogDisplay
 from .config_panel import ConfigPanel
 from .queue_manager import QueueManager, QueueItem
 from .image_state import ImageSession
 from .carousel_widget import ImageCarousel
-from .tabs import PrepTab, SelfieTab, OutpaintTab, VideoTab
+from .compare_panel import ComparePanel
+from .tabs import FaceCropTab, PrepTab, SelfieTab, OutpaintTab, VideoTab
 
 # Try to import the generator
 try:
@@ -341,6 +342,8 @@ class KlingGUIWindow:
             "loop_videos": True,  # Loop videos ON by default
             "allow_reprocess": True,
             "reprocess_mode": "increment",
+            "custom_models": [],
+            "hidden_models": [],
             "freeimage_api_key": "",
             "bfl_api_key": "",
             "openrouter_vision_system_prompt": "",
@@ -390,7 +393,22 @@ class KlingGUIWindow:
         except Exception as e:
             print(f"Warning: Could not load config: {e}")
 
+        # Layer 3: migrate known broken endpoint paths
+        self._migrate_endpoints(default_config)
+
         return default_config
+
+    @staticmethod
+    def _migrate_endpoints(config: dict) -> None:
+        """Auto-correct known broken fal.ai endpoint paths in saved config."""
+        _ENDPOINT_MIGRATIONS = {
+            "fal-ai/kling-video/v2.5/turbo-pro/image-to-video": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+            "fal-ai/kling-video/v2.5/turbo-standard/image-to-video": "fal-ai/kling-video/v2.5-turbo/standard/image-to-video",
+        }
+        current = config.get("current_model", "")
+        if current in _ENDPOINT_MIGRATIONS:
+            config["current_model"] = _ENDPOINT_MIGRATIONS[current]
+            print(f"Migrated endpoint: {current} -> {config['current_model']}")
 
     def _merge_ui_config(self, base: dict, updates: dict) -> dict:
         """Deep-merge UI config dictionaries."""
@@ -547,30 +565,25 @@ class KlingGUIWindow:
         )
         self.top_h_paned.pack(fill=tk.BOTH, expand=True)
 
-        # Left pane: Notebook with 4 tabs
+        # Left pane: Notebook with 5 tabs
         left_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_main"])
 
-        # Create ConfigPanel (not packed yet — reparented into VideoTab below)
-        self.config_panel = ConfigPanel(
-            left_pane,
-            config=self.config,
-            on_config_changed=self._on_config_changed,
-            build_prompt=False,
-        )
-
-        # Create DropZone container (not packed yet — reparented into VideoTab below)
-        drop_container = tk.Frame(left_pane, bg=COLORS["bg_main"])
-        self.drop_zone = DropZone(
-            drop_container,
-            on_files_dropped=self._on_files_dropped,
-            on_folder_dropped=self._on_folder_dropped,
-        )
-        self.drop_zone.pack(fill=tk.BOTH, expand=True)
-
-        # Create Notebook
+        # Create Notebook FIRST (tabs 0-3 don't depend on ConfigPanel)
         self.notebook = ttk.Notebook(left_pane)
 
-        # Tab 1: Prep Photo
+        # Tab 0: Face Crop
+        self.face_crop_tab = FaceCropTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            notebook_switcher_prep=lambda: self.notebook.select(1),
+            notebook_switcher_selfie=lambda: self.notebook.select(2),
+        )
+        self.notebook.add(self.face_crop_tab, text="0. Face Crop")
+
+        # Tab 1: AI Analysis
         self.prep_tab = PrepTab(
             self.notebook,
             image_session=self.image_session,
@@ -580,7 +593,7 @@ class KlingGUIWindow:
             prompt_writer=self._write_to_active_prompt,
             config_saver=self._save_config,
         )
-        self.notebook.add(self.prep_tab, text="1. Prep Photo")
+        self.notebook.add(self.prep_tab, text="1. AI Analysis")
 
         # Tab 2: Generate Selfie
         self.selfie_tab = SelfieTab(
@@ -611,17 +624,25 @@ class KlingGUIWindow:
         )
         self.notebook.add(self.outpaint_tab, text="3. Expand")
 
-        # Tab 4: Video Settings (wraps ConfigPanel + DropZone)
+        # Tab 4: Video — skeleton first, panels attached after creation
         self.video_tab = VideoTab(
             self.notebook,
-            config_panel=self.config_panel,
-            drop_zone_container=drop_container,
-            queue_frame=None,  # Queue frame added below after video_tab exists
             image_session=self.image_session,
             log_callback=self._log,
             on_files_dropped=self._on_files_dropped,
         )
         self.notebook.add(self.video_tab, text="4. Video")
+
+        # ConfigPanel as proper child of VideoTab (fixes cross-parent packing)
+        self.config_panel = ConfigPanel(
+            self.video_tab,
+            config=self.config,
+            on_config_changed=self._on_config_changed,
+            build_prompt=False,
+            on_images_dropped=self._on_images_to_carousel,
+        )
+
+        self.video_tab.attach_config_panel(self.config_panel)
 
         self.notebook.pack(fill=tk.BOTH, expand=True)
         self.top_h_paned.add(left_pane, minsize=480)
@@ -650,14 +671,17 @@ class KlingGUIWindow:
             log_callback=self._log,
         )
         self.carousel.pack(fill=tk.BOTH, expand=True)
-        self.bottom_paned.add(carousel_frame, minsize=150)
+        self.carousel.set_on_compare(self._toggle_compare)
+        self.bottom_paned.add(carousel_frame, minsize=200)
+
+        # Compare panel state (created on demand by _toggle_compare)
+        self._compare_frame: Optional[tk.Frame] = None
+        self._compare_panel: Optional[ComparePanel] = None
 
         # Queue panel — lives inside VideoTab (below the drop zone)
         self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
-        self.queue_frame.pack(
-            in_=self.video_tab, fill=tk.X, padx=0, pady=(3, 0)
-        )
+        self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
 
         # Right side: Vertical PanedWindow (Log | History)
         self.right_paned = tk.PanedWindow(
@@ -1621,6 +1645,37 @@ class KlingGUIWindow:
                 return
         self._log("No folder to open for selection", "warning")
 
+    def _toggle_compare(self):
+        """Open or close the Compare panel beside the carousel."""
+        if self._compare_panel is not None:
+            # Close compare mode
+            try:
+                self.bottom_paned.forget(self._compare_frame)
+            except tk.TclError:
+                pass
+            self._compare_panel = None
+            self._compare_frame = None
+        else:
+            # Open compare mode
+            self._compare_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+            self._compare_panel = ComparePanel(
+                self._compare_frame,
+                image_session=self.image_session,
+                log_callback=self._log,
+                on_close=self._toggle_compare,
+            )
+            self._compare_panel.pack(fill=tk.BOTH, expand=True)
+            # Insert between carousel_frame and right_paned
+            self.bottom_paned.add(
+                self._compare_frame, minsize=200, before=self.right_paned
+            )
+
+    def _on_images_to_carousel(self, files: List[str]):
+        """Handle images dropped/browsed in the prompt panel mini drop zone."""
+        for f in files:
+            self.image_session.add_image(f, "input")
+            self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+
     def _on_files_dropped(self, files: List[str]):
         """Handle files dropped onto the drop zone."""
         if not self.queue_manager:
@@ -1767,7 +1822,7 @@ class KlingGUIWindow:
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
         # Collect and merge any tab-specific config
-        for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:
@@ -1923,7 +1978,7 @@ class KlingGUIWindow:
             # Migrate old too-small default to the correct open height
             if top_section_pos < 500:
                 top_section_pos = 560
-            prompt_split = self.config.get("sash_prompt_split", 590)
+            prompt_split = self.config.get("sash_prompt_split", 640)
             queue_pos = self.config.get("sash_queue", 300)
             log_pos = self.config.get("sash_log", 380)
             # Migrate old small log height to a reasonable default
@@ -2002,7 +2057,7 @@ class KlingGUIWindow:
         """Handle window close."""
         # Check both queue and tab worker threads
         busy_tabs = []
-        for tab_name in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
             tab_widget = getattr(self, tab_name, None)
             if tab_widget and getattr(tab_widget, "_busy", False):
                 busy_tabs.append(tab_name.replace("_tab", "").title())
@@ -2027,7 +2082,7 @@ class KlingGUIWindow:
                 self.queue_manager.stop_processing()
 
         # Collect tab configs before saving
-        for tab in ["prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:

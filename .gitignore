@@ -24,7 +24,9 @@ kling_automation.log
 # Distribution artifacts
 *.zip
 
-# PyInstaller build outputs (distribution folder)
+# PyInstaller build outputs
+build/
+dist/
 distribution/build/
 distribution/dist/
 
@@ -37,6 +39,13 @@ nul
 *.tmp
 *.temp
 tmp_run/
+tmp_*/
+tmp_*.jpg
+tmp_*.png
+test_crop.py
+
+# Claude Code
+.claude/
 
 # Session/History files
 kling_history.json

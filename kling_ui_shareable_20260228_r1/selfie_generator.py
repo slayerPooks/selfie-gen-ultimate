@@ -414,6 +414,7 @@ class SelfieGenerator:
         temp_output_path: str,
         resolved_endpoint: str,
         resolved_label: str,
+        actual_seed: int = -1,
     ) -> bool:
         """Run the BFL (api.bfl.ai) generation pipeline. Returns True on success."""
         import requests
@@ -448,15 +449,18 @@ class SelfieGenerator:
             self._report(f"Failed to encode image: {exc}", "error")
             return False
 
-        # Submit to BFL — field is "input_image" with data URI prefix
+        # Submit to BFL — field is "input_image" with raw base64 (no data URI prefix)
         headers = {
             "x-key": self._bfl_api_key,
             "Content-Type": "application/json",
         }
         payload = {
             "prompt": prompt,
-            "input_image": f"data:image/jpeg;base64,{image_b64}",
+            "input_image": image_b64,
+            "output_format": "png",
         }
+        if actual_seed >= 0:
+            payload["seed"] = actual_seed
 
         self._report(f"Submitting to {resolved_label}...", "task")
         try:
@@ -545,7 +549,7 @@ class SelfieGenerator:
         image_path: str,
         prompt: str,
         output_folder: str,
-        id_weight: float = 0.8,
+        id_weight: float = 1.0,
         width: int = 896,
         height: int = 1152,
         seed: int = -1,
@@ -585,6 +589,7 @@ class SelfieGenerator:
                 temp_output_path=temp_output_path,
                 resolved_endpoint=resolved_endpoint,
                 resolved_label=resolved_label,
+                actual_seed=actual_seed,
             )
         else:
             success = self._generate_fal_raw(

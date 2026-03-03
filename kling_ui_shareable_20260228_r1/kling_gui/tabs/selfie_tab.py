@@ -16,10 +16,9 @@ from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
 
 try:
-    from selfie_prompt_composer import DEFAULT_GENDER, DEFAULT_CAMERA_STYLE
+    from selfie_prompt_composer import DEFAULT_GENDER
 except Exception:
     DEFAULT_GENDER = "female"
-    DEFAULT_CAMERA_STYLE = "phone_selfie"
 
 
 class SelfieTab(tk.Frame):
@@ -84,6 +83,12 @@ class SelfieTab(tk.Frame):
         self._build_ui()
 
     def _build_ui(self):
+        # Pack btn_frame FIRST so it always reserves its bottom strip,
+        # even when content_frame overflows vertically.
+        btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=8)
+        self._btn_frame = btn_frame  # buttons added at end of method
+
         content_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         content_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -133,70 +138,15 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT)
 
-        # Composer controls (JSON Handoff mode)
+        # Hidden variables for composer (gender extracted from JSON, style defaults to candid)
         self._composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        self._composer_frame.pack(fill=tk.X, padx=4, pady=4)
-        composer_frame = self._composer_frame
-
-        # Gender
-        tk.Label(
-            composer_frame,
-            text="Subject:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=0, column=0, sticky="w", padx=2)
+        # Not packed — Subject/Style/Compose row removed; gender comes from JSON handoff
         self.gender_var = tk.StringVar(
             value=self.config.get("composer_gender", DEFAULT_GENDER)
         )
-        gender_combo = ttk.Combobox(
-            composer_frame,
-            textvariable=self.gender_var,
-            values=["female", "male", "neutral"],
-            state="readonly",
-            width=10,
-        )
-        gender_combo.grid(row=0, column=1, padx=5, pady=2)
-
-        # Camera style
-        tk.Label(
-            composer_frame,
-            text="Style:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=0, column=2, sticky="w", padx=2)
         self.style_var = tk.StringVar(
-            value=self.config.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
+            value=self.config.get("composer_camera_style", "candid")
         )
-        styles = [
-            "phone_selfie",
-            "mirror_selfie",
-            "professional",
-            "candid",
-            "close_up",
-        ]
-        style_combo = ttk.Combobox(
-            composer_frame,
-            textvariable=self.style_var,
-            values=styles,
-            state="readonly",
-            width=15,
-        )
-        style_combo.grid(row=0, column=3, padx=5, pady=2)
-
-        # Compose button
-        compose_btn = tk.Button(
-            composer_frame,
-            text="Compose",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._compose_prompt,
-            cursor="hand2",
-            relief=tk.FLAT,
-        )
-        compose_btn.grid(row=0, column=4, padx=5)
 
         # Prompt text + randomize scene (JSON Handoff mode)
         self._prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
@@ -205,7 +155,7 @@ class SelfieTab(tk.Frame):
 
         self.prompt_text = tk.Text(
             prompt_editor_frame,
-            height=2,
+            height=5,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -244,7 +194,7 @@ class SelfieTab(tk.Frame):
         scene_templates_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 3))
         self.scene_templates_text = tk.Text(
             scene_templates_frame,
-            height=2,
+            height=3,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -278,7 +228,7 @@ class SelfieTab(tk.Frame):
         template_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(3, 0))
         self.prompt_template_text = tk.Text(
             template_frame,
-            height=3,
+            height=5,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -351,7 +301,7 @@ class SelfieTab(tk.Frame):
 
         self._wildcard_text = tk.Text(
             self._wildcard_frame,
-            height=4,
+            height=7,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -366,12 +316,40 @@ class SelfieTab(tk.Frame):
             "selfie_wildcard_template", self.DEFAULT_WILDCARD_TEMPLATE
         )
         self._wildcard_text.insert("1.0", (saved_wildcard or self.DEFAULT_WILDCARD_TEMPLATE).strip())
+        self._wildcard_text.config(state=tk.DISABLED)
 
         wildcard_actions = tk.Frame(self._wildcard_frame, bg=COLORS["bg_panel"])
         wildcard_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
+        self._edit_wildcard_btn = tk.Button(
+            wildcard_actions,
+            text="Edit Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_edit_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        )
+        self._edit_wildcard_btn.pack(side=tk.LEFT)
+        self._save_wildcard_btn = tk.Button(
+            wildcard_actions,
+            text="Save Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+            state=tk.DISABLED,
+        )
+        self._save_wildcard_btn.pack(side=tk.LEFT, padx=(5, 0))
         tk.Button(
             wildcard_actions,
-            text="Reset to Default",
+            text="Reset Template",
             font=(FONT_FAMILY, 8),
             bg=COLORS["btn_red"],
             fg="white",
@@ -380,7 +358,7 @@ class SelfieTab(tk.Frame):
             relief=tk.FLAT,
             padx=7,
             pady=1,
-        ).pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(5, 0))
 
         # Apply initial prompt mode visibility
         self._apply_prompt_mode_ui()
@@ -407,7 +385,7 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
         ).grid(row=0, column=0, sticky="w")
         self.id_weight_var = tk.DoubleVar(
-            value=self.config.get("selfie_id_weight", 0.8)
+            value=self.config.get("selfie_id_weight", 1.0)
         )
         id_scale = tk.Scale(
             grid,
@@ -512,7 +490,7 @@ class SelfieTab(tk.Frame):
             bg=COLORS["bg_panel"],
             highlightthickness=0,
             borderwidth=0,
-            height=98,
+            height=140,
         )
         models_scroll = ttk.Scrollbar(
             models_list_container,
@@ -641,9 +619,8 @@ class SelfieTab(tk.Frame):
         self.browse_btn.pack(side=tk.LEFT)
         self._update_output_entry_state()
 
-        # Generate button
-        btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=8)
+        # Action buttons (btn_frame was packed at top of _build_ui)
+        btn_frame = self._btn_frame
 
         self.generate_btn = tk.Button(
             btn_frame,
@@ -823,9 +800,31 @@ class SelfieTab(tk.Frame):
             self._prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
             self._templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
 
+    def _set_wildcard_edit_mode(self, enabled: bool):
+        self._wildcard_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        self._edit_wildcard_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self._save_wildcard_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _on_edit_wildcard_template(self):
+        self._set_wildcard_edit_mode(True)
+        self._wildcard_text.focus_set()
+        self._wildcard_text.mark_set(tk.INSERT, tk.END)
+
+    def _on_save_wildcard_template(self):
+        text = self._wildcard_text.get("1.0", tk.END).strip()
+        if not text:
+            text = self.DEFAULT_WILDCARD_TEMPLATE
+        self._wildcard_text.config(state=tk.NORMAL)
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", text)
+        self._set_wildcard_edit_mode(False)
+        self.log("Wildcard template saved", "success")
+
     def _on_reset_wildcard_template(self):
+        self._wildcard_text.config(state=tk.NORMAL)
         self._wildcard_text.delete("1.0", tk.END)
         self._wildcard_text.insert("1.0", self.DEFAULT_WILDCARD_TEMPLATE)
+        self._set_wildcard_edit_mode(False)
         self.log("Wildcard template reset to default", "info")
 
     def _apply_handoff_scene_prompt(self, reroll: bool):
@@ -897,14 +896,15 @@ class SelfieTab(tk.Frame):
             return
 
         mode = self._prompt_mode_var.get()
+        wildcard_template = None
         if mode == "wildcards":
-            from selfie_generator import SelfieGenerator
             raw = self._wildcard_text.get("1.0", tk.END).strip()
             if not raw:
                 self.log("Wildcard template is empty", "warning")
                 return
-            prompt = SelfieGenerator.resolve_wildcards(raw)
-            self.log(f"Resolved wildcard prompt: {prompt[:120]}...", "debug")
+            # Save raw template — wildcards will be resolved per-model in _run()
+            wildcard_template = raw
+            prompt = raw  # placeholder; each model gets a fresh resolution
         elif self._handoff_identity_data:
             prompt = self._build_handoff_prompt().strip()
             if not prompt:
@@ -966,6 +966,19 @@ class SelfieTab(tk.Frame):
                 for model in selected_models:
                     endpoint = model.get("endpoint", "")
                     label = model.get("label", endpoint)
+
+                    # Resolve wildcards per-model for variety
+                    if wildcard_template:
+                        model_prompt = SelfieGenerator.resolve_wildcards(wildcard_template)
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda l=label, p=model_prompt: self.log(
+                                f"[{l}] Resolved prompt: {p[:120]}...", "debug"
+                            ),
+                        )
+                    else:
+                        model_prompt = prompt
+
                     self.winfo_toplevel().after(
                         0,
                         lambda l=label, e=endpoint: self.log(
@@ -974,7 +987,7 @@ class SelfieTab(tk.Frame):
                     )
                     result = gen.generate(
                         image_path=image_path,
-                        prompt=prompt,
+                        prompt=model_prompt,
                         output_folder=output_folder,
                         id_weight=id_weight,
                         width=width,

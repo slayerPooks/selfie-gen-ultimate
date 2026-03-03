@@ -12,6 +12,13 @@ import os
 import re
 import logging
 
+try:
+    from tkinterdnd2 import DND_FILES as _DND_FILES
+    _HAS_DND = True
+except ImportError:
+    _DND_FILES = None
+    _HAS_DND = False
+
 
 # Color palette
 COLORS = {
@@ -320,6 +327,17 @@ class ModelFetcher:
         return FALLBACK_MODELS
 
     @staticmethod
+    def get_merged_models(config: dict) -> List[Dict]:
+        """Merge factory models (minus hidden) with custom models."""
+        hidden = set(config.get("hidden_models", []))
+        custom = config.get("custom_models", [])
+        factory = [m for m in MODEL_METADATA if m.get("endpoint") not in hidden]
+        merged = factory + list(custom)
+        if merged:
+            return merged
+        return ModelFetcher.get_cached_or_fallback(config)
+
+    @staticmethod
     def cache_models(config: dict, models: List[Dict]):
         """Save models to config cache."""
         config["cached_models"] = {"models": models, "timestamp": time.time()}
@@ -334,6 +352,7 @@ class ConfigPanel(tk.Frame):
         config: dict,
         on_config_changed: Callable[..., None],  # Flexible signature for compatibility
         build_prompt: bool = True,
+        on_images_dropped: Optional[Callable[[List[str]], None]] = None,
         **kwargs,
     ):
         """
@@ -345,11 +364,14 @@ class ConfigPanel(tk.Frame):
             on_config_changed: Callback when config changes
             build_prompt: If False, prompt panel is not built inline — caller
                 must call build_prompt_panel(parent) separately after init.
+            on_images_dropped: Callback when images are dropped/browsed in the
+                mini drop zone (built inside the prompt panel).
         """
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
         self.config = config
         self.on_config_changed = on_config_changed
         self._build_prompt_inline = build_prompt
+        self._on_images_dropped = on_images_dropped
 
         # Configure dark theme for ttk Combobox widgets
         self._setup_combobox_style()
@@ -433,24 +455,25 @@ class ConfigPanel(tk.Frame):
             width=36, font=(FONT_FAMILY, 10, "bold"),
             style="Dark.TCombobox", height=COMBOBOX_DROPDOWN_HEIGHT,
         )
-        self.model_combo.pack(side=tk.LEFT, padx=(5, 10))
+        self.model_combo.pack(side=tk.LEFT, padx=(5, 6))
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
-        info_frame = tk.Frame(row1, bg=COLORS["bg_input"])
-        info_frame.pack(side=tk.LEFT, fill=tk.Y)
-        self.duration_label = tk.Label(
-            info_frame, text="10s duration", font=(FONT_FAMILY, 10),
-            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
+        # "Manage…" button — opens the Model Manager dialog
+        self.manage_models_btn = tk.Button(
+            row1, text="Manage\u2026", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
+            padx=8, pady=2, relief=tk.FLAT, borderwidth=0, command=self._open_model_manager,
         )
-        self.duration_label.pack(side=tk.TOP, anchor="w")
+        self.manage_models_btn.pack(side=tk.LEFT, padx=(4, 0))
 
-        # ⓘ info icon — hover to see model notes (blue = has notes, dim = none)
+        # ⓘ info icon (larger, no text label) — hover to see model notes
         self.model_info_icon = tk.Label(
-            info_frame, text="ⓘ info",
-            font=(FONT_FAMILY, 8), cursor="question_arrow",
+            row1, text="\u24D8", font=(FONT_FAMILY, 14),
+            cursor="question_arrow",
             bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.model_info_icon.pack(side=tk.TOP, anchor="w")
+        self.model_info_icon.pack(side=tk.LEFT, padx=(6, 0))
         HoverTooltip(self.model_info_icon, self._get_current_model_notes)
 
         # Row 2: Output mode
@@ -770,7 +793,7 @@ class ConfigPanel(tk.Frame):
         self.prompt_preview = tk.Text(
             text_frame, font=(FONT_FAMILY, 10),
             bg=COLORS["bg_main"], fg=COLORS["text_dim"],
-            height=15, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0,
+            height=12, wrap=tk.WORD, relief=tk.FLAT, borderwidth=0,
             insertbackground=COLORS["text_light"], state="disabled",
         )
         preview_scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.prompt_preview.yview)
@@ -812,6 +835,11 @@ class ConfigPanel(tk.Frame):
 
         # Load prompt config now that widgets exist
         self._load_prompt_config()
+
+        # Mini drop zone (below the prompt area, fills remaining space)
+        if self._on_images_dropped is not None:
+            self._build_mini_drop_zone(right_inner)
+
         return right_col
 
     def _load_prompt_config(self):
@@ -833,10 +861,139 @@ class ConfigPanel(tk.Frame):
             else:
                 rb.config(fg=COLORS["text_light"], bg=COLORS["bg_panel"])
 
+    # ── Mini drop zone (inside prompt panel) ─────────────────────────
+
+    _VALID_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+
+    def _build_mini_drop_zone(self, parent):
+        """Build a drop target below the prompt area, matching the original drop zone style."""
+        _bg = COLORS["bg_input"]  # same as original bg_drop (#464649)
+        _hover = "#505055"
+
+        outer = tk.Frame(
+            parent, bg=COLORS["bg_panel"],
+            highlightthickness=2, highlightbackground=COLORS["border"],
+        )
+        outer.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        inner = tk.Frame(outer, bg=_bg, cursor="hand2")
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        # Centered content (like original drop_zone.py)
+        center = tk.Frame(inner, bg=_bg, cursor="hand2")
+        center.place(relx=0.5, rely=0.5, anchor="center")
+
+        lbl_icon = tk.Label(
+            center, text="\U0001f4e5", font=("Segoe UI Emoji", 28),
+            bg=_bg, fg=COLORS["accent_blue"], cursor="hand2",
+        )
+        lbl_icon.pack(pady=(0, 4))
+
+        lbl_main = tk.Label(
+            center, text="DROP IMAGES HERE",
+            font=("Segoe UI", 11, "bold"),
+            bg=_bg, fg=COLORS["text_light"], cursor="hand2",
+        )
+        lbl_main.pack(pady=1)
+
+        lbl_sub = tk.Label(
+            center, text="or click to browse",
+            font=("Segoe UI", 9),
+            bg=_bg, fg=COLORS["text_dim"], cursor="hand2",
+        )
+        lbl_sub.pack(pady=(0, 2))
+
+        self._mini_dz_status = tk.Label(
+            center, text="", font=("Segoe UI", 9, "bold"),
+            bg=_bg, fg=COLORS["success"], cursor="hand2",
+        )
+        self._mini_dz_status.pack()
+
+        self._mini_dz_inner = inner
+        self._mini_dz_outer = outer
+        _all = (inner, center, lbl_icon, lbl_main, lbl_sub, self._mini_dz_status)
+
+        # Click-to-browse on all widgets
+        for w in _all:
+            w.bind("<Button-1>", lambda _e: self._mini_dz_browse())
+
+        # Hover effects
+        def _on_enter(_e):
+            for c in _all:
+                c.config(bg=_hover)
+            outer.config(highlightbackground=COLORS["accent_blue"])
+
+        def _on_leave(_e):
+            for c in _all:
+                c.config(bg=_bg)
+            outer.config(highlightbackground=COLORS["border"])
+
+        for w in _all:
+            w.bind("<Enter>", _on_enter)
+            w.bind("<Leave>", _on_leave)
+
+        # DnD registration
+        if _HAS_DND and _DND_FILES:
+            for w in (inner, center, lbl_icon, lbl_main, lbl_sub):
+                try:
+                    w.drop_target_register(_DND_FILES)
+                    w.dnd_bind("<<DropEnter>>", lambda _e: (
+                        [c.config(bg="#329632") for c in _all],
+                    ))
+                    w.dnd_bind("<<DropLeave>>", lambda _e: (
+                        [c.config(bg=_bg) for c in _all],
+                    ))
+                    w.dnd_bind("<<Drop>>", self._mini_dz_on_drop)
+                except Exception:
+                    pass
+
+    def _mini_dz_on_drop(self, event):
+        """Handle DnD drop event on the mini drop zone."""
+        paths = self._mini_dz_parse(event.data)
+        if paths:
+            self._mini_dz_deliver(paths)
+
+    @staticmethod
+    def _mini_dz_parse(data: str) -> List[str]:
+        """Parse Windows DnD data string into a list of existing file paths."""
+        import re as _re
+        # tkinterdnd2 on Windows wraps paths with spaces in braces: {C:/my path/file.png}
+        results = []
+        for m in _re.finditer(r'\{([^}]+)\}|(\S+)', data):
+            p = m.group(1) or m.group(2)
+            if p and os.path.exists(p):
+                results.append(p)
+        return results
+
+    def _mini_dz_browse(self):
+        """Open file dialog to select images for the carousel."""
+        filetypes = [
+            ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tiff *.tif"),
+            ("All files", "*.*"),
+        ]
+        paths = filedialog.askopenfilenames(title="Select Images", filetypes=filetypes)
+        if paths:
+            self._mini_dz_deliver(list(paths))
+
+    def _mini_dz_deliver(self, paths: List[str]):
+        """Validate image extensions, call callback, show status feedback."""
+        valid = [p for p in paths if os.path.splitext(p)[1].lower() in self._VALID_IMG_EXTS]
+        if not valid:
+            return
+        if self._on_images_dropped:
+            self._on_images_dropped(valid)
+        n = len(valid)
+        self._mini_dz_status.config(text=f"Added {n} image{'s' if n != 1 else ''}")
+        # Auto-clear status after 2 seconds
+        self.after(2000, lambda: (
+            self._mini_dz_status.config(text="")
+            if hasattr(self, "_mini_dz_status") else None
+        ))
+
     def _load_config(self):
         """Load configuration values into UI."""
         # Model list + inline model selector
-        self.models = ModelFetcher.get_cached_or_fallback(self.config)
+        self.models = ModelFetcher.get_merged_models(self.config)
         if not self.models:
             self.models = [
                 {
@@ -869,6 +1026,9 @@ class ConfigPanel(tk.Frame):
             self.model_var.set(model_names[selected_index])
             self._update_model_info_icon()
 
+        # Background metadata + pricing enrichment from fal.ai API
+        self._start_api_enrichment()
+
         # Output mode
         if self.config.get("use_source_folder", True):
             self.output_mode_var.set("source")
@@ -883,8 +1043,6 @@ class ConfigPanel(tk.Frame):
         # Duration
         duration = self.config.get("video_duration", 10)
         self.duration_var.set(f"{duration}s")
-        if hasattr(self, 'duration_label'):
-            self.duration_label.config(text=f"{duration}s duration")
         logger.debug(f"Loaded duration: {duration}s")
 
         # Loop video option
@@ -922,6 +1080,74 @@ class ConfigPanel(tk.Frame):
             "current_model", "fal-ai/kling-video/v2.1/pro/image-to-video"
         )
         self.update_parameter_visibility(current_model)
+
+    def _start_api_enrichment(self):
+        """Background: fetch schema metadata + pricing for all models, then refresh UI."""
+        api_key = self.config.get("falai_api_key", "")
+        if not api_key or not self.models:
+            return
+
+        models_ref = self.models  # capture reference
+
+        def _enrich():
+            try:
+                from model_schema_manager import ModelSchemaManager
+                schema_mgr = ModelSchemaManager(api_key)
+
+                # 1. For each model, get metadata from cached/live schema
+                for model in models_ref:
+                    ep = model.get("endpoint", "")
+                    if not ep:
+                        continue
+                    try:
+                        meta = schema_mgr.get_model_metadata(ep)
+                        if meta:
+                            if meta.get("display_name"):
+                                model["api_display_name"] = meta["display_name"]
+                            if meta.get("description"):
+                                model["api_description"] = meta["description"]
+                            if meta.get("date"):
+                                model["api_date"] = meta["date"]
+                    except Exception as e:
+                        logger.debug(f"Metadata fetch failed for {ep}: {e}")
+
+                # 2. Batch-fetch pricing
+                endpoints = [m.get("endpoint", "") for m in models_ref if m.get("endpoint")]
+                try:
+                    pricing = schema_mgr.get_model_pricing(endpoints)
+                    for model in models_ref:
+                        ep = model.get("endpoint", "")
+                        if ep in pricing:
+                            model["pricing_info"] = pricing[ep]
+                except Exception as e:
+                    logger.debug(f"Pricing fetch failed: {e}")
+
+                # 3. Thread-safe GUI update
+                try:
+                    self.winfo_toplevel().after(0, self._refresh_model_dropdown)
+                except Exception:
+                    pass  # widget destroyed
+
+            except Exception as e:
+                logger.debug(f"API enrichment failed: {e}")
+
+        threading.Thread(target=_enrich, daemon=True).start()
+
+    def _refresh_model_dropdown(self):
+        """Refresh the model dropdown with enriched data (runs on main thread)."""
+        if not hasattr(self, "model_combo") or not self.models:
+            return
+
+        current_idx = self.model_combo.current()
+        model_names = [get_model_display_name(m) for m in self.models]
+        self.model_combo["values"] = model_names
+
+        if 0 <= current_idx < len(model_names):
+            self.model_combo.current(current_idx)
+            self.model_var.set(model_names[current_idx])
+
+        # Update info icon for the current model
+        self._update_model_info_icon()
 
     def _on_model_changed(self, event=None):
         """Handle inline model selection changes."""
@@ -977,36 +1203,111 @@ class ConfigPanel(tk.Frame):
 
                 self.duration_var.set(f"{current_duration}s")
                 self.config["video_duration"] = current_duration
-                self.duration_label.config(text=f"{current_duration}s duration")
 
         self.update_parameter_visibility(model_endpoint)
 
         duration_text = self.duration_var.get().rstrip("s").strip()
         if duration_text.isdigit():
             self.config["video_duration"] = int(duration_text)
-            self.duration_label.config(text=f"{duration_text}s duration")
 
         self._update_model_info_icon(selected_model)
         self._notify_change(f"Model changed to {self.config['model_display_name']}")
 
     def _get_current_model_notes(self) -> str:
-        """Return the notes string for the currently selected model (used by HoverTooltip)."""
+        """Return structured tooltip for the currently selected model (used by HoverTooltip).
+
+        Sections (shown when available):
+          - Provider Info: API description from fal.ai
+          - Pricing: live pricing from API
+          - User Notes: from models.json user_notes
+        """
         idx = self.model_combo.current()
-        if hasattr(self, "models") and 0 <= idx < len(self.models):
-            return self.models[idx].get("notes", "")
-        return ""
+        if not (hasattr(self, "models") and 0 <= idx < len(self.models)):
+            return ""
+
+        model = self.models[idx]
+        sections = []
+
+        # Provider info (from API metadata)
+        api_desc = model.get("api_description", "")
+        if api_desc:
+            sections.append(f"\u2500\u2500 Provider Info \u2500\u2500\n{api_desc}")
+
+        # Pricing (from API)
+        pricing = model.get("pricing_info", {})
+        if pricing:
+            unit = pricing.get("unit", "")
+            price = pricing.get("unit_price", 0)
+            if price:
+                if unit == "second":
+                    price_str = f"${price:.3f}/second (${price * 5:.2f}/5s, ${price * 10:.2f}/10s)"
+                elif unit == "video":
+                    price_str = f"${price:.2f}/video (flat rate)"
+                elif unit == "image":
+                    price_str = f"${price:.2f}/image"
+                else:
+                    price_str = f"${price:.3f}/{unit}" if unit else f"${price:.3f}"
+                sections.append(f"\u2500\u2500 Pricing \u2500\u2500\n{price_str}")
+
+        # User notes (from models.json user_notes field)
+        user_notes = model.get("user_notes", "")
+        if user_notes:
+            sections.append(f"\u2500\u2500 User Notes \u2500\u2500\n{user_notes}")
+
+        # Legacy fallback: if no sections but has old-style "notes"
+        if not sections:
+            return model.get("notes", "")
+
+        return "\n\n".join(sections)
 
     def _update_model_info_icon(self, model: dict = None):
-        """Set info icon color: blue when model has notes, dim otherwise."""
+        """Set info icon color: blue when model has notes/info, dim otherwise."""
         if not hasattr(self, "model_info_icon"):
             return
         if model is None:
             idx = self.model_combo.current()
             model = self.models[idx] if hasattr(self, "models") and 0 <= idx < len(self.models) else {}
-        has_notes = bool(model.get("notes", ""))
-        self.model_info_icon.config(
-            fg=COLORS["accent_blue"] if has_notes else COLORS["text_dim"]
+        has_info = bool(
+            model.get("notes", "")
+            or model.get("user_notes", "")
+            or model.get("api_description", "")
+            or model.get("pricing_info", {})
         )
+        self.model_info_icon.config(
+            fg=COLORS["accent_blue"] if has_info else COLORS["text_dim"]
+        )
+
+    def _open_model_manager(self):
+        """Open the Model Manager dialog."""
+        from .model_manager_dialog import ModelManagerDialog
+        ModelManagerDialog(
+            parent=self.winfo_toplevel(),
+            config=self.config,
+            api_key=self.config.get("falai_api_key", ""),
+            on_save=self._on_model_manager_saved,
+        )
+
+    def _on_model_manager_saved(self):
+        """Refresh the model dropdown after Model Manager changes."""
+        prev_endpoint = self.config.get("current_model", "")
+        self.models = ModelFetcher.get_merged_models(self.config)
+        if not self.models:
+            self.models = FALLBACK_MODELS
+        model_names = [get_model_display_name(m) for m in self.models]
+        self.model_combo["values"] = model_names
+        selected_index = 0
+        for i, m in enumerate(self.models):
+            if m.get("endpoint") == prev_endpoint:
+                selected_index = i
+                break
+        if model_names:
+            self.model_combo.current(selected_index)
+            self.model_var.set(model_names[selected_index])
+            chosen = self.models[selected_index]
+            self.config["current_model"] = chosen.get("endpoint", "")
+            self.config["model_display_name"] = chosen.get("name", "")
+            self._update_model_info_icon(chosen)
+        self._notify_change("Model list updated via Model Manager")
 
     def _check_ffmpeg_status(self):
         """Check if FFmpeg is available and update UI."""
@@ -1091,10 +1392,6 @@ class ConfigPanel(tk.Frame):
 
             # Update config
             self.config["video_duration"] = duration
-
-            # Update display label if it exists
-            if hasattr(self, 'duration_label'):
-                self.duration_label.config(text=f"{duration}s duration")
 
             # Notify parent window of change
             self._notify_change(f"Duration set to {duration}s")
@@ -1468,6 +1765,36 @@ class ConfigPanel(tk.Frame):
                         logger.info(f"Duration reset to {new_default} (was {current_value})")
                 except tk.TclError as e:
                     logger.debug(f"Could not update duration dropdown: {e}")
+
+            # Update aspect ratio dropdown from schema
+            ar_param = schema_manager.get_parameter_info(model_endpoint, "aspect_ratio")
+            if ar_param and hasattr(ar_param, 'enum') and ar_param.enum:
+                ar_values = list(ar_param.enum)
+                if hasattr(self, 'aspect_ratio_combo') and self.aspect_ratio_combo is not None:
+                    try:
+                        current_ar = self.aspect_ratio_var.get()
+                        self.aspect_ratio_combo.config(values=ar_values)
+                        if current_ar not in ar_values:
+                            default_ar = str(ar_param.default) if ar_param.default else (ar_values[0] if ar_values else "16:9")
+                            self.aspect_ratio_var.set(default_ar)
+                            logger.debug(f"Aspect ratio reset to {default_ar}")
+                    except tk.TclError as e:
+                        logger.debug(f"Could not update aspect ratio dropdown: {e}")
+
+            # Update resolution dropdown from schema
+            res_param = schema_manager.get_parameter_info(model_endpoint, "resolution")
+            if res_param and hasattr(res_param, 'enum') and res_param.enum:
+                res_values = list(res_param.enum)
+                if hasattr(self, 'resolution_combo') and self.resolution_combo is not None:
+                    try:
+                        current_res = self.resolution_var.get()
+                        self.resolution_combo.config(values=res_values)
+                        if current_res not in res_values:
+                            default_res = str(res_param.default) if res_param.default else (res_values[0] if res_values else "720p")
+                            self.resolution_var.set(default_res)
+                            logger.debug(f"Resolution reset to {default_res}")
+                    except tk.TclError as e:
+                        logger.debug(f"Could not update resolution dropdown: {e}")
 
             for param_name, (controls, labels) in param_controls.items():
                 supported = param_name in supported_params
