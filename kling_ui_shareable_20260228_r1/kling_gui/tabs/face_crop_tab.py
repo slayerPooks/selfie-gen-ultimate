@@ -32,6 +32,15 @@ except ImportError:
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 
 
+_DEFAULT_POLISH_PROMPT = (
+    "Carefully remove all text, numbers, watermarks, seals, and document artifacts "
+    "from the image. Clean up the background to make it seamless. "
+    "CRITICAL: Do NOT alter the person's face, facial features, hair, expression, "
+    "or clothing in any way. Keep the original photo quality, lighting, and realism "
+    "exactly the same. Do not beautify or change the identity."
+)
+
+
 class FaceCropTab(tk.Frame):
     """Tab 0: Detect face in ID card photo and produce a 3:4 passport crop."""
 
@@ -70,6 +79,12 @@ class FaceCropTab(tk.Frame):
         )
         self._auto_switch_var = tk.BooleanVar(
             value=config.get("face_crop_auto_switch", True)
+        )
+
+        # Polish state
+        self._polish_busy = False
+        self._polish_provider_var = tk.StringVar(
+            value=config.get("face_crop_polish_provider", "BFL (Kontext Pro)")
         )
 
         # PhotoImage references (prevent GC)
@@ -251,6 +266,62 @@ class FaceCropTab(tk.Frame):
         )
         self._crop_canvas.pack(fill=tk.BOTH, expand=True)
 
+        # ── Polish Frame ──────────────────────────────────────────────
+        polish_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        polish_frame.pack(fill=tk.X, padx=8, pady=(2, 2))
+
+        self._polish_btn = tk.Button(
+            polish_frame,
+            text="Polish Crop",
+            bg=COLORS["accent_blue"],
+            fg="white",
+            font=(FONT_FAMILY, 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=self._polish_crop,
+            state=tk.DISABLED,
+        )
+        self._polish_btn.pack(side=tk.LEFT)
+
+        tk.Label(
+            polish_frame,
+            text="Provider:",
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(12, 4))
+
+        self._polish_provider_combo = ttk.Combobox(
+            polish_frame,
+            textvariable=self._polish_provider_var,
+            values=["BFL (Kontext Pro)", "fal.ai (FLUX.2 Edit)"],
+            state="readonly",
+            width=20,
+        )
+        self._polish_provider_combo.pack(side=tk.LEFT)
+
+        edit_prompt_btn = tk.Button(
+            polish_frame,
+            text="Edit Prompt",
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief="flat",
+            cursor="hand2",
+            command=self._open_polish_prompt_editor,
+        )
+        edit_prompt_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        self._polish_status = tk.Label(
+            polish_frame,
+            text="",
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            font=(FONT_FAMILY, 9),
+            anchor="w",
+        )
+        self._polish_status.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+
         # ── Send Frame ──────────────────────────────────────────────
         send_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         send_frame.pack(fill=tk.X, padx=8, pady=(4, 8))
@@ -330,6 +401,7 @@ class FaceCropTab(tk.Frame):
         self._crop_result = None
         self._send_prep_btn.config(state=tk.DISABLED)
         self._send_selfie_btn.config(state=tk.DISABLED)
+        self._update_polish_btn_state()
 
         # Load with PIL, fix EXIF rotation, save corrected temp for cv2/RetinaFace
         try:
@@ -423,6 +495,7 @@ class FaceCropTab(tk.Frame):
             if error:
                 self._status_label.config(text=error, fg=COLORS["error"])
                 self.log(f"Face Crop: {error}", "error")
+                self._update_polish_btn_state()
                 return
 
             self._cv2_img = cv2_img
@@ -444,6 +517,8 @@ class FaceCropTab(tk.Frame):
             else:
                 self._status_label.config(text="No face detected", fg=COLORS["error"])
                 self.log("Face Crop: no face detected in image", "warning")
+
+            self._update_polish_btn_state()
 
         self.after(0, _update)
 
@@ -582,10 +657,187 @@ class FaceCropTab(tk.Frame):
         if self._auto_switch_var.get() and self._notebook_switcher_selfie:
             self._notebook_switcher_selfie()
 
+    # ── Polish Crop ─────────────────────────────────────────────────
+
+    def _update_polish_btn_state(self):
+        """Enable polish button only when a crop exists and we're not busy."""
+        if self._crop_result is not None and not self._busy and not self._polish_busy:
+            self._polish_btn.config(state=tk.NORMAL)
+        else:
+            self._polish_btn.config(state=tk.DISABLED)
+
+    def _polish_crop(self):
+        """Save the crop, then polish it in a background thread."""
+        if self._crop_result is None or self._polish_busy:
+            return
+
+        crop_path = self._save_crop()
+        if crop_path is None:
+            return
+
+        self._polish_busy = True
+        self._polish_btn.config(state=tk.DISABLED, text="Polishing...")
+
+        provider_label = self._polish_provider_var.get()
+        provider = "bfl" if "BFL" in provider_label else "fal"
+        self._polish_status.config(
+            text=f"Running {provider_label}...", fg=COLORS["progress"]
+        )
+
+        prompt = self.get_config().get("face_crop_polish_prompt", _DEFAULT_POLISH_PROMPT)
+
+        output_path = str(crop_path.parent / f"{crop_path.stem}_polished.png")
+
+        def _worker():
+            from crop_polisher import CropPolisher
+
+            cfg = self.get_config()
+            polisher = CropPolisher(
+                falai_api_key=cfg.get("falai_api_key", ""),
+                bfl_api_key=cfg.get("bfl_api_key", ""),
+                freeimage_key=cfg.get("freeimage_api_key", ""),
+            )
+            polisher.set_progress_callback(
+                lambda msg, lvl: self.log(f"Polish: {msg}", lvl)
+            )
+
+            result = polisher.polish(
+                image_path=str(crop_path),
+                output_path=output_path,
+                provider=provider,
+                prompt=prompt,
+            )
+            if result:
+                self.after(0, lambda: self._on_polish_done(result))
+            else:
+                self.after(0, lambda: self._on_polish_error("Polish failed (see log)"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_polish_done(self, result_path: str):
+        """Handle successful polish: update crop canvas and carousel."""
+        self._polish_busy = False
+        self._polish_btn.config(text="Polish Crop")
+        self._update_polish_btn_state()
+
+        basename = os.path.basename(result_path)
+        self._polish_status.config(text=f"Done: {basename}", fg=COLORS["success"])
+        self.log(f"Polish: saved {basename}", "success")
+
+        # Update crop preview with polished image
+        try:
+            if HAS_PIL:
+                pil_img = Image.open(result_path)
+                pil_img.thumbnail((400, 400))
+                self._crop_photo = self._show_on_canvas(self._crop_canvas, pil_img)
+
+            # Update _crop_result to the polished numpy array
+            if HAS_FACE_DEPS:
+                polished_bgr = cv2.imread(result_path)
+                if polished_bgr is not None:
+                    self._crop_result = polished_bgr
+
+            # Add polished image to carousel
+            self.image_session.add_image(result_path, "input", label=basename)
+        except Exception as exc:
+            self.log(f"Polish: preview update error: {exc}", "warning")
+
+    def _on_polish_error(self, error: str):
+        """Handle polish failure."""
+        self._polish_busy = False
+        self._polish_btn.config(text="Polish Crop")
+        self._update_polish_btn_state()
+        self._polish_status.config(text=error, fg=COLORS["error"])
+
+    def _open_polish_prompt_editor(self):
+        """Open a modal dialog to view/edit the polish prompt."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Polish Prompt")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+        dialog.configure(bg=COLORS["bg_main"])
+        dialog.geometry("520x340")
+        dialog.resizable(True, True)
+
+        tk.Label(
+            dialog,
+            text="Instruction prompt sent to the AI editor:",
+            bg=COLORS["bg_main"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 10),
+            anchor="w",
+        ).pack(fill=tk.X, padx=12, pady=(12, 4))
+
+        text_widget = tk.Text(
+            dialog,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            font=(FONT_FAMILY, 10),
+            wrap=tk.WORD,
+            height=10,
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+
+        current_prompt = self.get_config().get(
+            "face_crop_polish_prompt", _DEFAULT_POLISH_PROMPT
+        )
+        text_widget.insert("1.0", current_prompt)
+
+        btn_frame = tk.Frame(dialog, bg=COLORS["bg_main"])
+        btn_frame.pack(fill=tk.X, padx=12, pady=(4, 12))
+
+        def _reset():
+            text_widget.delete("1.0", tk.END)
+            text_widget.insert("1.0", _DEFAULT_POLISH_PROMPT)
+
+        def _save():
+            new_prompt = text_widget.get("1.0", tk.END).strip()
+            self.config["face_crop_polish_prompt"] = new_prompt
+            dialog.destroy()
+
+        tk.Button(
+            btn_frame,
+            text="Reset to Default",
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief="flat",
+            cursor="hand2",
+            command=_reset,
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            btn_frame,
+            text="Cancel",
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief="flat",
+            cursor="hand2",
+            command=dialog.destroy,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        tk.Button(
+            btn_frame,
+            text="Save",
+            bg=COLORS["accent_blue"],
+            fg="white",
+            font=(FONT_FAMILY, 9, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=_save,
+        ).pack(side=tk.RIGHT)
+
     # ── Config Persistence ──────────────────────────────────────────
 
     def get_config_updates(self) -> dict:
-        return {
+        updates = {
             "face_crop_multiplier": self._multiplier_var.get(),
             "face_crop_auto_switch": self._auto_switch_var.get(),
+            "face_crop_polish_provider": self._polish_provider_var.get(),
         }
+        # Only persist polish prompt if it was explicitly set (not just default)
+        if "face_crop_polish_prompt" in self.config:
+            updates["face_crop_polish_prompt"] = self.config["face_crop_polish_prompt"]
+        return updates
