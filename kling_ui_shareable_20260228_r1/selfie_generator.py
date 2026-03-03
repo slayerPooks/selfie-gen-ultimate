@@ -389,7 +389,10 @@ class SelfieGenerator:
             return False
 
         self._report("Waiting for generation...", "progress")
-        final = fal_queue_poll(self.api_key, status_url, self._progress_callback)
+        final = fal_queue_poll(
+            self.api_key, status_url, self._progress_callback,
+            max_wait_seconds=120,
+        )
         if not final:
             self._report("Generation failed or timed out", "error")
             return False

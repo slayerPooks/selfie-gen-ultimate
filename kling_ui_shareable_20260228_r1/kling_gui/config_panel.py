@@ -37,7 +37,7 @@ COLORS = {
 }
 
 # Import centralized model metadata to avoid duplication
-from model_metadata import MODEL_METADATA, get_model_display_name
+from model_metadata import MODEL_METADATA, get_model_display_name, _endpoint_to_short_name
 
 # Minimal fallback - ONLY used when API fails AND no cache exists
 # Models change frequently - this is just a safety net with user's preferred model
@@ -49,21 +49,6 @@ FAL_MODELS_URL = "https://fal.ai/models?categories=image-to-video"
 FAL_EXPLORE_URL = "https://fal.ai/explore/models"
 FAL_API_DOCS_URL = "https://docs.fal.ai"
 
-# Vague model names that should be replaced with parsed endpoint names
-# Using frozenset for O(1) lookup performance
-VAGUE_MODEL_NAMES = frozenset(
-    ["kling video", "pixverse", "wan effects", "longcat video", "pika"]
-)
-
-# Precompiled regex patterns for word-boundary matching of vague names
-# Compiled once at module load to avoid per-call compilation overhead
-# Pattern: (?<!\w)name(?!\w) matches 'name' only when not surrounded by word characters
-# e.g., 'pika' matches "Pika Video" but NOT "Pikachu Model"
-VAGUE_MODEL_PATTERNS = {
-    name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE)
-    for name in VAGUE_MODEL_NAMES
-}
-
 # Global font — change this one line to switch the entire UI typeface.
 # JetBrains Mono and Inter look great if installed; Segoe UI is the safe fallback.
 FONT_FAMILY = "Segoe UI"
@@ -73,53 +58,6 @@ COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~1
 
 # Module logger
 logger = logging.getLogger(__name__)
-
-
-def parse_endpoint_to_display_name(endpoint_id: str) -> str:
-    """
-    Parse fal.ai endpoint ID into a human-readable display name.
-
-    Examples:
-        fal-ai/kling-video/v2.5-turbo/pro/image-to-video → Kling v2.5 Turbo Pro
-        fal-ai/kling-video/v2.6/pro/image-to-video → Kling v2.6 Pro
-        fal-ai/veo3.1/image-to-video → Veo 3.1
-        fal-ai/sora-2/image-to-video → Sora 2
-    """
-    if not endpoint_id:
-        return "Unknown"
-
-    # Remove common prefixes/suffixes
-    parts = (
-        endpoint_id.replace("fal-ai/", "")
-        .replace("/image-to-video", "")
-        .replace("/video-to-video", "")
-    )
-
-    # Split by / to get components
-    components = [p for p in parts.split("/") if p]
-
-    if not components:
-        return endpoint_id
-
-    # Build display name from components
-    display_parts = []
-    for comp in components:
-        # Clean up component
-        comp = comp.replace("-", " ").replace("_", " ")
-        # Capitalize properly
-        if comp.startswith("v") and any(c.isdigit() for c in comp):
-            # Version number: v2.5-turbo → v2.5 Turbo
-            display_parts.append(comp.replace(" ", "-").title().replace("-", " "))
-        else:
-            display_parts.append(comp.title())
-
-    result = " ".join(display_parts)
-
-    # Clean up common patterns
-    result = result.replace("Kling Video", "Kling")
-    result = result.replace("  ", " ")
-
-    return result.strip()
 
 
 class HoverTooltip:
@@ -243,44 +181,26 @@ class ModelFetcher:
                         metadata = m.get("metadata", {})
                         api_display_name = metadata.get("display_name", "")
 
-                        # Smart display name selection:
-                        # 1. Check if API name is too vague (known problematic names)
-                        # 2. Check if API name has version info (v2.5, 2.1, etc.)
-                        # 3. If endpoint has version but API name doesn't, use parsed name
-                        # Normalize for fuzzy checks (convert hyphens/underscores to spaces)
-                        name_for_match = re.sub(r"[-_]+", " ", api_display_name).strip()
+                        # Smart display name: prefer endpoint-derived name when
+                        # API name is missing, vague, or lacks version info
+                        _vague = {"kling video", "pixverse", "wan effects", "longcat video", "pika"}
+                        name_lower = api_display_name.strip().lower()
+                        is_vague = any(v in name_lower for v in _vague)
 
-                        # Check if name matches a known vague pattern using precompiled regexes
-                        # Patterns use word-boundary matching to avoid false positives
-                        # e.g., 'pika' matches 'Pika Video' but not 'Pikachu Model'
-                        is_vague = any(
-                            pattern.search(name_for_match)
-                            for pattern in VAGUE_MODEL_PATTERNS.values()
-                        )
-
-                        # Check if name has version info (v2, v2.5, 2.1, 1.6, etc.)
-                        # Match: "v" followed by digits, OR digits with decimal (not "Video 01")
                         has_version_in_name = bool(
-                            re.search(
-                                r"\bv\d+(?:\.\d+)?", api_display_name, re.IGNORECASE
-                            )
-                            or re.search(
-                                r"\b\d+\.\d+\b", api_display_name
-                            )  # Like "2.1" or "1.6"
+                            re.search(r"\bv\d+(?:\.\d+)?", api_display_name, re.IGNORECASE)
+                            or re.search(r"\b\d+\.\d+\b", api_display_name)
                         )
-
-                        # Check if endpoint has version info
                         has_version_in_endpoint = bool(
                             re.search(r"/v\d+\.?\d*", endpoint_id)
                         )
 
-                        # Use parsed name if: no API name, vague name, or endpoint has version but name doesn't
                         if (
                             not api_display_name
                             or is_vague
                             or (has_version_in_endpoint and not has_version_in_name)
                         ):
-                            display_name = parse_endpoint_to_display_name(endpoint_id)
+                            display_name = _endpoint_to_short_name(endpoint_id)
                         else:
                             display_name = api_display_name
 

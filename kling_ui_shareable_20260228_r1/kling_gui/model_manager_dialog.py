@@ -1,5 +1,5 @@
 """
-Model Manager Dialog - Add, test, hide/restore models from the GUI.
+Model Manager Dialog - Add, edit, test, browse, hide/restore models from the GUI.
 
 Manages two config keys:
   - custom_models: list of user-added model dicts (each has "custom": True)
@@ -21,6 +21,47 @@ logger = logging.getLogger(__name__)
 _DURATION_CHOICES = [5, 10]
 
 
+def _sanitize_release_date(raw: str) -> str:
+    """Convert ISO date string to 'Mon YYYY' (e.g., '2026-02-15' -> 'Feb 2026').
+
+    Already-friendly strings like 'Feb 2026' or '2024' pass through unchanged.
+    """
+    if not raw:
+        return ""
+    try:
+        from datetime import datetime
+        cleaned = raw.strip()
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m"):
+            try:
+                dt = datetime.strptime(cleaned[:len(fmt.replace("%", "x"))], fmt)
+                return dt.strftime("%b %Y")
+            except ValueError:
+                continue
+        # If it's already "Feb 2026" or "2024", return as-is
+        return cleaned
+    except Exception:
+        return raw.strip()
+
+
+def _format_short_price(pricing_info: dict) -> str:
+    """Format pricing_info dict into a short string like '$2.24/10s'."""
+    if not pricing_info:
+        return ""
+    price = pricing_info.get("unit_price", 0)
+    if not price:
+        return ""
+    unit = pricing_info.get("unit", "")
+    if unit == "second":
+        return f"${price * 10:.2f}/10s"
+    elif unit == "video":
+        return f"${price:.2f}/video"
+    elif unit == "image":
+        return f"${price:.2f}/image"
+    elif unit:
+        return f"${price:.2f}/{unit}"
+    return f"${price:.2f}"
+
+
 class ModelManagerDialog(tk.Toplevel):
     """Modal dialog for managing the model list (factory + custom)."""
 
@@ -35,8 +76,8 @@ class ModelManagerDialog(tk.Toplevel):
         self.title("Model Manager")
         self.configure(bg=COLORS["bg_main"])
         self.resizable(True, True)
-        self.minsize(780, 480)
-        self.geometry("820x540")
+        self.minsize(820, 540)
+        self.geometry("960x720")
 
         self._config = config
         self._api_key = api_key
@@ -54,8 +95,23 @@ class ModelManagerDialog(tk.Toplevel):
         self._all_models: List[Dict] = []
         self._health_cache: Dict[str, Optional[bool]] = {}  # endpoint -> True/False/None
 
+        # Edit mode tracking
+        self._edit_mode = False
+        self._edit_index: Optional[int] = None
+
+        # Browse state
+        self._browse_visible = False
+        self._browse_models: List[Dict] = []
+
+        # Fetch All state
+        self._fetch_cancel = False
+        self._fetch_thread: Optional[threading.Thread] = None
+
         self._build_ui()
         self._rebuild_model_list()
+
+        # Load persisted enrichment data and merge onto model dicts
+        self._load_enrichment_data()
 
         # Modal behavior
         self.transient(parent)
@@ -68,7 +124,7 @@ class ModelManagerDialog(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        # Main horizontal split: left (list) | right (add form)
+        # Main horizontal split: left (list) | right (add/edit form)
         body = tk.Frame(self, bg=COLORS["bg_main"])
         body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(12, 0))
 
@@ -77,16 +133,16 @@ class ModelManagerDialog(tk.Toplevel):
         self._build_footer()
 
     def _build_left_panel(self, parent: tk.Frame):
-        """Left panel: model listbox + action buttons."""
-        left = tk.LabelFrame(
+        """Left panel: model listbox + action buttons + browse pane."""
+        self._left_frame = tk.LabelFrame(
             parent, text="  Models  ", font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
             highlightbackground=COLORS["border"], highlightthickness=1,
         )
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        self._left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
         # Listbox with scrollbar
-        list_frame = tk.Frame(left, bg=COLORS["bg_panel"])
+        list_frame = tk.Frame(self._left_frame, bg=COLORS["bg_panel"])
         list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 4))
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
@@ -101,9 +157,12 @@ class ModelManagerDialog(tk.Toplevel):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        # Bind selection to edit mode
+        self._listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
+
         # Action buttons row
-        btn_row = tk.Frame(left, bg=COLORS["bg_panel"])
-        btn_row.pack(fill=tk.X, padx=8, pady=(0, 8))
+        btn_row = tk.Frame(self._left_frame, bg=COLORS["bg_panel"])
+        btn_row.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         self._test_btn = tk.Button(
             btn_row, text="Test Selected", font=(FONT_FAMILY, 9, "bold"),
@@ -112,6 +171,14 @@ class ModelManagerDialog(tk.Toplevel):
             relief=tk.FLAT, padx=8, pady=3, command=self._test_selected,
         )
         self._test_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self._fetch_all_btn = tk.Button(
+            btn_row, text="Fetch All", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
+            relief=tk.FLAT, padx=8, pady=3, command=self._fetch_all_details,
+        )
+        self._fetch_all_btn.pack(side=tk.LEFT, padx=(0, 4))
 
         self._remove_btn = tk.Button(
             btn_row, text="Remove", font=(FONT_FAMILY, 9, "bold"),
@@ -129,18 +196,81 @@ class ModelManagerDialog(tk.Toplevel):
         )
         self._restore_btn.pack(side=tk.LEFT)
 
+        # Second button row: + Add New, Browse fal.ai
+        btn_row2 = tk.Frame(self._left_frame, bg=COLORS["bg_panel"])
+        btn_row2.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        self._add_new_btn = tk.Button(
+            btn_row2, text="+ Add New", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_green"], fg=COLORS["text_light"],
+            activebackground="#287028", activeforeground=COLORS["text_light"],
+            relief=tk.FLAT, padx=8, pady=3, command=self._switch_to_add_mode,
+        )
+        self._add_new_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self._browse_btn = tk.Button(
+            btn_row2, text="Browse fal.ai", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
+            relief=tk.FLAT, padx=8, pady=3, command=self._toggle_browse_pane,
+        )
+        self._browse_btn.pack(side=tk.LEFT)
+
+        # Browse pane (initially hidden)
+        self._browse_frame = tk.LabelFrame(
+            self._left_frame, text="  Browse fal.ai Models  ",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+            highlightbackground=COLORS["border"], highlightthickness=1,
+        )
+        # Not packed yet — toggled by _toggle_browse_pane
+
+        browse_inner = tk.Frame(self._browse_frame, bg=COLORS["bg_panel"])
+        browse_inner.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+
+        self._browse_status = tk.Label(
+            browse_inner, text="Click to load available models",
+            font=(FONT_FAMILY, 8), bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
+        )
+        self._browse_status.pack(anchor="w")
+
+        browse_list_frame = tk.Frame(browse_inner, bg=COLORS["bg_panel"])
+        browse_list_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 4))
+
+        browse_scroll = ttk.Scrollbar(browse_list_frame, orient=tk.VERTICAL)
+        self._browse_listbox = tk.Listbox(
+            browse_list_frame, font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_main"], fg=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"], selectforeground="#FFFFFF",
+            activestyle="none", borderwidth=0, highlightthickness=0,
+            selectmode=tk.EXTENDED, height=8,
+            yscrollcommand=browse_scroll.set,
+        )
+        browse_scroll.config(command=self._browse_listbox.yview)
+        browse_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._browse_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._browse_add_btn = tk.Button(
+            browse_inner, text="Add Selected", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_green"], fg=COLORS["text_light"],
+            activebackground="#287028", activeforeground=COLORS["text_light"],
+            relief=tk.FLAT, padx=8, pady=3, command=self._add_browsed_models,
+        )
+        self._browse_add_btn.pack(anchor="w", pady=(2, 0))
+
     def _build_right_panel(self, parent: tk.Frame):
-        """Right panel: add custom model form."""
-        right = tk.LabelFrame(
+        """Right panel: add/edit form (switches between modes)."""
+        self._right_frame = tk.LabelFrame(
             parent, text="  Add Custom Model  ", font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
             highlightbackground=COLORS["border"], highlightthickness=1,
         )
-        right.pack(side=tk.LEFT, fill=tk.BOTH, padx=(6, 0), ipadx=4)
-        right.configure(width=300)
+        self._right_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=(6, 0), ipadx=4)
+        self._right_frame.configure(width=320)
 
-        inner = tk.Frame(right, bg=COLORS["bg_panel"])
+        inner = tk.Frame(self._right_frame, bg=COLORS["bg_panel"])
         inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        self._form_inner = inner
 
         lbl_opts = dict(font=(FONT_FAMILY, 9, "bold"), bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor="w")
         entry_opts = dict(
@@ -152,16 +282,24 @@ class ModelManagerDialog(tk.Toplevel):
         # Name
         tk.Label(inner, text="Name:", **lbl_opts).pack(fill=tk.X, pady=(0, 2))
         self._name_var = tk.StringVar()
-        tk.Entry(inner, textvariable=self._name_var, **entry_opts).pack(fill=tk.X, pady=(0, 8))
+        self._name_entry = tk.Entry(inner, textvariable=self._name_var, **entry_opts)
+        self._name_entry.pack(fill=tk.X, pady=(0, 6))
 
         # Endpoint
         tk.Label(inner, text="Endpoint:", **lbl_opts).pack(fill=tk.X, pady=(0, 2))
         self._endpoint_var = tk.StringVar()
-        tk.Entry(inner, textvariable=self._endpoint_var, **entry_opts).pack(fill=tk.X, pady=(0, 2))
-        tk.Label(
+        self._endpoint_entry = tk.Entry(inner, textvariable=self._endpoint_var, **entry_opts)
+        self._endpoint_entry.pack(fill=tk.X, pady=(0, 2))
+        self._endpoint_hint = tk.Label(
             inner, text="e.g. fal-ai/kling-video/v3/pro/image-to-video",
             font=(FONT_FAMILY, 8), bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
-        ).pack(anchor="w", pady=(0, 8))
+        )
+        self._endpoint_hint.pack(anchor="w", pady=(0, 6))
+
+        # Release (optional)
+        tk.Label(inner, text="Release (optional):", **lbl_opts).pack(fill=tk.X, pady=(0, 2))
+        self._release_var = tk.StringVar()
+        tk.Entry(inner, textvariable=self._release_var, **entry_opts).pack(fill=tk.X, pady=(0, 6))
 
         # Duration checkboxes
         tk.Label(inner, text="Durations:", **lbl_opts).pack(fill=tk.X, pady=(0, 2))
@@ -180,9 +318,9 @@ class ModelManagerDialog(tk.Toplevel):
 
         # Default duration
         tk.Label(inner, text="Default:", **lbl_opts).pack(fill=tk.X, pady=(0, 2))
-        self._default_dur_var = tk.StringVar(value="5")
+        self._default_dur_var = tk.StringVar(value="10")
         def_dur_frame = tk.Frame(inner, bg=COLORS["bg_panel"])
-        def_dur_frame.pack(fill=tk.X, pady=(0, 8))
+        def_dur_frame.pack(fill=tk.X, pady=(0, 6))
         rb_opts = dict(
             font=(FONT_FAMILY, 9), bg=COLORS["bg_panel"], fg=COLORS["text_light"],
             selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_panel"],
@@ -200,14 +338,14 @@ class ModelManagerDialog(tk.Toplevel):
             borderwidth=0, highlightthickness=1, highlightbackground=COLORS["border"],
             wrap=tk.WORD,
         )
-        self._notes_text.pack(fill=tk.X, pady=(0, 8))
+        self._notes_text.pack(fill=tk.X, pady=(0, 6))
 
-        # Test + Add buttons
-        form_btns = tk.Frame(inner, bg=COLORS["bg_panel"])
-        form_btns.pack(fill=tk.X, pady=(0, 4))
+        # Test + Add/Save buttons
+        self._form_btns = tk.Frame(inner, bg=COLORS["bg_panel"])
+        self._form_btns.pack(fill=tk.X, pady=(0, 4))
 
         self._test_new_btn = tk.Button(
-            form_btns, text="Test", font=(FONT_FAMILY, 9, "bold"),
+            self._form_btns, text="Test", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
             relief=tk.FLAT, padx=10, pady=3, command=self._test_new_endpoint,
@@ -215,16 +353,25 @@ class ModelManagerDialog(tk.Toplevel):
         self._test_new_btn.pack(side=tk.LEFT, padx=(0, 4))
 
         self._add_btn = tk.Button(
-            form_btns, text="Add", font=(FONT_FAMILY, 9, "bold"),
+            self._form_btns, text="Add", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["btn_green"], fg=COLORS["text_light"],
             activebackground="#287028", activeforeground=COLORS["text_light"],
             relief=tk.FLAT, padx=10, pady=3, command=self._add_custom_model,
         )
         self._add_btn.pack(side=tk.LEFT)
 
+        # Save button (hidden in add mode, shown in edit mode)
+        self._save_edit_btn = tk.Button(
+            self._form_btns, text="Save Changes", font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_green"], fg=COLORS["text_light"],
+            activebackground="#287028", activeforeground=COLORS["text_light"],
+            relief=tk.FLAT, padx=10, pady=3, command=self._save_edit,
+        )
+        # Not packed initially — shown in edit mode
+
         # Test result area (multi-line for capability info)
         self._test_result_text = tk.Text(
-            inner, font=(FONT_FAMILY, 9), height=6,
+            inner, font=(FONT_FAMILY, 9), height=8,
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
             relief=tk.FLAT, borderwidth=0, wrap=tk.WORD,
             state="disabled",
@@ -245,15 +392,111 @@ class ModelManagerDialog(tk.Toplevel):
             footer, text="Save", font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["btn_green"], fg=COLORS["text_light"],
             activebackground="#287028", activeforeground=COLORS["text_light"],
-            relief=tk.FLAT, padx=16, pady=4, command=self._on_save_click,
+            relief=tk.FLAT, width=10, padx=16, pady=6, command=self._on_save_click,
         ).pack(side=tk.RIGHT, padx=(6, 0))
 
         tk.Button(
             footer, text="Cancel", font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
-            relief=tk.FLAT, padx=16, pady=4, command=self._on_cancel,
+            relief=tk.FLAT, width=10, padx=16, pady=6, command=self._on_cancel,
         ).pack(side=tk.RIGHT)
+
+    # ------------------------------------------------------------------
+    # Add / Edit mode switching
+    # ------------------------------------------------------------------
+
+    def _switch_to_add_mode(self):
+        """Switch right panel to Add mode with blank form."""
+        self._edit_mode = False
+        self._edit_index = None
+        self._right_frame.config(text="  Add Custom Model  ")
+
+        # Show Add button, hide Save button
+        self._save_edit_btn.pack_forget()
+        self._add_btn.pack(side=tk.LEFT)
+
+        # Enable endpoint editing
+        self._endpoint_entry.config(state="normal")
+        self._endpoint_hint.config(text="e.g. fal-ai/kling-video/v3/pro/image-to-video")
+
+        # Clear form
+        self._clear_form()
+
+        # Deselect listbox
+        self._listbox.selection_clear(0, tk.END)
+
+    def _switch_to_edit_mode(self, index: int):
+        """Switch right panel to Edit mode, populated with selected model."""
+        model = self._all_models[index]
+        self._edit_mode = True
+        self._edit_index = index
+        is_factory = model.get("_factory", True)
+
+        name = model.get("name", "")
+        self._right_frame.config(text=f"  Edit: {name}  " if name else "  Edit Model  ")
+
+        # Hide Add button, show Save button
+        self._add_btn.pack_forget()
+        self._save_edit_btn.pack(side=tk.LEFT)
+
+        # Endpoint: read-only for factory models, editable for custom
+        if is_factory:
+            self._endpoint_entry.config(state="disabled")
+            self._endpoint_hint.config(text="(factory model — endpoint is read-only)")
+        else:
+            self._endpoint_entry.config(state="normal")
+            self._endpoint_hint.config(text="e.g. fal-ai/kling-video/v3/pro/image-to-video")
+
+        # Populate form
+        self._name_var.set(model.get("name", ""))
+        # Must set endpoint while entry is normal, then disable if needed
+        ep = model.get("endpoint", "")
+        self._endpoint_entry.config(state="normal")
+        self._endpoint_var.set(ep)
+        if is_factory:
+            self._endpoint_entry.config(state="disabled")
+
+        self._release_var.set(model.get("release", ""))
+
+        # Duration checkboxes
+        dur_opts = model.get("duration_options", [5, 10])
+        self._dur_5_var.set(5 in dur_opts)
+        self._dur_10_var.set(10 in dur_opts)
+
+        default_dur = model.get("duration_default", 10)
+        self._default_dur_var.set(str(default_dur))
+
+        # Notes: prefer user_notes, then notes, then api_description as starting point
+        notes = model.get("user_notes", "") or model.get("notes", "")
+        if not notes and model.get("api_description"):
+            notes = model["api_description"]
+        self._notes_text.delete("1.0", tk.END)
+        self._notes_text.insert("1.0", notes)
+
+        # Clear test result
+        self._test_result_text.config(state="normal")
+        self._test_result_text.delete("1.0", tk.END)
+        self._test_result_text.config(state="disabled")
+
+    def _on_listbox_select(self, event):
+        """Handle listbox selection -> switch to edit mode."""
+        idx = self._get_selected_index()
+        if idx is not None:
+            self._switch_to_edit_mode(idx)
+
+    def _clear_form(self):
+        """Reset all form fields to defaults."""
+        self._name_var.set("")
+        self._endpoint_var.set("")
+        self._release_var.set("")
+        self._dur_5_var.set(True)
+        self._dur_10_var.set(True)
+        self._default_dur_var.set("10")
+        self._notes_text.delete("1.0", tk.END)
+        self._test_result_text.config(state="normal")
+        self._test_result_text.delete("1.0", tk.END)
+        self._test_result_text.config(state="disabled")
 
     # ------------------------------------------------------------------
     # Model list management
@@ -292,16 +535,22 @@ class ModelManagerDialog(tk.Toplevel):
             is_custom = not m.get("_factory", True)
 
             # Build display string
-            prefix = "\u2605 " if is_custom else ""  # ★ for custom
+            prefix = "\u2605 " if is_custom else ""  # star for custom
             suffix = ""
+
+            # Pricing info
+            price_str = _format_short_price(m.get("pricing_info"))
+            if price_str:
+                suffix += f" \u2014 {price_str}"  # em-dash
+
             if is_hidden:
                 suffix += "  [hidden]"
 
             health = self._health_cache.get(ep)
             if health is True:
-                suffix += "  \u2714"  # ✔
+                suffix += "  \u2714"  # checkmark
             elif health is False:
-                suffix += "  \u2718 UNAVAILABLE"  # ✘
+                suffix += "  \u2718 UNAVAILABLE"  # X mark
 
             display = f"{prefix}{name}{suffix}"
             self._listbox.insert(tk.END, display)
@@ -316,6 +565,83 @@ class ModelManagerDialog(tk.Toplevel):
                 self._listbox.itemconfig(idx, fg=COLORS["accent_blue"])
 
     # ------------------------------------------------------------------
+    # Enrichment persistence
+    # ------------------------------------------------------------------
+
+    def _load_enrichment_data(self):
+        """Load persisted enrichment data from config and merge onto model dicts."""
+        enrichment = self._config.get("model_enrichment", {})
+        if not enrichment:
+            return
+
+        for model in self._all_models:
+            ep = model.get("endpoint", "")
+            data = enrichment.get(ep)
+            if not data:
+                continue
+            if data.get("pricing_info") and not model.get("pricing_info"):
+                model["pricing_info"] = data["pricing_info"]
+            if data.get("capabilities") and not model.get("capabilities"):
+                model["capabilities"] = data["capabilities"]
+            if data.get("api_display_name") and not model.get("api_display_name"):
+                model["api_display_name"] = data["api_display_name"]
+            if data.get("api_description") and not model.get("api_description"):
+                model["api_description"] = data["api_description"]
+            if data.get("health") is not None:
+                self._health_cache.setdefault(ep, data["health"])
+
+        # Refresh listbox to show pricing from enrichment
+        self._refresh_listbox()
+
+    def _save_enrichment_data(self):
+        """Collect enrichment data from model dicts and save to config."""
+        enrichment = {}
+        for model in self._all_models:
+            ep = model.get("endpoint", "")
+            if not ep:
+                continue
+            data = {}
+            if model.get("pricing_info"):
+                data["pricing_info"] = model["pricing_info"]
+            if model.get("capabilities"):
+                data["capabilities"] = model["capabilities"]
+            if model.get("api_display_name"):
+                data["api_display_name"] = model["api_display_name"]
+            if model.get("api_description"):
+                data["api_description"] = model["api_description"]
+            health = self._health_cache.get(ep)
+            if health is not None:
+                data["health"] = health
+            if data:
+                enrichment[ep] = data
+        self._config["model_enrichment"] = enrichment
+
+    def _enrich_model_from_test(self, endpoint: str, alive: Optional[bool],
+                                caps: dict = None, pricing: dict = None, meta: dict = None):
+        """Write test results back onto the model dict in self._all_models."""
+        model = self._find_model_by_endpoint(endpoint)
+        if not model or not alive:
+            return
+        if pricing:
+            model["pricing_info"] = pricing
+        if caps:
+            model["capabilities"] = caps
+        if meta:
+            if meta.get("display_name"):
+                model["api_display_name"] = meta["display_name"]
+            if meta.get("description"):
+                model["api_description"] = meta["description"]
+            if meta.get("date") and not model.get("release"):
+                model["release"] = _sanitize_release_date(meta["date"])
+
+    def _find_model_by_endpoint(self, endpoint: str) -> Optional[Dict]:
+        """Find a model dict in self._all_models by endpoint."""
+        for m in self._all_models:
+            if m.get("endpoint") == endpoint:
+                return m
+        return None
+
+    # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
 
@@ -326,7 +652,7 @@ class ModelManagerDialog(tk.Toplevel):
         return sel[0]
 
     def _test_selected(self):
-        """Test the health of the selected model endpoint."""
+        """Test the selected model endpoint -- fetch full API info."""
         idx = self._get_selected_index()
         if idx is None:
             messagebox.showinfo("Test", "Select a model first.", parent=self)
@@ -340,12 +666,26 @@ class ModelManagerDialog(tk.Toplevel):
         self._test_btn.config(state="disabled", text="Testing...")
 
         def _check():
+            caps = None
+            pricing_info = None
+            meta = None
             try:
-                from model_schema_manager import check_endpoint_health
+                from model_schema_manager import check_endpoint_health, ModelSchemaManager
                 alive = check_endpoint_health(self._api_key, ep)
+
+                # If alive and API key present, fetch full info
+                if alive and self._api_key:
+                    try:
+                        schema_mgr = ModelSchemaManager(self._api_key)
+                        caps = schema_mgr.extract_capabilities(ep)
+                        pricing = schema_mgr.get_model_pricing([ep])
+                        pricing_info = pricing.get(ep)
+                        meta = schema_mgr.get_model_metadata(ep)
+                    except Exception as e:
+                        logger.debug(f"Capability fetch failed for {ep}: {e}")
             except Exception:
                 alive = None
-            self.after(0, self._on_test_result, ep, alive, True)
+            self.after(0, self._on_test_result, ep, alive, True, caps, pricing_info, meta)
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -354,9 +694,14 @@ class ModelManagerDialog(tk.Toplevel):
         """Handle test result on main thread."""
         self._health_cache[endpoint] = alive
 
+        # Enrich model dict with test data
+        self._enrich_model_from_test(endpoint, alive, caps, pricing, meta)
+
         if is_list_test:
             self._test_btn.config(state="normal", text="Test Selected")
             self._refresh_listbox()
+            # Show full results in the test result widget
+            self._set_test_result_text(alive, caps, pricing, meta)
         else:
             # Result for the add-form test
             self._test_new_btn.config(state="normal", text="Test")
@@ -365,6 +710,10 @@ class ModelManagerDialog(tk.Toplevel):
             # Auto-populate name from API if user hasn't entered one
             if alive and meta and meta.get("display_name") and not self._name_var.get().strip():
                 self._name_var.set(meta["display_name"])
+
+            # Auto-populate release from API if user hasn't entered one
+            if alive and meta and meta.get("date") and not self._release_var.get().strip():
+                self._release_var.set(_sanitize_release_date(meta["date"]))
 
     def _set_test_result_text(self, alive: Optional[bool], caps: dict = None,
                                pricing: dict = None, meta: dict = None):
@@ -379,13 +728,13 @@ class ModelManagerDialog(tk.Toplevel):
             if meta and meta.get("display_name"):
                 self._test_result_text.insert(tk.END, f"  Name: {meta['display_name']}\n", "info")
 
-            # Pricing
+            # Pricing -- enhanced display
             if pricing:
                 unit = pricing.get("unit", "")
                 price = pricing.get("unit_price", 0)
                 if price:
                     if unit == "second":
-                        price_str = f"${price:.3f}/second"
+                        price_str = f"${price:.3f}/second (${price * 5:.2f}/5s, ${price * 10:.2f}/10s)"
                     elif unit == "video":
                         price_str = f"${price:.2f}/video"
                     else:
@@ -394,10 +743,10 @@ class ModelManagerDialog(tk.Toplevel):
 
             # Capabilities
             if caps:
-                # Duration range
+                # Duration list
                 durations = caps.get("duration_options", [])
                 if durations:
-                    dur_str = f"{min(durations)}-{max(durations)}s" if len(durations) > 1 else f"{durations[0]}s"
+                    dur_str = ", ".join(str(d) for d in durations)
                 else:
                     dur_str = "N/A"
 
@@ -406,7 +755,10 @@ class ModelManagerDialog(tk.Toplevel):
                 ar_str = ", ".join(aspects) if aspects else "N/A"
 
                 self._test_result_text.insert(
-                    tk.END, f"  Durations: {dur_str} | Aspect: {ar_str}\n", "dim"
+                    tk.END, f"  Durations: {dur_str}\n", "dim"
+                )
+                self._test_result_text.insert(
+                    tk.END, f"  Aspect Ratios: {ar_str}\n", "dim"
                 )
 
                 # Feature flags
@@ -423,6 +775,16 @@ class ModelManagerDialog(tk.Toplevel):
                     flags.append(f"{icon} {label}")
 
                 self._test_result_text.insert(tk.END, f"  {' | '.join(flags)}\n", "dim")
+
+            # Category/status from metadata
+            if meta:
+                parts = []
+                if meta.get("category"):
+                    parts.append(f"Category: {meta['category']}")
+                if meta.get("status"):
+                    parts.append(f"Status: {meta['status']}")
+                if parts:
+                    self._test_result_text.insert(tk.END, f"  {' | '.join(parts)}\n", "dim")
 
         elif alive is False:
             self._test_result_text.insert(tk.END, "\u2718 Endpoint unavailable (404)", "error")
@@ -456,6 +818,7 @@ class ModelManagerDialog(tk.Toplevel):
             ]
 
         self._rebuild_model_list()
+        self._switch_to_add_mode()
 
     def _restore_hidden(self):
         """Restore all hidden factory models."""
@@ -469,7 +832,7 @@ class ModelManagerDialog(tk.Toplevel):
         messagebox.showinfo("Restored", f"Restored {count} hidden model(s).", parent=self)
 
     def _test_new_endpoint(self):
-        """Test the endpoint entered in the add form + fetch capabilities."""
+        """Test the endpoint entered in the form + fetch capabilities."""
         ep = self._endpoint_var.get().strip()
         if not ep:
             self._test_result_text.config(state="normal")
@@ -542,37 +905,309 @@ class ModelManagerDialog(tk.Toplevel):
         if self._dur_10_var.get():
             durations.append(10)
         if not durations:
-            durations = [5]
+            durations = [10]
 
         default_dur = int(self._default_dur_var.get())
         if default_dur not in durations:
             default_dur = durations[0]
 
         notes = self._notes_text.get("1.0", tk.END).strip()
+        release = self._release_var.get().strip()
 
         new_model = {
             "name": name,
             "endpoint": endpoint,
             "duration_options": durations,
             "duration_default": default_dur,
-            "notes": notes,
             "custom": True,
         }
+        if release:
+            new_model["release"] = release
+        if notes:
+            new_model["notes"] = notes
 
         self._custom_models.append(new_model)
         self._rebuild_model_list()
 
         # Clear form
-        self._name_var.set("")
-        self._endpoint_var.set("")
-        self._dur_5_var.set(True)
-        self._dur_10_var.set(True)
-        self._default_dur_var.set("5")
-        self._notes_text.delete("1.0", tk.END)
+        self._clear_form()
         self._test_result_text.config(state="normal")
         self._test_result_text.delete("1.0", tk.END)
         self._test_result_text.insert(tk.END, f"Added: {name}", "success")
         self._test_result_text.config(state="disabled")
+
+    def _save_edit(self):
+        """Save changes from edit mode back into the model list."""
+        if self._edit_index is None:
+            return
+
+        model = self._all_models[self._edit_index]
+        ep = model.get("endpoint", "")
+        is_factory = model.get("_factory", True)
+
+        new_name = self._name_var.get().strip()
+        new_release = self._release_var.get().strip()
+        new_notes = self._notes_text.get("1.0", tk.END).strip()
+
+        if not new_name:
+            messagebox.showwarning("Missing Name", "Please enter a model name.", parent=self)
+            return
+
+        # Build duration options
+        durations = []
+        if self._dur_5_var.get():
+            durations.append(5)
+        if self._dur_10_var.get():
+            durations.append(10)
+        if not durations:
+            durations = [10]
+
+        default_dur = int(self._default_dur_var.get())
+        if default_dur not in durations:
+            default_dur = durations[0]
+
+        if is_factory:
+            # For factory models: update the model dict in _all_models directly.
+            # These overrides are stored via user_notes map + config overrides.
+            model["name"] = new_name
+            model["release"] = new_release
+            model["user_notes"] = new_notes
+            model["duration_options"] = durations
+            model["duration_default"] = default_dur
+
+            # Also update the corresponding MODEL_METADATA entry so dropdown refreshes
+            for m in MODEL_METADATA:
+                if m.get("endpoint") == ep:
+                    m["name"] = new_name
+                    m["release"] = new_release
+                    m["user_notes"] = new_notes
+                    break
+
+            # Persist name/release overrides in config for next session
+            overrides = self._config.get("model_overrides", {})
+            overrides[ep] = {"name": new_name, "release": new_release}
+            self._config["model_overrides"] = overrides
+
+            # Persist notes in user_notes map
+            user_notes = self._config.get("model_user_notes", {})
+            if new_notes:
+                user_notes[ep] = new_notes
+            elif ep in user_notes:
+                del user_notes[ep]
+            self._config["model_user_notes"] = user_notes
+
+        else:
+            # For custom models: update in _custom_models list
+            new_endpoint = self._endpoint_var.get().strip()
+            if not new_endpoint:
+                messagebox.showwarning("Missing Endpoint", "Please enter an endpoint.", parent=self)
+                return
+
+            for cm in self._custom_models:
+                if cm.get("endpoint") == ep:
+                    cm["name"] = new_name
+                    cm["endpoint"] = new_endpoint
+                    cm["duration_options"] = durations
+                    cm["duration_default"] = default_dur
+                    if new_release:
+                        cm["release"] = new_release
+                    if new_notes:
+                        cm["notes"] = new_notes
+                    break
+
+        self._rebuild_model_list()
+
+        # Show confirmation
+        self._test_result_text.config(state="normal")
+        self._test_result_text.delete("1.0", tk.END)
+        self._test_result_text.insert(tk.END, f"Saved: {new_name}", "success")
+        self._test_result_text.config(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Browse fal.ai
+    # ------------------------------------------------------------------
+
+    def _toggle_browse_pane(self):
+        """Toggle the browse pane visibility."""
+        if self._browse_visible:
+            self._browse_frame.pack_forget()
+            self._browse_visible = False
+            self._browse_btn.config(text="Browse fal.ai")
+        else:
+            self._browse_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+            self._browse_visible = True
+            self._browse_btn.config(text="Hide Browse")
+            # Start loading if not already loaded
+            if not self._browse_models:
+                self._load_browse_models()
+
+    def _load_browse_models(self):
+        """Fetch available models from fal.ai catalog in background."""
+        self._browse_status.config(text="Loading...")
+        self._browse_listbox.delete(0, tk.END)
+
+        def _fetch():
+            models = []
+            try:
+                from model_schema_manager import ModelSchemaManager
+                if self._api_key:
+                    schema_mgr = ModelSchemaManager(self._api_key)
+                    models = schema_mgr.list_models(category="image-to-video", status="active")
+            except Exception as e:
+                logger.debug(f"Browse fetch failed: {e}")
+            self.after(0, self._on_browse_loaded, models)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_browse_loaded(self, models: list):
+        """Populate browse listbox with discovered models."""
+        self._browse_models = models
+        self._browse_listbox.delete(0, tk.END)
+
+        # Collect already-added endpoints
+        existing = set()
+        for m in MODEL_METADATA:
+            existing.add(m.get("endpoint", ""))
+        for m in self._custom_models:
+            existing.add(m.get("endpoint", ""))
+
+        if not models:
+            self._browse_status.config(text="No models found (check API key)")
+            return
+
+        count = 0
+        for m in models:
+            ep = m.get("endpoint", "")
+            already = ep in existing
+            prefix = "[\u2713] " if already else ""  # [checkmark] prefix for existing
+            # Always show endpoint path — it's the only unambiguous identifier
+            self._browse_listbox.insert(tk.END, f"{prefix}{ep}")
+            idx = self._browse_listbox.size() - 1
+            if already:
+                self._browse_listbox.itemconfig(idx, fg=COLORS["text_dim"])
+            count += 1
+
+        self._browse_status.config(text=f"{count} models found")
+
+    def _add_browsed_models(self):
+        """Add selected models from the browse list."""
+        selection = self._browse_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("Browse", "Select one or more models first.", parent=self)
+            return
+
+        # Existing endpoints
+        existing = set()
+        for m in MODEL_METADATA:
+            existing.add(m.get("endpoint", ""))
+        for m in self._custom_models:
+            existing.add(m.get("endpoint", ""))
+
+        added = 0
+        for idx in selection:
+            if idx >= len(self._browse_models):
+                continue
+            bm = self._browse_models[idx]
+            ep = bm.get("endpoint", "")
+            if ep in existing:
+                continue  # Skip already-added
+
+            name = bm.get("display_name", "") or ep
+            new_model = {
+                "name": name,
+                "endpoint": ep,
+                "custom": True,
+            }
+            if bm.get("date"):
+                new_model["release"] = _sanitize_release_date(bm["date"])
+            if bm.get("description"):
+                new_model["api_description"] = bm["description"]
+            self._custom_models.append(new_model)
+            existing.add(ep)
+            added += 1
+
+        if added:
+            self._rebuild_model_list()
+            # Refresh browse list to show checkmarks
+            self._on_browse_loaded(self._browse_models)
+
+            self._test_result_text.config(state="normal")
+            self._test_result_text.delete("1.0", tk.END)
+            self._test_result_text.insert(tk.END, f"Added {added} model(s) from browse", "success")
+            self._test_result_text.config(state="disabled")
+        else:
+            messagebox.showinfo("Browse", "All selected models are already in your list.", parent=self)
+
+    # ------------------------------------------------------------------
+    # Fetch All Details
+    # ------------------------------------------------------------------
+
+    def _fetch_all_details(self):
+        """Fetch health, capabilities, pricing, and metadata for all models."""
+        self._fetch_cancel = False
+        total = len(self._all_models)
+        if total == 0:
+            return
+
+        self._fetch_all_btn.config(state="disabled", text=f"Fetching... (0/{total})")
+
+        def _worker():
+            from model_schema_manager import check_endpoint_health, ModelSchemaManager
+
+            schema_mgr = None
+            if self._api_key:
+                schema_mgr = ModelSchemaManager(self._api_key)
+
+            for i, model in enumerate(self._all_models):
+                if self._fetch_cancel:
+                    break
+
+                ep = model.get("endpoint", "")
+                if not ep:
+                    self.after(0, self._fetch_all_progress, i + 1, total)
+                    continue
+
+                caps = None
+                pricing_info = None
+                meta = None
+                try:
+                    alive = check_endpoint_health(self._api_key, ep)
+                    if alive and schema_mgr:
+                        try:
+                            caps = schema_mgr.extract_capabilities(ep)
+                            pricing = schema_mgr.get_model_pricing([ep])
+                            pricing_info = pricing.get(ep)
+                            meta = schema_mgr.get_model_metadata(ep)
+                        except Exception as e:
+                            logger.debug(f"Fetch All: capability fetch failed for {ep}: {e}")
+                except Exception:
+                    alive = None
+
+                # Update on main thread
+                self.after(0, self._fetch_all_update, ep, alive, caps, pricing_info, meta, i + 1, total)
+
+            self.after(0, self._fetch_all_done)
+
+        self._fetch_thread = threading.Thread(target=_worker, daemon=True)
+        self._fetch_thread.start()
+
+    def _fetch_all_progress(self, completed: int, total: int):
+        """Update progress label during Fetch All."""
+        self._fetch_all_btn.config(text=f"Fetching... ({completed}/{total})")
+
+    def _fetch_all_update(self, endpoint: str, alive: Optional[bool],
+                          caps: dict, pricing: dict, meta: dict,
+                          completed: int, total: int):
+        """Handle one model's result during Fetch All (main thread)."""
+        self._health_cache[endpoint] = alive
+        self._enrich_model_from_test(endpoint, alive, caps, pricing, meta)
+        self._fetch_all_btn.config(text=f"Fetching... ({completed}/{total})")
+        self._refresh_listbox()
+
+    def _fetch_all_done(self):
+        """Fetch All completed — re-enable button."""
+        self._fetch_all_btn.config(state="normal", text="Fetch All")
+        self._refresh_listbox()
 
     # ------------------------------------------------------------------
     # Save / Cancel
@@ -582,6 +1217,9 @@ class ModelManagerDialog(tk.Toplevel):
         """Commit changes to config and close."""
         self._config["custom_models"] = self._custom_models
         self._config["hidden_models"] = self._hidden_endpoints
+
+        # Save enrichment data (pricing, caps, descriptions from tests)
+        self._save_enrichment_data()
 
         # If the currently active model was hidden or removed, pick the first visible
         current_ep = self._config.get("current_model", "")
@@ -608,5 +1246,6 @@ class ModelManagerDialog(tk.Toplevel):
 
     def _on_cancel(self):
         """Discard changes and close."""
+        self._fetch_cancel = True  # Stop any running Fetch All
         self.grab_release()
         self.destroy()

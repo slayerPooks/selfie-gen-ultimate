@@ -998,11 +998,16 @@ class SelfieTab(tk.Frame):
                     )
                     if result:
                         results.append((model, result))
+                        # Show result immediately in carousel
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda m=model, r=result: self._show_single_result(m, r),
+                        )
                     else:
                         failed_models.append(label)
 
                 self.winfo_toplevel().after(
-                    0, lambda: self._on_complete_batch(results, failed_models)
+                    0, lambda fl=failed_models: self._on_complete_batch(results, fl)
                 )
             except Exception as e:
                 err = str(e)
@@ -1053,29 +1058,38 @@ class SelfieTab(tk.Frame):
             return f"{short_model} (Sim: N/A)"
         return f"{short_model} (Sim: {similarity})"
 
+    def _show_single_result(self, model: dict, result: str):
+        """Add a single completed result to the carousel immediately."""
+        label = model.get("label", model.get("endpoint", "model"))
+        similarity = self._extract_similarity_from_result_path(result)
+        self._last_result_path = result
+        self.image_session.add_image(
+            result,
+            "selfie",
+            label=self._format_selfie_label(label, result),
+        )
+        message = f"Selfie generated [{label}]: {os.path.basename(result)}"
+        if similarity is not None:
+            message = (
+                f"Selfie generated [{label}] (Similarity {similarity}): "
+                f"{os.path.basename(result)}"
+            )
+        self.log(message, "success")
+        self._refresh_result_actions()
+
     def _on_complete_batch(self, results, failed_models):
+        """Final summary after all models have run (results already shown progressively)."""
         self._set_busy(False)
 
-        if results:
-            for model, result in results:
-                label = model.get("label", model.get("endpoint", "model"))
-                similarity = self._extract_similarity_from_result_path(result)
-                self._last_result_path = result
-                self.image_session.add_image(
-                    result,
-                    "selfie",
-                    label=self._format_selfie_label(label, result),
-                )
-                message = f"Selfie generated [{label}]: {os.path.basename(result)}"
-                if similarity is not None:
-                    message = (
-                        f"Selfie generated [{label}] (Similarity {similarity}): "
-                        f"{os.path.basename(result)}"
-                    )
-                self.log(message, "success")
-            self._refresh_result_actions()
-        else:
+        if not results:
             self.log("Selfie generation failed for all selected models", "error")
+
+        total = len(results) + len(failed_models)
+        if results and failed_models:
+            self.log(
+                f"Batch complete: {len(results)}/{total} succeeded",
+                "info",
+            )
 
         if failed_models:
             self.log(

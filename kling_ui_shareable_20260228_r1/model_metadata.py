@@ -16,11 +16,17 @@ import re
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Vague API names — these are too generic to show in the dropdown.
+# When the API returns one of these, we prefer the curated name from models.json.
+# ---------------------------------------------------------------------------
+_VAGUE_NAMES = frozenset({"kling video", "minimax video", "hunyuan video"})
+
+# ---------------------------------------------------------------------------
 # Hardcoded fallback — used ONLY when models.json is missing
 # ---------------------------------------------------------------------------
 _FALLBACK_MODELS = [
-    {"name": "Kling v2.5 Turbo Pro", "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video"},
-    {"name": "MiniMax Video", "endpoint": "fal-ai/minimax-video/image-to-video"},
+    {"name": "Kling v2.5 Turbo Pro", "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "duration_default": 10},
+    {"name": "MiniMax Video", "endpoint": "fal-ai/minimax-video/image-to-video", "duration_default": 10},
 ]
 
 
@@ -100,17 +106,20 @@ def _load_models_from_file() -> list:
         models = []
         for entry in models_raw:
             if isinstance(entry, str):
-                # New format: just an endpoint string
+                # Endpoint-only string (e.g. browse-added models)
                 models.append({
                     "name": _endpoint_to_short_name(entry),
                     "endpoint": entry,
                     "user_notes": user_notes.get(entry, ""),
                 })
             elif isinstance(entry, dict):
-                # Legacy format: dict with name + endpoint (still works)
-                if entry.get("name") and entry.get("endpoint"):
-                    # Carry over user_notes if present in the map
-                    ep = entry.get("endpoint", "")
+                # Dict with name + endpoint (+ optional release, notes, etc.)
+                if entry.get("endpoint"):
+                    ep = entry["endpoint"]
+                    # Derive name from endpoint if not provided
+                    if not entry.get("name"):
+                        entry["name"] = _endpoint_to_short_name(ep)
+                    # Carry over user_notes from the map
                     if ep in user_notes and "user_notes" not in entry:
                         entry["user_notes"] = user_notes[ep]
                     models.append(entry)
@@ -139,44 +148,55 @@ MODEL_METADATA = _load_models_from_file()
 def get_model_display_name(model: dict) -> str:
     """Build the dropdown label for a model.
 
-    Supports three data sources (in priority order):
-      1. API-sourced pricing (pricing_info dict with unit_price/unit)
-      2. Legacy release/cost fields
-      3. Name only
+    Name priority:
+      1. model["name"] — user-curated from models.json (always preferred)
+      2. model["api_display_name"] — but ONLY if not vague
+      3. _endpoint_to_short_name() — offline fallback
+
+    Pricing priority:
+      1. model["pricing_info"] from live API → "$X.XX/10s"
+      2. model["est_cost_10s"] legacy → "~$X.XX"
 
     Examples:
-        "Kling Video v3 Pro, $2.24/10s"
-        "Kling 3.0 Pro (Feb 2026), ~$2.24"
-        "MiniMax Video, $0.50/video"
+        "Kling 3.0 Pro (Feb 2026), $2.24/10s"
+        "Kling 3.0 Pro (Feb 2026)"
+        "MiniMax Video (2024), $0.50/video"
     """
-    name = model.get("api_display_name") or model.get("name", "Unknown Model")
+    # Name: prefer models.json name, fall back to non-vague API name, then offline
+    name = model.get("name", "")
+    if not name:
+        api_name = model.get("api_display_name", "")
+        if api_name and api_name.strip().lower() not in _VAGUE_NAMES:
+            name = api_name
+        else:
+            name = _endpoint_to_short_name(model.get("endpoint", ""))
 
-    # API-sourced pricing (from get_model_pricing enrichment)
-    pricing = model.get("pricing_info", {})
-    if pricing:
-        unit = pricing.get("unit", "")
-        price = pricing.get("unit_price", 0)
-        if price:
-            if unit == "second":
-                cost_str = f"${price * 10:.2f}/10s"
-            elif unit == "video":
-                cost_str = f"${price:.2f}/video"
-            elif unit == "image":
-                cost_str = f"${price:.2f}/image"
-            else:
-                cost_str = f"${price:.2f}/{unit}" if unit else f"${price:.2f}"
-            return f"{name}, {cost_str}"
-
-    # Legacy format with release/cost
     release = model.get("release", "")
-    cost = model.get("est_cost_10s", "")
-    if release and cost:
-        return f"{name} ({release}), ~{cost}"
+
+    # Pricing: prefer live API, fall back to est_cost_10s
+    cost_str = ""
+    pricing = model.get("pricing_info", {})
+    if pricing and pricing.get("unit_price"):
+        unit = pricing.get("unit", "")
+        price = pricing["unit_price"]
+        if unit == "second":
+            cost_str = f"${price * 10:.2f}/10s"
+        elif unit == "video":
+            cost_str = f"${price:.2f}/video"
+        elif unit == "image":
+            cost_str = f"${price:.2f}/image"
+        else:
+            cost_str = f"${price:.2f}/{unit}" if unit else f"${price:.2f}"
+    elif model.get("est_cost_10s"):
+        cost_str = f"~{model['est_cost_10s']}"
+
+    # Assemble: "Name (release), cost"
+    if release and cost_str:
+        return f"{name} ({release}), {cost_str}"
     if release:
         return f"{name} ({release})"
-    if cost:
-        return f"{name}, ~{cost}"
-
+    if cost_str:
+        return f"{name}, {cost_str}"
     return name
 
 
@@ -204,8 +224,8 @@ def get_duration_default(endpoint: str) -> int:
     """Default duration (seconds) for the given endpoint."""
     model = get_model_by_endpoint(endpoint)
     if model:
-        return model.get("duration_default", 5)
-    return 5
+        return model.get("duration_default", 10)
+    return 10
 
 
 # ---------------------------------------------------------------------------

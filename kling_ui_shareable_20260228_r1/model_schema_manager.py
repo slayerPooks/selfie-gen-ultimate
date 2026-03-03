@@ -337,15 +337,21 @@ class ModelSchemaManager:
             data = response.json()
             result = {}
 
-            # Parse response — could be a list or dict depending on API version
-            pricing_list = data if isinstance(data, list) else data.get("models", data.get("pricing", []))
+            # Parse response — API returns {"prices": [...]} but handle variants
+            pricing_list = data if isinstance(data, list) else data.get("prices", data.get("models", data.get("pricing", [])))
+
+            def _normalize_unit(raw_unit: str) -> str:
+                """Normalize plural units from API (seconds→second, videos→video)."""
+                u = raw_unit.lower().rstrip("s") if raw_unit else "video"
+                return u if u else "video"
+
             if isinstance(pricing_list, list):
                 for item in pricing_list:
                     ep = item.get("endpoint_id", item.get("endpoint", ""))
                     if ep and any(k in item for k in ("unit_price", "price")):
                         result[ep] = {
                             "unit_price": item.get("unit_price", item.get("price", 0)),
-                            "unit": item.get("unit", "video"),
+                            "unit": _normalize_unit(item.get("unit", "video")),
                             "currency": item.get("currency", "USD"),
                         }
             elif isinstance(pricing_list, dict):
@@ -354,7 +360,7 @@ class ModelSchemaManager:
                     if isinstance(info, dict):
                         result[ep] = {
                             "unit_price": info.get("unit_price", info.get("price", 0)),
-                            "unit": info.get("unit", "video"),
+                            "unit": _normalize_unit(info.get("unit", "video")),
                             "currency": info.get("currency", "USD"),
                         }
 
@@ -461,6 +467,70 @@ class ModelSchemaManager:
         except Exception as e:
             logger.debug(f"Could not read metadata for {model_endpoint}: {e}")
             return {}
+
+    def list_models(self, category: str = "image-to-video", status: str = "active") -> list:
+        """Fetch available models from fal.ai catalog.
+
+        Returns list of dicts: {endpoint, display_name, description, date, category, status}.
+        Results are cached to disk with standard TTL. Returns [] on failure.
+        """
+        cache_file = self.cache_dir.parent / f"catalog_{category}_{status}.json"
+
+        # Check disk cache
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r") as f:
+                    cached = json.load(f)
+                ts = cached.get("_cache_timestamp", 0)
+                if ts and (time.time() - ts) <= self.cache_ttl:
+                    return cached.get("models", [])
+            except Exception:
+                pass
+
+        try:
+            headers = {"Authorization": f"Key {self.api_key}"}
+            params = {"category": category, "status": status, "limit": 500}
+            response = requests.get(
+                "https://api.fal.ai/v1/models",
+                params=params,
+                headers=headers,
+                timeout=30,
+            )
+            if response.status_code != 200:
+                logger.warning(f"Catalog API returned {response.status_code}")
+                return []
+
+            data = response.json()
+            models_list = data.get("models", data if isinstance(data, list) else [])
+
+            results = []
+            for item in models_list:
+                endpoint = item.get("endpoint_id", item.get("endpoint", ""))
+                if not endpoint:
+                    continue
+                metadata = item.get("metadata", {})
+                results.append({
+                    "endpoint": endpoint,
+                    "display_name": metadata.get("display_name", item.get("display_name", "")),
+                    "description": metadata.get("description", item.get("description", "")),
+                    "date": metadata.get("date", item.get("date", "")),
+                    "category": metadata.get("category", category),
+                    "status": metadata.get("status", status),
+                })
+
+            # Save to disk cache
+            try:
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(cache_file, "w") as f:
+                    json.dump({"_cache_timestamp": time.time(), "models": results}, f, indent=2)
+            except Exception as e:
+                logger.debug(f"Could not write catalog cache: {e}")
+
+            return results
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch model catalog: {e}")
+            return []
 
     def clear_cache(self, model_endpoint: Optional[str] = None):
         """

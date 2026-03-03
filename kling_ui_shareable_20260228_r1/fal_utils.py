@@ -229,6 +229,7 @@ def fal_queue_poll(
     api_key: str,
     status_url: str,
     progress_cb: ProgressCallback = None,
+    max_wait_seconds: int = 600,
 ) -> Optional[dict]:
     """Poll fal.ai queue until completion.
 
@@ -236,7 +237,11 @@ def fal_queue_poll(
       - First 2 min: 5 s polls
       - Next 3 min: 10 s polls
       - After 5 min: 15 s polls
-    Max wait: 20 minutes (240 attempts at 5 s base).
+
+    Args:
+        max_wait_seconds: Maximum wall-clock seconds to poll before giving up.
+            Default 600 (10 min) for video gen.  Callers doing image gen
+            should pass a shorter value (e.g. 120 s).
 
     Returns the final result dict (output/data/images key) or None on failure.
     """
@@ -248,6 +253,18 @@ def fal_queue_poll(
     start_time = time.monotonic()
 
     for attempt in range(1, max_attempts + 1):
+        # Hard wall-clock timeout
+        elapsed_s = time.monotonic() - start_time
+        if elapsed_s >= max_wait_seconds:
+            elapsed_min = int(elapsed_s / 60)
+            logger.error("Polling timed out after %d s (%d min)", int(elapsed_s), elapsed_min)
+            if progress_cb:
+                progress_cb(
+                    f"Timed out after {int(elapsed_s)}s — model may be unavailable or overloaded",
+                    "error",
+                )
+            return None
+
         # Backoff schedule
         if attempt <= 24:
             delay = base_delay

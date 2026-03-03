@@ -1,19 +1,18 @@
 {
-  "_comment": "Endpoint list. All metadata (name, pricing, capabilities) fetched from fal.ai API.",
   "models": [
-    "fal-ai/kling-video/v3/pro/image-to-video",
-    "fal-ai/kling-video/v3/standard/image-to-video",
-    "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
-    "fal-ai/kling-video/v2.5-turbo/standard/image-to-video",
-    "fal-ai/kling-video/o1/image-to-video",
-    "fal-ai/kling-video/v2.6/pro/image-to-video",
-    "fal-ai/kling-video/v2.1/pro/image-to-video",
-    "fal-ai/kling-video/v2/master/image-to-video",
-    "fal-ai/kling-video/v1.6/pro/image-to-video",
-    "fal-ai/kling-video/v1.5/pro/image-to-video",
-    "fal-ai/minimax-video/image-to-video",
-    "fal-ai/hunyuan-video/v1.5/image-to-video",
-    "fal-ai/hunyuan-video/image-to-video"
+    {"endpoint": "fal-ai/kling-video/v3/pro/image-to-video", "name": "Kling 3.0 Pro", "release": "Feb 2026"},
+    {"endpoint": "fal-ai/kling-video/v3/standard/image-to-video", "name": "Kling 3.0 Standard", "release": "Feb 2026"},
+    {"endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "name": "Kling 2.5 Turbo Pro", "release": "Mid 2025"},
+    {"endpoint": "fal-ai/kling-video/v2.5-turbo/standard/image-to-video", "name": "Kling 2.5 Turbo Standard", "release": "Mid 2025"},
+    {"endpoint": "fal-ai/kling-video/o1/image-to-video", "name": "Kling O1", "release": "Dec 2025"},
+    {"endpoint": "fal-ai/kling-video/v2.6/pro/image-to-video", "name": "Kling 2.6 Pro", "release": "2025"},
+    {"endpoint": "fal-ai/kling-video/v2.1/pro/image-to-video", "name": "Kling 2.1 Pro", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v2/master/image-to-video", "name": "Kling 2.0 Master", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v1.6/pro/image-to-video", "name": "Kling 1.6", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v1.5/pro/image-to-video", "name": "Kling 1.5", "release": "2024"},
+    {"endpoint": "fal-ai/minimax-video/image-to-video", "name": "MiniMax Video", "release": "2024"},
+    {"endpoint": "fal-ai/hunyuan-video/v1.5/image-to-video", "name": "Hunyuan Video v1.5", "release": "2025"},
+    {"endpoint": "fal-ai/hunyuan-video/image-to-video", "name": "Hunyuan Video", "release": "2024"}
   ],
   "user_notes": {
     "fal-ai/kling-video/v3/pro/image-to-video": "★ Ranked #1 for head-turn workflows\n\n• Unmatched Physical Isolation: Best physics engine for moving the head while perfectly freezing shoulders and torso.\n• Zero Drift: Highly resistant to AI wobble during slow movements like a 40° turn — camera stays absolutely locked.",
