@@ -8,12 +8,12 @@ import shutil
 import platform
 import subprocess
 import json
-import random
 import re
 from typing import Callable, Dict, List, Optional
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
+from path_utils import get_gen_images_folder
 
 try:
     from selfie_prompt_composer import DEFAULT_GENDER
@@ -25,20 +25,23 @@ class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
 
     DEFAULT_PROMPT_TEMPLATE = (
-        "A raw, unedited iPhone 7 front-camera selfie of a {age_range} {gender} \n"
-        "wearing {clothing}. {expression} expression. Hair is {hair}. Skin is {skin}. \n"
-        "Eyes are {eyes}. Face is {face_shape}. Phone held at arm's length, slightly \n"
-        "off-center, natural edge distortion from extended arm. Background is {scene}. \n"
-        "Warm practical indoor lighting. Amateur photography aesthetic, unfiltered \n"
-        "iPhone 7 quality."
+        "Transform this passport photo into a natural selfie: A {json.gender} with "
+        "{json.hair}, {json.skin}, {json.eyes}, and a {json.face_shape}, wearing "
+        "{json.clothing}, taking a front-facing camera selfie with one arm FULLY "
+        "extended but phone not visible in frame, looking directly at camera with "
+        "{json.expression}. Shot in portrait orientation zoomed out to show head "
+        "SLIGHTLY OFF-CENTER, with extensive space around all sides. Full torso "
+        "visible with significant background space above and around subject. "
+        "Background: {sunny backyard patio|cozy kitchen|home office|living room "
+        "couch|coffee shop window}. Lighting: natural lighting. Authentic "
+        "front-facing iPhone X camera quality, natural skin imperfections, uneven "
+        "lighting, slightly off-center composition. Include realistic flaws: minor "
+        "focus issues, natural skin texture with EVIDENT pores and minimal makeup, "
+        "casual messy hair, wrinkled clothing, candid expression. Other arm relaxed "
+        "at side, natural one-handed selfie pose. Maintain EXACT facial features, "
+        "bone structure, and identity from reference image. Raw unfiltered AMATEUR "
+        "smartphone selfie aesthetic with imperfect framing and natural shadows."
     )
-    DEFAULT_SCENE_TEMPLATES = [
-        "sunny park, green trees bokeh background",
-        "cozy kitchen, warm overhead light",
-        "living room, TV glow",
-        "cafe, soft window light",
-        "outdoor street, urban daylight",
-    ]
     DEFAULT_WILDCARD_TEMPLATE = (
         "A raw, unedited iPhone 7 front-camera selfie of a {young adult|middle-aged} "
         "{woman|man} wearing a {black|gray|white|maroon|navy} "
@@ -53,6 +56,35 @@ class SelfieTab(tk.Frame):
     DISABLED_BY_DEFAULT_ENDPOINTS = {
         "fal-ai/bytedance/seedream/v5/edit",
     }
+
+    # Known fields for auto-migrating old {field} syntax → {json.field}
+    _KNOWN_JSON_FIELDS = {
+        "hair", "skin", "eyes", "face_shape", "age_range",
+        "gender", "clothing", "expression",
+    }
+
+    @staticmethod
+    def _extract_json_fields(template: str) -> List[str]:
+        """Extract {json.FIELD} tag names from template. Returns ['hair', 'skin', ...]."""
+        return re.findall(r"\{json\.([a-zA-Z0-9_]+)\}", template)
+
+    @classmethod
+    def _migrate_template_syntax(cls, template: str) -> str:
+        """Migrate old {field} syntax to {json.field} for known fields.
+
+        E.g. '{hair}' → '{json.hair}' but '{sunny patio|cozy kitchen}' stays unchanged
+        (wildcards contain '|').
+        """
+        def _maybe_migrate(match):
+            inner = match.group(1)
+            # Wildcards contain '|' — skip them
+            if "|" in inner:
+                return match.group(0)
+            # Known field names get the json. prefix
+            if inner in cls._KNOWN_JSON_FIELDS:
+                return "{json." + inner + "}"
+            return match.group(0)
+        return re.sub(r"\{([^{}]+)\}", _maybe_migrate, template)
 
     def __init__(
         self,
@@ -70,12 +102,16 @@ class SelfieTab(tk.Frame):
         self.log = log_callback
         self._busy = False
         self._last_result_path = ""
+        # Cancellation events (three-tier)
+        self._cancel_current = threading.Event()  # skip active model, advance
+        self._cancel_all = threading.Event()       # stop after current model
+        self._abort_flow = threading.Event()       # immediate full termination
         self._model_options = self._load_model_options()
         self._model_vars: Dict[str, tk.BooleanVar] = {}
         self._handoff_identity_data: Optional[Dict[str, str]] = None
-        self._handoff_scene: Optional[str] = None
-        self._scene_roll_counter = 0
+        self._handoff_resolved = False
         self._prompt_template_edit_mode = False
+        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE  # overwritten in _build_ui
         self._prompt_mode_var = tk.StringVar(
             value=config.get("selfie_prompt_mode", "json_handoff")
         )
@@ -115,7 +151,7 @@ class SelfieTab(tk.Frame):
         ).pack(side=tk.LEFT, padx=(0, 6))
         tk.Radiobutton(
             mode_row,
-            text="JSON Handoff (Vision)",
+            text="Customized (AI Analysis)",
             variable=self._prompt_mode_var,
             value="json_handoff",
             command=self._on_prompt_mode_changed,
@@ -127,7 +163,7 @@ class SelfieTab(tk.Frame):
         ).pack(side=tk.LEFT, padx=(0, 10))
         tk.Radiobutton(
             mode_row,
-            text="Dynamic Wildcards",
+            text="Generic (Wildcards)",
             variable=self._prompt_mode_var,
             value="wildcards",
             command=self._on_prompt_mode_changed,
@@ -138,9 +174,7 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT)
 
-        # Hidden variables for composer (gender extracted from JSON, style defaults to candid)
-        self._composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        # Not packed — Subject/Style/Compose row removed; gender comes from JSON handoff
+        # Hidden variables for composer (kept for config compat)
         self.gender_var = tk.StringVar(
             value=self.config.get("composer_gender", DEFAULT_GENDER)
         )
@@ -148,87 +182,19 @@ class SelfieTab(tk.Frame):
             value=self.config.get("composer_camera_style", "candid")
         )
 
-        # Prompt text + randomize scene (JSON Handoff mode)
-        self._prompt_editor_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        self._prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
-        prompt_editor_frame = self._prompt_editor_frame
-
-        self.prompt_text = tk.Text(
-            prompt_editor_frame,
-            height=5,
-            wrap=tk.WORD,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=("Consolas", 9),
-            insertbackground=COLORS["text_light"],
-            padx=5,
-            pady=4,
-        )
-        self.prompt_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.prompt_text.insert("1.0", "")
-        self.randomize_scene_btn = tk.Button(
-            prompt_editor_frame,
-            text="Randomize Scene",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            command=self._on_randomize_scene,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=2,
-        )
-        self.randomize_scene_btn.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
-
-        self._templates_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        self._templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
-        templates_row = self._templates_row
-
-        scene_templates_frame = tk.LabelFrame(
-            templates_row,
-            text="Scene Templates (One Per Line)",
+        # Customized (AI Analysis) mode — single template text box
+        self._customized_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Prompt Template  {json.field} + {opt1|opt2} wildcards",
             font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        scene_templates_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 3))
-        self.scene_templates_text = tk.Text(
-            scene_templates_frame,
-            height=3,
-            wrap=tk.WORD,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=("Consolas", 9),
-            insertbackground=COLORS["text_light"],
-            padx=5,
-            pady=4,
-        )
-        self.scene_templates_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        saved_scene_templates = self.config.get(
-            "selfie_scene_templates", self.DEFAULT_SCENE_TEMPLATES
-        )
-        if not isinstance(saved_scene_templates, list):
-            saved_scene_templates = list(self.DEFAULT_SCENE_TEMPLATES)
-        scene_templates = [
-            str(item).strip()
-            for item in saved_scene_templates
-            if str(item).strip()
-        ]
-        if not scene_templates:
-            scene_templates = list(self.DEFAULT_SCENE_TEMPLATES)
-        self.scene_templates_text.insert("1.0", "\n".join(scene_templates))
+        # Don't pack yet — managed by _apply_prompt_mode_ui()
 
-        template_frame = tk.LabelFrame(
-            templates_row,
-            text="Prompt Template (JSON Handoff)",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        )
-        template_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(3, 0))
         self.prompt_template_text = tk.Text(
-            template_frame,
-            height=5,
+            self._customized_frame,
+            height=7,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -238,16 +204,25 @@ class SelfieTab(tk.Frame):
             pady=4,
         )
         self.prompt_template_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
+
+        # Load saved template with migration from old {field} → {json.field} syntax
         saved_template = self.config.get(
             "selfie_prompt_template", self.DEFAULT_PROMPT_TEMPLATE
         )
-        self.prompt_template_text.insert(
-            "1.0", (saved_template or self.DEFAULT_PROMPT_TEMPLATE).strip()
-        )
+        saved_template = (saved_template or self.DEFAULT_PROMPT_TEMPLATE).strip()
+        saved_template = self._migrate_template_syntax(saved_template)
+
+        # One-time migration: old template used {scene} placeholder — replace with new default
+        if "{scene}" in saved_template:
+            saved_template = self.DEFAULT_PROMPT_TEMPLATE
+            self.config["selfie_prompt_template"] = saved_template
+
+        self.prompt_template_text.insert("1.0", saved_template)
+        self._raw_template = saved_template
         self.prompt_template_text.config(state=tk.DISABLED)
 
-        template_actions = tk.Frame(template_frame, bg=COLORS["bg_panel"])
-        template_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
+        template_actions = tk.Frame(self._customized_frame, bg=COLORS["bg_panel"])
+        template_actions.pack(fill=tk.X, padx=4, pady=(0, 2))
         self.edit_template_btn = tk.Button(
             template_actions,
             text="Edit Template",
@@ -288,6 +263,16 @@ class SelfieTab(tk.Frame):
             pady=1,
         )
         self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        self._customized_status = tk.Label(
+            self._customized_frame,
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._customized_status.pack(fill=tk.X, padx=6, pady=(0, 3))
 
         # Wildcard template (Dynamic Wildcards mode — hidden by default)
         self._wildcard_frame = tk.LabelFrame(
@@ -687,12 +672,73 @@ class SelfieTab(tk.Frame):
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
 
+        # Cancel bar — shown only when generating
+        self._cancel_bar = tk.Frame(self, bg=COLORS["bg_panel"])
+        # Not packed initially — shown in _set_busy(True)
+
+        self._skip_btn = tk.Button(
+            self._cancel_bar,
+            text="Skip Model",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["warning"],
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_skip_model,
+        )
+        self._skip_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._stop_btn = tk.Button(
+            self._cancel_bar,
+            text="Stop After This",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg="#FFA500",
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_stop_after,
+        )
+        self._stop_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._abort_btn = tk.Button(
+            self._cancel_bar,
+            text="Abort All",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_red"],
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_abort_all,
+        )
+        self._abort_btn.pack(side=tk.LEFT)
+
+    def _on_skip_model(self):
+        self._cancel_current.set()
+        self._skip_btn.config(text="Skipping...", state=tk.DISABLED)
+
+    def _on_stop_after(self):
+        self._cancel_all.set()
+        self._stop_btn.config(text="Stopping...", state=tk.DISABLED)
+
+    def _on_abort_all(self):
+        self._abort_flow.set()
+        self._cancel_current.set()  # Also interrupt active model
+        self._abort_btn.config(text="Aborting...", state=tk.DISABLED)
+
     def set_prompt(self, text: str):
-        """Set the prompt text (called by Step 1 'Send to Step 2')."""
+        """Set the prompt text (called by Step 1 'Send to Step 2').
+
+        If text is valid JSON matching the template's {json.FIELD} tags,
+        resolves the template and shows the result. Otherwise treats
+        text as a plain prompt.
+        """
         raw_text = (text or "").strip()
         if not raw_text:
             self._handoff_identity_data = None
-            self.prompt_text.delete("1.0", tk.END)
+            self._handoff_resolved = False
             return
 
         payload = self._extract_handoff_json(raw_text)
@@ -701,23 +747,41 @@ class SelfieTab(tk.Frame):
         if payload is not None:
             try:
                 from selfie_generator import SelfieGenerator
-                normalized = SelfieGenerator.normalize_handoff_identity(payload)
+                # Use template-driven fields instead of hardcoded HANDOFF_JSON_KEYS
+                template = self._get_raw_template_text()
+                fields = self._extract_json_fields(template)
+                normalized = SelfieGenerator.normalize_handoff_identity(
+                    payload, required_fields=fields or None
+                )
             except Exception:
                 normalized = None
 
         if normalized:
             self._handoff_identity_data = normalized
-            self._handoff_scene = None
-            self._scene_roll_counter = 0
-            self._apply_handoff_scene_prompt(reroll=False)
-            self.prompt_text.delete("1.0", tk.END)
-            self.prompt_text.insert("1.0", json.dumps(normalized, indent=2))
+            self._handoff_resolved = True
+            resolved = self._build_handoff_prompt()
+            # Show resolved prompt in the template text box
+            self.prompt_template_text.config(state=tk.NORMAL)
+            self.prompt_template_text.delete("1.0", tk.END)
+            self.prompt_template_text.insert("1.0", resolved)
+            self.prompt_template_text.config(state=tk.DISABLED)
+            self._customized_status.config(
+                text="Prompt resolved from AI analysis \u2014 ready to generate",
+                fg=COLORS["success"],
+            )
             return
 
+        # Not valid JSON — treat as plain prompt override
         self._handoff_identity_data = None
-        self._handoff_scene = None
-        self.prompt_text.delete("1.0", tk.END)
-        self.prompt_text.insert("1.0", text)
+        self._handoff_resolved = False
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", raw_text)
+        self.prompt_template_text.config(state=tk.DISABLED)
+        self._customized_status.config(
+            text="Plain text prompt loaded (no JSON fields resolved)",
+            fg=COLORS["warning"],
+        )
 
     def _extract_handoff_json(self, raw_text: str) -> Optional[dict]:
         """Parse JSON payload even when Step 1 sends wrapper text around it."""
@@ -743,18 +807,20 @@ class SelfieTab(tk.Frame):
         """Return (width, height) for the currently selected aspect ratio."""
         return self._aspect_ratios.get(self.aspect_var.get(), self._aspect_ratios["Portrait (3:4)"])
 
-    def _get_scene_templates(self) -> List[str]:
-        if not hasattr(self, "scene_templates_text"):
-            return list(self.DEFAULT_SCENE_TEMPLATES)
-        lines = self.scene_templates_text.get("1.0", tk.END).splitlines()
-        templates = [line.strip() for line in lines if line.strip()]
-        return templates or list(self.DEFAULT_SCENE_TEMPLATES)
-
     def _get_prompt_template_text(self) -> str:
+        """Return current text box content (may be resolved or raw template)."""
         if not hasattr(self, "prompt_template_text"):
             return self.DEFAULT_PROMPT_TEMPLATE
         text = self.prompt_template_text.get("1.0", tk.END).strip()
         return text if text else self.DEFAULT_PROMPT_TEMPLATE
+
+    def _get_raw_template_text(self) -> str:
+        """Return the raw template (with {json.FIELD} tags) from config/default.
+
+        Unlike _get_prompt_template_text(), this always returns the unresolved
+        template — even if the text box currently shows a resolved prompt.
+        """
+        return self._raw_template
 
     def _set_prompt_template_edit_mode(self, enabled: bool):
         self._prompt_template_edit_mode = enabled
@@ -764,6 +830,9 @@ class SelfieTab(tk.Frame):
 
     def _on_edit_prompt_template(self):
         self._set_prompt_template_edit_mode(True)
+        # Always show raw template for editing (not resolved text)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", self._raw_template)
         self.prompt_template_text.focus_set()
         self.prompt_template_text.mark_set(tk.INSERT, tk.END)
 
@@ -773,6 +842,17 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.delete("1.0", tk.END)
         self.prompt_template_text.insert("1.0", text)
         self._set_prompt_template_edit_mode(False)
+        # Update the raw template source of truth
+        self._raw_template = text
+        self.config["selfie_prompt_template"] = text
+        self.config["selfie_template_fields"] = self._extract_json_fields(text)
+        # Reset handoff state since template changed
+        self._handoff_identity_data = None
+        self._handoff_resolved = False
+        self._customized_status.config(
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            fg=COLORS["text_dim"],
+        )
         self.log("Selfie prompt template saved", "success")
 
     def _on_reset_prompt_template(self):
@@ -780,25 +860,31 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.delete("1.0", tk.END)
         self.prompt_template_text.insert("1.0", self.DEFAULT_PROMPT_TEMPLATE)
         self._set_prompt_template_edit_mode(False)
+        # Update raw template source of truth
+        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE
+        self._handoff_identity_data = None
+        self._handoff_resolved = False
+        self.config["selfie_prompt_template"] = self.DEFAULT_PROMPT_TEMPLATE
+        self.config["selfie_template_fields"] = self._extract_json_fields(self.DEFAULT_PROMPT_TEMPLATE)
+        self._customized_status.config(
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            fg=COLORS["text_dim"],
+        )
         self.log("Selfie prompt template reset to default", "info")
 
     def _on_prompt_mode_changed(self):
         self._apply_prompt_mode_ui()
-        mode_label = "JSON Handoff" if self._prompt_mode_var.get() == "json_handoff" else "Dynamic Wildcards"
+        mode_label = "Customized (AI Analysis)" if self._prompt_mode_var.get() == "json_handoff" else "Generic (Wildcards)"
         self.log(f"Prompt mode: {mode_label}", "info")
 
     def _apply_prompt_mode_ui(self):
         """Show/hide widgets based on the active prompt mode."""
         if self._prompt_mode_var.get() == "wildcards":
-            self._composer_frame.pack_forget()
-            self._prompt_editor_frame.pack_forget()
-            self._templates_row.pack_forget()
+            self._customized_frame.pack_forget()
             self._wildcard_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
         else:
             self._wildcard_frame.pack_forget()
-            self._composer_frame.pack(fill=tk.X, padx=4, pady=4)
-            self._prompt_editor_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
-            self._templates_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+            self._customized_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
 
     def _set_wildcard_edit_mode(self, enabled: bool):
         self._wildcard_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
@@ -827,60 +913,20 @@ class SelfieTab(tk.Frame):
         self._set_wildcard_edit_mode(False)
         self.log("Wildcard template reset to default", "info")
 
-    def _apply_handoff_scene_prompt(self, reroll: bool):
-        if not self._handoff_identity_data:
-            return
-        if reroll:
-            self._scene_roll_counter += 1
-
-        scene_templates = self._get_scene_templates()
-        if not scene_templates:
-            self.log("Scene template list is empty", "warning")
-            return
-
-        try:
-            seed_value = int(self.seed_var.get())
-        except (tk.TclError, TypeError, ValueError):
-            seed_value = 0
-        rng = random.Random(seed_value + self._scene_roll_counter)
-        self._handoff_scene = rng.choice(scene_templates)
-
     def _build_handoff_prompt(self) -> str:
+        """Resolve {json.FIELD} tags in the template using _handoff_identity_data.
+
+        Leaves {opt1|opt2} wildcard blocks untouched — those resolve per-model at generation.
+        """
         if not self._handoff_identity_data:
             return ""
-        if not self._handoff_scene:
-            self._apply_handoff_scene_prompt(reroll=False)
-        scene = self._handoff_scene or self.DEFAULT_SCENE_TEMPLATES[0]
-        return self._get_prompt_template_text().format(
-            scene=scene,
-            **self._handoff_identity_data,
-        )
+        template = self._get_raw_template_text()
 
-    def _on_randomize_scene(self):
-        if not self._handoff_identity_data:
-            self.log("No Step 1 JSON prompt to randomize yet", "warning")
-            return
-        self._apply_handoff_scene_prompt(reroll=True)
-        self.log("Scene randomized for JSON handoff", "info")
+        def _replace_json_tag(match):
+            field = match.group(1)
+            return self._handoff_identity_data.get(field, f"{{json.{field}}}")
 
-    def _compose_prompt(self):
-        """Compose prompt from selected options."""
-        try:
-            from selfie_prompt_composer import SelfiePromptComposer
-
-            composer = SelfiePromptComposer()
-            prompt = composer.compose(
-                gender=self.gender_var.get(),
-                camera_style=self.style_var.get(),
-            )
-            self._handoff_identity_data = None
-            self._scene_roll_counter = 0
-            self.prompt_text.delete("1.0", tk.END)
-            self.prompt_text.insert("1.0", prompt)
-        except ImportError:
-            self.log("selfie_prompt_composer module not found", "error")
-        except Exception as e:
-            self.log(f"Compose error: {e}", "error")
+        return re.sub(r"\{json\.([a-zA-Z0-9_]+)\}", _replace_json_tag, template)
 
     def _on_generate(self):
         if self._busy:
@@ -895,6 +941,14 @@ class SelfieTab(tk.Frame):
             self.log("No image selected in carousel", "warning")
             return
 
+        # For output folder: use original input image's directory when in "source" mode
+        # to avoid saving to %TEMP% when intermediates (face crop, polish, outpaint) are active
+        if self.output_mode_var.get() == "source":
+            ref_entry = self.image_session.reference_entry
+            output_source_path = ref_entry.path if ref_entry else image_path
+        else:
+            output_source_path = image_path
+
         mode = self._prompt_mode_var.get()
         wildcard_template = None
         if mode == "wildcards":
@@ -905,13 +959,17 @@ class SelfieTab(tk.Frame):
             # Save raw template — wildcards will be resolved per-model in _run()
             wildcard_template = raw
             prompt = raw  # placeholder; each model gets a fresh resolution
-        elif self._handoff_identity_data:
-            prompt = self._build_handoff_prompt().strip()
-            if not prompt:
+        elif self._handoff_resolved:
+            # Customized mode with {json.FIELD} resolved, wildcards still present
+            resolved_text = self._get_prompt_template_text().strip()
+            if not resolved_text:
                 self.log("Prompt template is empty", "warning")
                 return
+            wildcard_template = resolved_text  # per-model wildcard resolution
+            prompt = resolved_text
         else:
-            prompt = self.prompt_text.get("1.0", tk.END).strip()
+            # Customized mode without handoff — use raw template text as-is
+            prompt = self._get_prompt_template_text().strip()
             if not prompt:
                 self.log("Prompt is empty", "warning")
                 return
@@ -932,7 +990,7 @@ class SelfieTab(tk.Frame):
             return
 
         try:
-            output_folder = self._resolve_output_folder(image_path)
+            output_folder = self._resolve_output_folder(output_source_path)
         except Exception as e:
             self.log(f"Invalid output folder: {e}", "error")
             return
@@ -949,6 +1007,8 @@ class SelfieTab(tk.Frame):
 
         self._set_busy(True)
 
+        total_models = len(selected_models)
+
         def _run():
             try:
                 from selfie_generator import SelfieGenerator
@@ -960,12 +1020,37 @@ class SelfieTab(tk.Frame):
                         0, lambda m=msg, l=lvl: self.log(m, l)
                     )
                 )
+                gen.set_cancel_event(self._cancel_current)
                 results = []
                 failed_models = []
+                skipped_models = []
 
-                for model in selected_models:
+                for idx, model in enumerate(selected_models):
+                    # Check abort/stop before each model
+                    if self._abort_flow.is_set():
+                        self.winfo_toplevel().after(
+                            0, lambda: self.log("Generation aborted by user", "warning")
+                        )
+                        break
+                    if self._cancel_all.is_set():
+                        self.winfo_toplevel().after(
+                            0, lambda: self.log("Stopping after current model (user request)", "warning")
+                        )
+                        break
+
+                    # Reset per-model cancel event for the new model
+                    self._cancel_current.clear()
+
                     endpoint = model.get("endpoint", "")
                     label = model.get("label", endpoint)
+
+                    # Update status with model progress
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda i=idx, t=total_models, l=label: self.status_label.config(
+                            text=f"Model {i+1}/{t}: {l[:20]}..."
+                        ),
+                    )
 
                     # Resolve wildcards per-model for variety
                     if wildcard_template:
@@ -1003,11 +1088,18 @@ class SelfieTab(tk.Frame):
                             0,
                             lambda m=model, r=result: self._show_single_result(m, r),
                         )
+                    elif self._cancel_current.is_set():
+                        # User skipped this model — don't count as failure
+                        skipped_models.append(label)
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda l=label: self.log(f"Skipped: {l}", "warning"),
+                        )
                     else:
                         failed_models.append(label)
 
                 self.winfo_toplevel().after(
-                    0, lambda fl=failed_models: self._on_complete_batch(results, fl)
+                    0, lambda r=results, fl=failed_models, sk=skipped_models: self._on_complete_batch(r, fl, sk)
                 )
             except Exception as e:
                 err = str(e)
@@ -1077,15 +1169,16 @@ class SelfieTab(tk.Frame):
         self.log(message, "success")
         self._refresh_result_actions()
 
-    def _on_complete_batch(self, results, failed_models):
+    def _on_complete_batch(self, results, failed_models, skipped_models=None):
         """Final summary after all models have run (results already shown progressively)."""
         self._set_busy(False)
+        skipped = skipped_models or []
 
-        if not results:
+        if not results and not skipped:
             self.log("Selfie generation failed for all selected models", "error")
 
-        total = len(results) + len(failed_models)
-        if results and failed_models:
+        total = len(results) + len(failed_models) + len(skipped)
+        if results and (failed_models or skipped):
             self.log(
                 f"Batch complete: {len(results)}/{total} succeeded",
                 "info",
@@ -1095,6 +1188,12 @@ class SelfieTab(tk.Frame):
             self.log(
                 f"Failed models: {', '.join(failed_models)}",
                 "warning",
+            )
+
+        if skipped:
+            self.log(
+                f"Skipped models: {', '.join(skipped)}",
+                "info",
             )
 
     def _on_error(self, error):
@@ -1107,6 +1206,17 @@ class SelfieTab(tk.Frame):
             state=tk.DISABLED if busy else tk.NORMAL,
             text="Generating..." if busy else "Generate Selfie",
         )
+        if busy:
+            # Clear all cancel events and reset button states
+            self._cancel_current.clear()
+            self._cancel_all.clear()
+            self._abort_flow.clear()
+            self._skip_btn.config(text="Skip Model", state=tk.NORMAL)
+            self._stop_btn.config(text="Stop After This", state=tk.NORMAL)
+            self._abort_btn.config(text="Abort All", state=tk.NORMAL)
+            self._cancel_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
+        else:
+            self._cancel_bar.pack_forget()
         if busy:
             self.save_as_btn.config(state=tk.DISABLED)
             self.open_file_btn.config(state=tk.DISABLED)
@@ -1149,10 +1259,11 @@ class SelfieTab(tk.Frame):
                 raise ValueError("Custom output folder is empty")
             os.makedirs(custom_folder, exist_ok=True)
             return custom_folder
-        source_folder = os.path.dirname(source_image_path)
-        if not source_folder:
+        gen_dir = get_gen_images_folder(source_image_path)
+        if not gen_dir:
             raise ValueError("Could not resolve source image folder")
-        return source_folder
+        os.makedirs(gen_dir, exist_ok=True)
+        return gen_dir
 
     def _refresh_result_actions(self):
         has_result = bool(
@@ -1246,6 +1357,9 @@ class SelfieTab(tk.Frame):
 
     def get_config_updates(self) -> dict:
         width, height = self._get_selected_dimensions()
+        # Save the raw template (not the resolved view)
+        raw_template = self._get_raw_template_text()
+        template_fields = self._extract_json_fields(raw_template)
         return {
             "composer_gender": self.gender_var.get(),
             "composer_camera_style": self.style_var.get(),
@@ -1256,8 +1370,8 @@ class SelfieTab(tk.Frame):
             "selfie_random_seed": self.random_seed_var.get(),
             "selfie_output_mode": self.output_mode_var.get(),
             "selfie_output_folder": self.output_path_var.get().strip(),
-            "selfie_scene_templates": self._get_scene_templates(),
-            "selfie_prompt_template": self._get_prompt_template_text(),
+            "selfie_prompt_template": raw_template,
+            "selfie_template_fields": template_fields,
             "selfie_selected_models": {
                 endpoint: bool(var.get())
                 for endpoint, var in self._model_vars.items()

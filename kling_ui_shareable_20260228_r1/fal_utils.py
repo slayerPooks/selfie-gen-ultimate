@@ -2,6 +2,7 @@
 
 import os
 import time
+import threading
 import requests
 import logging
 from pathlib import Path
@@ -230,6 +231,7 @@ def fal_queue_poll(
     status_url: str,
     progress_cb: ProgressCallback = None,
     max_wait_seconds: int = 600,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Optional[dict]:
     """Poll fal.ai queue until completion.
 
@@ -242,6 +244,8 @@ def fal_queue_poll(
         max_wait_seconds: Maximum wall-clock seconds to poll before giving up.
             Default 600 (10 min) for video gen.  Callers doing image gen
             should pass a shorter value (e.g. 120 s).
+        cancel_event: Optional threading.Event checked before each sleep.
+            If set, polling returns None immediately.
 
     Returns the final result dict (output/data/images key) or None on failure.
     """
@@ -263,6 +267,12 @@ def fal_queue_poll(
                     f"Timed out after {int(elapsed_s)}s — model may be unavailable or overloaded",
                     "error",
                 )
+            return None
+
+        # Cancellation check
+        if cancel_event is not None and cancel_event.is_set():
+            if progress_cb:
+                progress_cb("Generation cancelled", "warning")
             return None
 
         # Backoff schedule

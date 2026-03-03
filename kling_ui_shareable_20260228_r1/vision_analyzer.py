@@ -14,17 +14,60 @@ class VisionAnalyzer:
 
     ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
     DEFAULT_SYSTEM_PROMPT = (
-        "You are a portrait photo analyzer for AI image generation. "
-        "Analyze the provided portrait image and generate a detailed prompt that "
-        "describes the person's physical appearance, facial features, expression, "
-        "hair, clothing, pose, and lighting for a static portrait photo. "
-        "DO NOT mention video, animation, or movement. Focus strictly on physical "
-        "identity, expression, and lighting to be used as an image generation prompt. "
-        "Return ONLY the prompt text, no explanations or formatting."
+        "You are a JSON API. You only output valid JSON. Never write explanations, "
+        "never use markdown, never use code blocks, never say anything outside the JSON.\n\n"
+        "Analyze the portrait image and return exactly this JSON structure with "
+        "descriptive phrase values — never single words:\n"
+        '{"hair":"...","skin":"...","eyes":"...","face_shape":"...","age_range":"...",'
+        '"gender":"...","clothing":"...","expression":"..."}\n\n'
+        "Rules:\n"
+        "- Output MUST start with { and end with }\n"
+        "- No text before or after the JSON\n"
+        "- No markdown fences, no commentary\n"
+        "- All values must be descriptive phrases\n"
+        '- clothing: if not visible, write "casual everyday outfit"\n'
+        '- gender: write only "man" or "woman"'
     )
     DEFAULT_USER_PROMPT = (
-        "Analyze this portrait and generate a static portrait photo prompt."
+        "Analyze this portrait and return the JSON."
     )
+
+    # Field hints used by build_json_system_prompt() for dynamic schemas
+    _FIELD_HINTS = {
+        "hair": "hair color, length, and style",
+        "skin": "skin tone and complexion",
+        "eyes": "eye color and shape",
+        "face_shape": "face shape (oval, round, square, etc.)",
+        "age_range": "estimated age range (e.g. 'early to mid-twenties')",
+        "gender": "write only 'man' or 'woman'",
+        "clothing": "visible clothing description; if not visible write 'casual everyday outfit'",
+        "expression": "facial expression",
+    }
+
+    @staticmethod
+    def build_json_system_prompt(required_fields: list) -> str:
+        """Build a system prompt requesting JSON with exactly these fields.
+
+        Fields present in _FIELD_HINTS get descriptive guidance; unknown fields
+        get a hint derived from the field name.
+        """
+        schema_parts = []
+        for f in required_fields:
+            hint = VisionAnalyzer._FIELD_HINTS.get(f, f.replace("_", " "))
+            schema_parts.append(f'"{f}":"<{hint}>"')
+        schema = "{" + ",".join(schema_parts) + "}"
+
+        return (
+            "You are a JSON API. You only output valid JSON. Never write explanations, "
+            "never use markdown, never use code blocks, never say anything outside the JSON.\n\n"
+            f"Analyze the portrait image and return exactly this JSON structure with "
+            f"descriptive phrase values — never single words:\n{schema}\n\n"
+            "Rules:\n"
+            "- Output MUST start with { and end with }\n"
+            "- No text before or after the JSON\n"
+            "- No markdown fences, no commentary\n"
+            "- All values must be descriptive phrases"
+        )
 
     def __init__(
         self,

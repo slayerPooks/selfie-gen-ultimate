@@ -82,31 +82,31 @@ class ImageCarousel(tk.Frame):
         # Add button (rightmost)
         add_btn = tk.Button(
             header,
-            text="+ Add",
-            font=(FONT_FAMILY, 8),
+            text="+",
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            fg=COLORS["success"],
             command=self._on_add_image,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=6,
+            width=2,
         )
         add_btn.pack(side=tk.RIGHT)
 
         # Remove button
         self.remove_btn = tk.Button(
             header,
-            text="- Remove",
-            font=(FONT_FAMILY, 8),
+            text="-",
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_input"],
             fg=COLORS["error"],
             command=self._on_remove_image,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=6,
+            width=2,
             state=tk.DISABLED,
         )
-        self.remove_btn.pack(side=tk.RIGHT, padx=(0, 4))
+        self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
 
         # Compare button
         self.compare_btn = tk.Button(
@@ -373,20 +373,25 @@ class ImageCarousel(tk.Frame):
             label = tk.Label(popup, image=photo, bg=COLORS["bg_main"], bd=1, relief=tk.SOLID)
             label.pack()
 
-            x = event.x_root + 20
-            y = event.y_root + 10
+            # Center popup on the application window
             popup.update_idletasks()
             pw = popup.winfo_reqwidth()
             ph = popup.winfo_reqheight()
-            sw = popup.winfo_screenwidth()
-            sh = popup.winfo_screenheight()
 
-            if x + pw > sw:
-                x = event.x_root - pw - 20
-            if y + ph > sh:
-                y = event.y_root - ph - 10
-            x = max(0, x)
-            y = max(0, y)
+            root = self.winfo_toplevel()
+            rx = root.winfo_rootx()
+            ry = root.winfo_rooty()
+            rw = root.winfo_width()
+            rh = root.winfo_height()
+
+            x = rx + (rw - pw) // 2
+            y = ry + (rh - ph) // 2
+
+            # Clamp to screen edges
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = max(0, min(x, sw - pw))
+            y = max(0, min(y, sh - ph))
 
             popup.geometry(f"+{x}+{y}")
 

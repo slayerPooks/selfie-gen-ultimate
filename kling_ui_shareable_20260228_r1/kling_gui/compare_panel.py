@@ -39,6 +39,12 @@ class ComparePanel(tk.Frame):
         # PhotoImage ref to prevent GC
         self._photo: Optional[tk.PhotoImage] = None
 
+        # Hover state
+        self._hover_popup: Optional[tk.Toplevel] = None
+        self._hover_photo_left = None
+        self._hover_photo_right = None
+        self._hover_job: Optional[str] = None
+
         # Re-entrancy guard
         self._updating: bool = False
 
@@ -53,6 +59,8 @@ class ComparePanel(tk.Frame):
         self._update_display()
 
     def destroy(self):
+        self._cancel_hover()
+        self._destroy_hover()
         self.image_session.remove_on_change(self._on_session_change)
         super().destroy()
 
@@ -152,6 +160,8 @@ class ComparePanel(tk.Frame):
         self.canvas = tk.Canvas(self, bg=COLORS["bg_main"], highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=2)
         self.canvas.bind("<Configure>", lambda _e: self._update_display())
+        self.canvas.bind("<Enter>", self._on_canvas_enter)
+        self.canvas.bind("<Leave>", self._on_hover_leave)
 
     # ── Navigation ──────────────────────────────────────────────────
 
@@ -245,3 +255,133 @@ class ComparePanel(tk.Frame):
                 fill=COLORS["error"],
                 font=(FONT_FAMILY, 9),
             )
+
+    # ── Hover Preview (side-by-side) ─────────────────────────────
+
+    def _on_canvas_enter(self, _event):
+        """Start hover timer when mouse enters compare canvas."""
+        entry = self.image_session.active_entry
+        n = self.image_session.count
+        if (
+            not entry
+            or not entry.exists
+            or n == 0
+            or self._compare_index < 0
+            or self._compare_index >= n
+        ):
+            return
+        compare_entry = self.image_session.images[self._compare_index]
+        if not compare_entry.exists:
+            return
+        self._schedule_hover(entry.path, compare_entry.path)
+
+    def _schedule_hover(self, left_path: str, right_path: str):
+        self._cancel_hover()
+        self._hover_job = self.after(
+            500, lambda: self._show_hover_preview(left_path, right_path)
+        )
+
+    def _cancel_hover(self):
+        if self._hover_job:
+            self.after_cancel(self._hover_job)
+            self._hover_job = None
+
+    def _on_hover_leave(self, _event=None):
+        self._cancel_hover()
+        self._destroy_hover()
+
+    def _destroy_hover(self):
+        if self._hover_popup:
+            try:
+                self._hover_popup.destroy()
+            except tk.TclError:
+                pass
+            self._hover_popup = None
+            self._hover_photo_left = None
+            self._hover_photo_right = None
+
+    def _show_hover_preview(self, left_path: str, right_path: str):
+        """Show a side-by-side popup with carousel image (left) and compare image (right)."""
+        self._destroy_hover()
+        try:
+            from PIL import Image, ImageTk
+
+            max_dim = 500
+
+            def load_thumb(path):
+                img = Image.open(path)
+                img.load()
+                ratio = min(max_dim / img.width, max_dim / img.height, 1.0)
+                if ratio < 1.0:
+                    img = img.resize(
+                        (max(1, int(img.width * ratio)), max(1, int(img.height * ratio))),
+                        Image.Resampling.LANCZOS,
+                    )
+                return img
+
+            left_img = load_thumb(left_path)
+            right_img = load_thumb(right_path)
+
+            left_photo = ImageTk.PhotoImage(left_img)
+            right_photo = ImageTk.PhotoImage(right_img)
+            self._hover_photo_left = left_photo
+            self._hover_photo_right = right_photo
+
+            popup = tk.Toplevel(self)
+            popup.overrideredirect(True)
+            popup.attributes("-topmost", True)
+            popup.config(bg=COLORS["bg_main"])
+
+            container = tk.Frame(popup, bg=COLORS["bg_main"])
+            container.pack(padx=2, pady=2)
+
+            # Left: carousel active image
+            left_frame = tk.Frame(container, bg=COLORS["bg_main"])
+            left_frame.pack(side=tk.LEFT, padx=(0, 2))
+            tk.Label(
+                left_frame, text="Carousel", bg=COLORS["bg_main"],
+                fg=COLORS["text_dim"], font=(FONT_FAMILY, 8),
+            ).pack()
+            tk.Label(
+                left_frame, image=left_photo, bg=COLORS["bg_main"],
+                bd=1, relief=tk.SOLID,
+            ).pack()
+
+            # Right: compare image
+            right_frame = tk.Frame(container, bg=COLORS["bg_main"])
+            right_frame.pack(side=tk.LEFT, padx=(2, 0))
+            tk.Label(
+                right_frame, text="Compare", bg=COLORS["bg_main"],
+                fg=COLORS["text_dim"], font=(FONT_FAMILY, 8),
+            ).pack()
+            tk.Label(
+                right_frame, image=right_photo, bg=COLORS["bg_main"],
+                bd=1, relief=tk.SOLID,
+            ).pack()
+
+            # Center popup on the application window
+            popup.update_idletasks()
+            pw = popup.winfo_reqwidth()
+            ph = popup.winfo_reqheight()
+
+            root = self.winfo_toplevel()
+            rx = root.winfo_rootx()
+            ry = root.winfo_rooty()
+            rw = root.winfo_width()
+            rh = root.winfo_height()
+
+            x = rx + (rw - pw) // 2
+            y = ry + (rh - ph) // 2
+
+            # Clamp to screen edges
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = max(0, min(x, sw - pw))
+            y = max(0, min(y, sh - ph))
+
+            popup.geometry(f"+{x}+{y}")
+            popup.bind("<Leave>", self._on_hover_leave)
+            popup.bind("<Button-1>", self._on_hover_leave)
+            self._hover_popup = popup
+        except Exception as e:
+            logger.debug("Compare hover preview error: %s", e)

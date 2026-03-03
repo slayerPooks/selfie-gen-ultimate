@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
+from path_utils import get_gen_images_folder
 
 # Optional heavy dependencies — tab degrades gracefully if missing
 try:
@@ -68,6 +69,7 @@ class FaceCropTab(tk.Frame):
 
         # Detection state
         self._source_path: Optional[str] = None
+        self._original_path: Optional[str] = None  # user-selected path, pre-EXIF correction
         self._cv2_img = None  # numpy array (BGR)
         self._face_box = None  # (fx, fy, fw, fh)
         self._crop_result = None  # numpy array of current crop
@@ -82,6 +84,7 @@ class FaceCropTab(tk.Frame):
         )
 
         # Polish state
+        self._polish_counter = 0
         self._polish_busy = False
         self._polish_provider_var = tk.StringVar(
             value=config.get("face_crop_polish_provider", "BFL (Kontext Pro)")
@@ -199,6 +202,18 @@ class FaceCropTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT)
 
+        tk.Button(
+            slider_row,
+            text="-",
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            width=2,
+            command=lambda: self._adjust_multiplier(-0.1),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
         self._slider = tk.Scale(
             slider_row,
             from_=1.0,
@@ -214,7 +229,19 @@ class FaceCropTab(tk.Frame):
             length=200,
             command=self._on_slider_changed,
         )
-        self._slider.pack(side=tk.LEFT, padx=(6, 0), fill=tk.X, expand=True)
+        self._slider.pack(side=tk.LEFT, padx=(2, 2), fill=tk.X, expand=True)
+
+        tk.Button(
+            slider_row,
+            text="+",
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 10, "bold"),
+            relief="flat",
+            cursor="hand2",
+            width=2,
+            command=lambda: self._adjust_multiplier(0.1),
+        ).pack(side=tk.LEFT)
 
         # ── Preview ─────────────────────────────────────────────────
         preview_frame = tk.LabelFrame(
@@ -275,6 +302,7 @@ class FaceCropTab(tk.Frame):
             text="Polish Crop",
             bg=COLORS["accent_blue"],
             fg="white",
+            disabledforeground="#C8C8C8",
             font=(FONT_FAMILY, 10, "bold"),
             relief="flat",
             cursor="hand2",
@@ -342,9 +370,10 @@ class FaceCropTab(tk.Frame):
         # Two destination buttons — pack right-to-left so Phase 2 is rightmost
         self._send_selfie_btn = tk.Button(
             send_frame,
-            text="Phase 2 (Selfie Gen)",
+            text="Send to 2 (Generate Selfie)",
             bg=COLORS["btn_green"],
             fg="white",
+            disabledforeground="#C8C8C8",
             font=(FONT_FAMILY, 10, "bold"),
             relief="flat",
             cursor="hand2",
@@ -355,9 +384,10 @@ class FaceCropTab(tk.Frame):
 
         self._send_prep_btn = tk.Button(
             send_frame,
-            text="Phase 1 (Prep)",
+            text="Send to 1 (AI Analysis)",
             bg="#4A7A8C",
             fg="white",
+            disabledforeground="#C8C8C8",
             font=(FONT_FAMILY, 10, "bold"),
             relief="flat",
             cursor="hand2",
@@ -397,8 +427,10 @@ class FaceCropTab(tk.Frame):
             return
 
         self._source_path = path
+        self._original_path = path
         self._face_box = None
         self._crop_result = None
+        self._polish_counter = 0
         self._send_prep_btn.config(state=tk.DISABLED)
         self._send_selfie_btn.config(state=tk.DISABLED)
         self._update_polish_btn_state()
@@ -624,6 +656,12 @@ class FaceCropTab(tk.Frame):
         if self._face_box is not None:
             self._update_crop_preview()
 
+    def _adjust_multiplier(self, delta: float):
+        val = round(self._multiplier_var.get() + delta, 1)
+        val = max(1.0, min(3.0, val))
+        self._multiplier_var.set(val)
+        self._on_slider_changed()
+
     # ── Send crop to next phase ─────────────────────────────────────
 
     def _save_crop(self) -> Optional[Path]:
@@ -631,17 +669,29 @@ class FaceCropTab(tk.Frame):
         if self._crop_result is None or self._source_path is None:
             return None
 
-        src = Path(self._source_path)
-        out_name = f"{src.stem}_crop.jpg"
-        out_path = src.parent / out_name
+        # Use original user-selected path (not the EXIF-corrected temp copy)
+        origin = Path(self._original_path or self._source_path)
+        gen_dir = Path(get_gen_images_folder(str(origin)))
+        gen_dir.mkdir(parents=True, exist_ok=True)
+
+        # Collision-safe naming
+        out_path = gen_dir / f"{origin.stem}_crop.jpg"
+        counter = 2
+        while out_path.exists():
+            out_path = gen_dir / f"{origin.stem}_crop_{counter}.jpg"
+            counter += 1
 
         try:
             cv2.imwrite(str(out_path), self._crop_result)
         except Exception:
-            out_path = Path(tempfile.gettempdir()) / out_name
+            out_path = Path(tempfile.gettempdir()) / f"{origin.stem}_crop.jpg"
             cv2.imwrite(str(out_path), self._crop_result)
 
-        self.log(f"Face Crop: saved {out_path.name} ({self._crop_result.shape[1]}x{self._crop_result.shape[0]})", "success")
+        self.log(
+            f"Face Crop: saved {out_path.name} "
+            f"({self._crop_result.shape[1]}x{self._crop_result.shape[0]})",
+            "success",
+        )
         self.image_session.add_image(str(out_path), "input", label=out_path.name)
         return out_path
 
@@ -686,7 +736,8 @@ class FaceCropTab(tk.Frame):
 
         prompt = self.get_config().get("face_crop_polish_prompt", _DEFAULT_POLISH_PROMPT)
 
-        output_path = str(crop_path.parent / f"{crop_path.stem}_polished.png")
+        self._polish_counter += 1
+        output_path = str(crop_path.parent / f"{crop_path.stem}_polished_{self._polish_counter}.png")
 
         def _worker():
             from crop_polisher import CropPolisher

@@ -248,3 +248,42 @@ class ImageSession:
             self._reference_index -= 1
         self._notify()
         return True
+
+    def to_dict(self) -> dict:
+        """Serialize session state to a plain dict (for JSON persistence)."""
+        return {
+            "images": [
+                {"path": e.path, "source_type": e.source_type, "label": e.label}
+                for e in self._images
+            ],
+            "current_index": self._current_index,
+            "reference_index": self._reference_index,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ImageSession":
+        """Restore a session from a serialized dict.
+
+        Skips entries whose file no longer exists on disk.
+        Returns a new ImageSession (listeners are NOT transferred).
+        """
+        session = cls()
+        images_data = data.get("images", [])
+        for img in images_data:
+            path = img.get("path", "")
+            if not os.path.isfile(path):
+                logger.debug("Session restore: skipping missing file %s", path)
+                continue
+            entry = ImageEntry(
+                path=path,
+                source_type=img.get("source_type", "input"),
+                label=img.get("label", ""),
+            )
+            session._images.append(entry)
+
+        count = len(session._images)
+        raw_cur = data.get("current_index", -1)
+        raw_ref = data.get("reference_index", -1)
+        session._current_index = raw_cur if 0 <= raw_cur < count else (count - 1 if count else -1)
+        session._reference_index = raw_ref if 0 <= raw_ref < count else -1
+        return session

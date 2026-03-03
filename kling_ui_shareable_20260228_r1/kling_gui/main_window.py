@@ -190,6 +190,201 @@ class FolderPreviewDialog(tk.Toplevel):
         self.destroy()
 
 
+class SessionManagerDialog(tk.Toplevel):
+    """Dialog for browsing, loading, and managing saved sessions."""
+
+    def __init__(self, parent, app_dir, image_session, config, save_config_fn, log_fn):
+        super().__init__(parent)
+        self.title("Session Manager")
+        self.configure(bg=COLORS["bg_main"])
+        self.transient(parent)
+        self.resizable(True, True)
+
+        # Store references
+        self._app_dir = app_dir
+        self._image_session = image_session
+        self._config = config
+        self._save_config_fn = save_config_fn
+        self._log_fn = log_fn
+        self._selected_path = None
+        self._loaded_session_data = None
+
+        self._build_ui()
+        self._refresh_list()
+
+        # Center and grab
+        self.geometry("680x520")
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - 680) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - 520) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+        self.focus_set()
+
+    def _build_ui(self):
+        # Header
+        header = tk.Label(
+            self, text="Saved Sessions", font=("Segoe UI", 12, "bold"),
+            bg=COLORS["bg_main"], fg=COLORS["text_light"],
+        )
+        header.pack(fill=tk.X, padx=16, pady=(12, 6))
+
+        # Listbox with scrollbar
+        list_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._listbox = tk.Listbox(
+            list_frame, bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"], selectforeground="white",
+            font=("Consolas", 10), yscrollcommand=scrollbar.set,
+            activestyle="none",
+        )
+        self._listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self._listbox.yview)
+        self._listbox.bind("<<ListboxSelect>>", self._on_select)
+        self._listbox.bind("<Double-Button-1>", lambda e: self._on_load())
+
+        # Detail label
+        self._detail_label = tk.Label(
+            self, text="Select a session to view details",
+            font=("Segoe UI", 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._detail_label.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        # Auto-save section
+        autosave_frame = tk.Frame(self, bg=COLORS["bg_panel"], padx=10, pady=6)
+        autosave_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        tk.Label(
+            autosave_frame, text="Auto-Save:", font=("Segoe UI", 9, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._autosave_var = tk.BooleanVar(value=self._config.get("session_autosave_enabled", False))
+        autosave_cb = tk.Checkbutton(
+            autosave_frame, text="Enabled", variable=self._autosave_var,
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"], activebackground=COLORS["bg_panel"],
+            command=self._on_autosave_changed,
+        )
+        autosave_cb.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Label(
+            autosave_frame, text="Interval:", font=("Segoe UI", 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
+        ).pack(side=tk.LEFT, padx=(0, 4))
+
+        self._interval_var = tk.StringVar(value=self._config.get("session_autosave_interval", "5min"))
+        interval_menu = ttk.Combobox(
+            autosave_frame, textvariable=self._interval_var,
+            values=["5min", "10min", "15min", "after_api_action"],
+            state="readonly", width=16,
+        )
+        interval_menu.pack(side=tk.LEFT)
+        interval_menu.bind("<<ComboboxSelected>>", lambda e: self._on_autosave_changed())
+
+        # Button bar
+        btn_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+        for text, color, cmd in [
+            ("Delete", COLORS["btn_red"], self._on_delete),
+            ("Overwrite Save", COLORS["warning"], self._on_overwrite),
+        ]:
+            tk.Button(
+                btn_frame, text=text, font=("Segoe UI", 9, "bold"),
+                bg=color, fg="white", relief="flat", padx=10, pady=4,
+                command=cmd,
+            ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            btn_frame, text="Close", font=("Segoe UI", 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"], relief="flat",
+            padx=10, pady=4, command=self.destroy,
+        ).pack(side=tk.RIGHT)
+
+        tk.Button(
+            btn_frame, text="Load", font=("Segoe UI", 9, "bold"),
+            bg=COLORS["accent_blue"], fg="white", relief="flat",
+            padx=10, pady=4, command=self._on_load,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+
+    def _refresh_list(self):
+        from .session_manager import list_sessions
+        self._sessions = list_sessions(self._app_dir)
+        self._listbox.delete(0, tk.END)
+        for rec in self._sessions:
+            ts = rec.timestamp[:16].replace("T", " ") if rec.timestamp else "?"
+            self._listbox.insert(tk.END, f"  {rec.name:<40s}  {ts}  {rec.image_count} imgs")
+
+    def _on_select(self, event=None):
+        sel = self._listbox.curselection()
+        if not sel or sel[0] >= len(self._sessions):
+            self._selected_path = None
+            self._detail_label.config(text="Select a session to view details")
+            return
+        rec = self._sessions[sel[0]]
+        self._selected_path = rec.path
+        ts = rec.timestamp[:19].replace("T", " ") if rec.timestamp else "unknown"
+        self._detail_label.config(
+            text=f"Selected: {rec.name} — saved {ts} — {rec.image_count} images"
+        )
+
+    def _on_load(self):
+        if not self._selected_path:
+            return
+        from .session_manager import load_session
+        try:
+            data = load_session(self._selected_path)
+            self._loaded_session_data = data
+            self._log_fn(f"Session loaded: {data.get('name', '?')}", "success")
+            self.destroy()
+        except Exception as e:
+            self._log_fn(f"Failed to load session: {e}", "error")
+
+    def _on_delete(self):
+        if not self._selected_path:
+            return
+        from .session_manager import delete_session
+        from tkinter import messagebox
+        if not messagebox.askyesno("Delete Session", "Delete this saved session?", parent=self):
+            return
+        try:
+            delete_session(self._selected_path)
+            self._log_fn("Session deleted", "info")
+            self._selected_path = None
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Delete failed: {e}", "error")
+
+    def _on_overwrite(self):
+        """Save current state to the selected session file."""
+        if not self._selected_path:
+            return
+        if not self._image_session.count:
+            self._log_fn("No images in session to save", "warning")
+            return
+        from .session_manager import save_session
+        try:
+            save_session(
+                self._app_dir, self._image_session, self._config,
+                overwrite_path=self._selected_path,
+            )
+            self._log_fn("Session overwritten", "success")
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Overwrite failed: {e}", "error")
+
+    def _on_autosave_changed(self):
+        self._config["session_autosave_enabled"] = self._autosave_var.get()
+        self._config["session_autosave_interval"] = self._interval_var.get()
+        self._save_config_fn()
+
+
 class KlingGUIWindow:
     """Main GUI window for Kling video generation."""
 
@@ -227,12 +422,22 @@ class KlingGUIWindow:
         self.queue_manager: Optional[QueueManager] = None
         self.image_session = ImageSession()
 
+        # Tell Windows this is its own app (not just "python.exe") so the
+        # taskbar shows our custom icon instead of the generic Python icon.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "kling-ui.ai-media-toolkit.1"
+            )
+        except Exception:
+            pass  # Non-Windows or missing API — harmless
+
         # Create root window with DnD support if available
         self.root = create_dnd_root()
-        self.root.title("Kling UI - AI Video Generator")
+        self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
 
-        # Set app icon
+        # Set app icon (window title bar + taskbar)
         self._set_app_icon()
 
         # Restore window geometry or use defaults
@@ -369,7 +574,7 @@ class KlingGUIWindow:
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
             "sash_dropzone": 560,  # Height of drop zone pane
-            "sash_queue": 300,  # Width of queue pane
+            "sash_queue": 420,  # Width of queue pane
             "sash_log": 180,  # Height of log pane (before history)
         }
 
@@ -607,6 +812,7 @@ class KlingGUIWindow:
 
         # Wire Step 1 → Step 2 prompt connection (set after both tabs exist)
         self.prep_tab.set_selfie_prompt_writer(self.selfie_tab.set_prompt)
+        self.prep_tab.set_notebook_switcher_selfie(lambda: self.notebook.select(2))
         self.prep_tab.set_selfie_config_getter(
             lambda: {
                 "composer_gender": self.selfie_tab.gender_var.get(),
@@ -672,7 +878,7 @@ class KlingGUIWindow:
         )
         self.carousel.pack(fill=tk.BOTH, expand=True)
         self.carousel.set_on_compare(self._toggle_compare)
-        self.bottom_paned.add(carousel_frame, minsize=200)
+        self.bottom_paned.add(carousel_frame, minsize=300)
 
         # Compare panel state (created on demand by _toggle_compare)
         self._compare_frame: Optional[tk.Frame] = None
@@ -705,6 +911,9 @@ class KlingGUIWindow:
         self._setup_history_panel_content(self.history_frame)
         self.right_paned.add(self.history_frame, minsize=100)
 
+        # Auto-save state
+        self._autosave_path = None  # Fixed path for auto-save overwrites
+        self._start_autosave_timer()
 
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
@@ -1195,18 +1404,61 @@ class KlingGUIWindow:
 
     def _setup_header(self):
         """Set up the header bar (title only — status indicators are in the control bar)."""
-        header = tk.Frame(self.root, bg=COLORS["bg_panel"], height=34)
+        header = tk.Frame(self.root, bg=COLORS["bg_panel"], height=40)
         header.pack(fill=tk.X, padx=10, pady=(8, 4))
         header.pack_propagate(False)
 
         title = tk.Label(
             header,
-            text="🎬 Kling UI - AI Video Generator",
+            text="Ultimate-Selfie-Gen",
             font=("Segoe UI", 12, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
         title.pack(side=tk.LEFT, padx=10, pady=6)
+
+        # Session management buttons
+        sessions_btn = tk.Button(
+            header,
+            text="Sessions",
+            font=("Segoe UI", 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_panel"],
+            activeforeground=COLORS["text_light"],
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_open_sessions,
+        )
+        sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        load_session_btn = tk.Button(
+            header,
+            text="Load Session",
+            font=("Segoe UI", 9),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            activebackground="#5080DD",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_open_sessions,
+        )
+        load_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        save_session_btn = tk.Button(
+            header,
+            text="Save Session",
+            font=("Segoe UI", 9),
+            bg=COLORS["btn_green"],
+            fg="white",
+            activebackground="#287828",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_save_session,
+        )
+        save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
     # -- API key badge helpers ------------------------------------------------
 
@@ -1653,6 +1905,8 @@ class KlingGUIWindow:
                 self.bottom_paned.forget(self._compare_frame)
             except tk.TclError:
                 pass
+            if self._compare_panel is not None:
+                self._compare_panel.destroy()
             self._compare_panel = None
             self._compare_frame = None
         else:
@@ -1669,6 +1923,21 @@ class KlingGUIWindow:
             self.bottom_paned.add(
                 self._compare_frame, minsize=200, before=self.right_paned
             )
+            # Set sash positions to give compare panel generous width
+            def _set_compare_sash():
+                try:
+                    total_w = self.bottom_paned.winfo_width()
+                    carousel_w = 350
+                    compare_w = 350
+                    right_w = total_w - carousel_w - compare_w
+                    if right_w < 200:
+                        right_w = 200
+                        compare_w = total_w - carousel_w - right_w
+                    self.bottom_paned.sash_place(0, carousel_w, 0)
+                    self.bottom_paned.sash_place(1, carousel_w + compare_w, 0)
+                except Exception:
+                    pass
+            self.root.after(50, _set_compare_sash)
 
     def _on_images_to_carousel(self, files: List[str]):
         """Handle images dropped/browsed in the prompt panel mini drop zone."""
@@ -1979,7 +2248,7 @@ class KlingGUIWindow:
             if top_section_pos < 500:
                 top_section_pos = 560
             prompt_split = self.config.get("sash_prompt_split", 640)
-            queue_pos = self.config.get("sash_queue", 300)
+            queue_pos = self.config.get("sash_queue", 350)
             log_pos = self.config.get("sash_log", 380)
             # Migrate old small log height to a reasonable default
             if log_pos < 200:
@@ -2032,11 +2301,12 @@ class KlingGUIWindow:
 
             if hasattr(self, "bottom_paned"):
                 try:
-                    sash_pos = self.bottom_paned.sash_coord(0)
-                    if sash_pos:
-                        self.config["sash_queue"] = sash_pos[
-                            0
-                        ]  # X position for horizontal paned
+                    # Only save queue sash when compare panel is closed
+                    # (with compare open, sash 0 is carousel/compare, not carousel/right)
+                    if self._compare_panel is None:
+                        sash_pos = self.bottom_paned.sash_coord(0)
+                        if sash_pos:
+                            self.config["sash_queue"] = sash_pos[0]
                 except Exception:
                     pass
 
@@ -2052,6 +2322,97 @@ class KlingGUIWindow:
 
         except Exception as e:
             pass  # Don't fail on layout save errors
+
+    # ── Session save/load ────────────────────────────────────────────────────
+
+    def _on_save_session(self):
+        """Save current session."""
+        if not self.image_session.count:
+            self._log("No images in session to save", "warning")
+            return
+        from .session_manager import save_session
+        try:
+            path = save_session(get_app_dir(), self.image_session, self.config)
+            self._log(f"Session saved: {os.path.basename(path)}", "success")
+        except Exception as e:
+            self._log(f"Save failed: {e}", "error")
+
+    def _on_open_sessions(self):
+        """Open the session manager dialog."""
+        dialog = SessionManagerDialog(
+            self.root, get_app_dir(), self.image_session,
+            self.config, self._save_config, self._log,
+        )
+        self.root.wait_window(dialog)
+        if dialog._loaded_session_data:
+            self._on_session_loaded(dialog._loaded_session_data)
+
+    def _on_session_loaded(self, data: dict):
+        """Restore session from loaded data."""
+        session_data = data.get("session", {})
+        images = session_data.get("images", [])
+        if not images:
+            self._log("Session has no images", "warning")
+            return
+        # Clear and re-populate the LIVE session (preserves tab references)
+        self.image_session.clear()
+        loaded_count = 0
+        for img in images:
+            path = img.get("path", "")
+            if not os.path.isfile(path):
+                self._log(f"Skipped missing: {os.path.basename(path)}", "warning")
+                continue
+            self.image_session.add_image(
+                path,
+                img.get("source_type", "input"),
+                label=img.get("label", ""),
+            )
+            loaded_count += 1
+        # Restore indices
+        target_idx = session_data.get("current_index", -1)
+        if 0 <= target_idx < self.image_session.count:
+            self.image_session.navigate_to(target_idx)
+        ref_idx = session_data.get("reference_index", -1)
+        if 0 <= ref_idx < self.image_session.count:
+            self.image_session._reference_index = ref_idx
+            self.image_session._notify()
+        self._log(f"Session restored: {loaded_count} images loaded", "success")
+
+    # ── Auto-save timer ───────────────────────────────────────────────────────
+
+    def _start_autosave_timer(self):
+        """Start the auto-save timer if configured."""
+        if not self.config.get("session_autosave_enabled", False):
+            return
+        interval = self.config.get("session_autosave_interval", "5min")
+        if interval == "after_api_action":
+            return  # No timer — triggered by API completion callbacks
+        ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
+        ms = ms_map.get(interval, 300000)
+        self.root.after(ms, self._autosave_tick)
+
+    def _autosave_tick(self):
+        """Perform auto-save if session has images, then reschedule."""
+        if self.image_session.count > 0:
+            self._maybe_autosave()
+        self._start_autosave_timer()  # Reschedule
+
+    def _maybe_autosave(self):
+        """Auto-save if enabled."""
+        if not self.config.get("session_autosave_enabled", False):
+            return
+        if self.image_session.count == 0:
+            return
+        from .session_manager import save_session
+        try:
+            self._autosave_path = save_session(
+                get_app_dir(), self.image_session, self.config,
+                name="_autosave",
+                overwrite_path=self._autosave_path,
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.warning("Auto-save failed: %s", e)
 
     def _on_close(self):
         """Handle window close."""

@@ -3,10 +3,10 @@ Kling UI Icon Generator
 Generates a professional multi-size .ico file for the app.
 
 Design:
-- Dark navy/charcoal rounded-square background
-- Vibrant blue/indigo gradient circle
-- Bold white play triangle
-- Subtle "K" text at bottom-right
+- Dark rounded-square background matching the app's dark theme (#2D2D30)
+- Stylized camera lens with aperture blades in accent blue (#6496FF)
+- Inner AI sparkle/crosshair element
+- Clean, modern aesthetic that reads well at all sizes
 """
 
 import sys
@@ -19,7 +19,6 @@ def draw_rounded_rect(draw, box, radius, fill, outline=None, outline_width=1):
     x0, y0, x1, y1 = box
     r = max(2, int(radius))
 
-    # Fill
     draw.rectangle([x0 + r, y0, x1 - r, y1], fill=fill)
     draw.rectangle([x0, y0 + r, x1, y1 - r], fill=fill)
     draw.ellipse([x0, y0, x0 + 2*r, y0 + 2*r], fill=fill)
@@ -39,36 +38,8 @@ def draw_rounded_rect(draw, box, radius, fill, outline=None, outline_width=1):
 
 
 def lerp_color(c1, c2, t):
-    """Linearly interpolate between two RGB(A) colors."""
+    """Linearly interpolate between two RGBA colors."""
     return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(len(c1)))
-
-
-def draw_gradient_circle(img, cx, cy, radius, color_inner, color_outer):
-    """Draw a radial gradient circle using pixel-level manipulation."""
-    from PIL import Image
-    # Create gradient overlay
-    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    pixels = overlay.load()
-
-    r2 = radius * radius
-    x0 = max(0, int(cx - radius))
-    x1 = min(img.size[0], int(cx + radius + 1))
-    y0 = max(0, int(cy - radius))
-    y1 = min(img.size[1], int(cy + radius + 1))
-
-    for py in range(y0, y1):
-        for px in range(x0, x1):
-            dx = px - cx
-            dy = py - cy
-            dist2 = dx * dx + dy * dy
-            if dist2 <= r2:
-                t = math.sqrt(dist2) / radius
-                # Smooth falloff
-                t_smooth = t * t * (3 - 2 * t)
-                color = lerp_color(color_inner, color_outer, t_smooth)
-                pixels[px, py] = color
-
-    return overlay
 
 
 def render_icon(size):
@@ -78,96 +49,141 @@ def render_icon(size):
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # --- Background ---
-    bg_color = (28, 28, 38, 255)          # Deep dark navy
-    border_color = (55, 55, 75, 255)       # Subtle border
+    # --- Colors from the app's theme ---
+    bg_color = (45, 45, 48, 255)           # #2D2D30  bg_main
+    border_color = (90, 90, 94, 255)       # #5A5A5E  border
+    accent = (100, 150, 255)               # #6496FF  accent_blue
+    accent_bright = (140, 185, 255)        # Lighter variant
+    accent_dim = (60, 100, 200)            # Darker variant
+    white = (240, 245, 255, 255)
+    white_soft = (220, 230, 255, 140)
+
+    # --- Background rounded square ---
     pad = max(0, size // 20)
     radius = max(3, size // 5)
-    draw_rounded_rect(draw, [pad, pad, size - 1 - pad, size - 1 - pad],
-                      radius, bg_color, border_color, max(1, size // 64))
+    draw_rounded_rect(
+        draw,
+        [pad, pad, size - 1 - pad, size - 1 - pad],
+        radius,
+        bg_color,
+        border_color,
+        max(1, size // 64),
+    )
 
-    # --- Gradient circle (glow behind play button) ---
     cx = size * 0.50
-    cy = size * 0.47
-    circle_r = size * 0.34
+    cy = size * 0.48  # Slightly above center for optical balance
 
-    # Draw glow using gradient circle
-    color_inner = (80, 130, 255, 220)      # Bright blue center
-    color_outer = (50, 70, 160, 0)         # Fade to transparent
-    glow = draw_gradient_circle(img, cx, cy, circle_r * 1.4,
-                                color_inner, color_outer)
-    img = Image.alpha_composite(img, glow)
-    draw = ImageDraw.Draw(img)
+    # --- Outer lens ring (gradient effect via concentric circles) ---
+    outer_r = size * 0.36
+    ring_width = max(2, size // 10)
 
-    # Solid circle background
-    circ_x0 = cx - circle_r
-    circ_y0 = cy - circle_r
-    circ_x1 = cx + circle_r
-    circ_y1 = cy + circle_r
-    draw.ellipse([circ_x0, circ_y0, circ_x1, circ_y1],
-                 fill=(55, 95, 200, 230))
+    # Draw outer glow
+    if size >= 32:
+        glow_img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        glow_px = glow_img.load()
+        glow_r = outer_r + ring_width * 0.8
+        for py in range(size):
+            for px in range(size):
+                dx = px - cx
+                dy = py - cy
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist < glow_r:
+                    ring_dist = abs(dist - outer_r)
+                    t = 1.0 - min(1.0, ring_dist / (ring_width * 1.5))
+                    alpha = int(t * t * 40)
+                    if alpha > 0:
+                        glow_px[px, py] = (accent[0], accent[1], accent[2], alpha)
+        img = Image.alpha_composite(img, glow_img)
+        draw = ImageDraw.Draw(img)
 
-    # Inner circle highlight (top-left sheen)
-    sheen_r = circle_r * 0.65
-    draw.ellipse([cx - sheen_r, cy - sheen_r - circle_r * 0.08,
-                  cx + sheen_r * 0.1, cy + sheen_r * 0.5],
-                 fill=(100, 150, 255, 60))
+    # Outer ring — bright accent
+    lw = max(2, int(ring_width * 0.55))
+    draw.ellipse(
+        [cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r],
+        outline=(*accent, 240),
+        width=lw,
+    )
 
-    # --- Play triangle ---
-    tri_scale = circle_r * 0.52
-    # Center the triangle (slightly right for optical balance)
-    tx = cx + tri_scale * 0.08
-    ty = cy
+    # Inner ring — slightly smaller, dimmer
+    inner_ring_r = outer_r - ring_width * 0.7
+    lw_inner = max(1, int(ring_width * 0.3))
+    draw.ellipse(
+        [cx - inner_ring_r, cy - inner_ring_r,
+         cx + inner_ring_r, cy + inner_ring_r],
+        outline=(*accent_dim, 160),
+        width=lw_inner,
+    )
 
-    pts = [
-        (tx - tri_scale * 0.45, ty - tri_scale * 0.72),  # top-left
-        (tx - tri_scale * 0.45, ty + tri_scale * 0.72),  # bottom-left
-        (tx + tri_scale * 0.80, ty),                      # right tip
-    ]
-    draw.polygon(pts, fill=(240, 245, 255, 255))
+    # --- Aperture blades (6 curved segments between the rings) ---
+    if size >= 32:
+        blade_r = (outer_r + inner_ring_r) / 2
+        blade_count = 6
+        blade_width = max(1, int(ring_width * 0.25))
+        for i in range(blade_count):
+            angle_start = i * (360 / blade_count) + 15
+            angle_end = angle_start + 360 / blade_count - 30
+            arc_r = blade_r
+            draw.arc(
+                [cx - arc_r, cy - arc_r, cx + arc_r, cy + arc_r],
+                angle_start,
+                angle_end,
+                fill=(*accent_bright, 120),
+                width=blade_width,
+            )
 
-    # Play triangle subtle inner highlight
-    inner_scale = tri_scale * 0.6
-    inner_pts = [
-        (tx - inner_scale * 0.42, ty - inner_scale * 0.55),
-        (tx - inner_scale * 0.42, ty - inner_scale * 0.05),
-        (tx + inner_scale * 0.20, ty - inner_scale * 0.28),
-    ]
-    draw.polygon(inner_pts, fill=(255, 255, 255, 50))
+    # --- Center dot (lens center / sensor) ---
+    center_dot_r = max(1, size // 16)
+    draw.ellipse(
+        [cx - center_dot_r, cy - center_dot_r,
+         cx + center_dot_r, cy + center_dot_r],
+        fill=white,
+    )
 
-    # --- Film strip notches (left & right of circle, only at larger sizes) ---
+    # --- AI Sparkle / crosshair (4 small rays from center) ---
+    if size >= 32:
+        ray_len = size * 0.08
+        ray_width = max(1, size // 40)
+        for angle in [0, 90, 180, 270]:
+            rad = math.radians(angle)
+            start_r = center_dot_r + max(1, size // 32)
+            end_r = start_r + ray_len
+            x1 = cx + math.cos(rad) * start_r
+            y1 = cy + math.sin(rad) * start_r
+            x2 = cx + math.cos(rad) * end_r
+            y2 = cy + math.sin(rad) * end_r
+            draw.line([(x1, y1), (x2, y2)], fill=white_soft, width=ray_width)
+
+    # --- Diagonal sparkle rays (45-degree, shorter) ---
     if size >= 48:
-        notch_w = max(2, size // 20)
-        notch_h = max(2, size // 14)
-        notch_gap = size // 10
-        notch_x_left = pad + size // 14
-        notch_x_right = size - pad - size // 14 - notch_w
+        ray_len_diag = size * 0.05
+        ray_width_d = max(1, size // 48)
+        for angle in [45, 135, 225, 315]:
+            rad = math.radians(angle)
+            start_r = center_dot_r + max(1, size // 24)
+            end_r = start_r + ray_len_diag
+            x1 = cx + math.cos(rad) * start_r
+            y1 = cy + math.sin(rad) * start_r
+            x2 = cx + math.cos(rad) * end_r
+            y2 = cy + math.sin(rad) * end_r
+            draw.line([(x1, y1), (x2, y2)], fill=(*accent_bright, 100), width=ray_width_d)
 
-        strip_y_positions = [
-            int(cy - notch_gap),
-            int(cy),
-            int(cy + notch_gap),
-        ]
-        notch_color = (80, 110, 200, 180)
-        for sy in strip_y_positions:
-            # Left notch
-            draw.rectangle(
-                [notch_x_left, sy - notch_h//2,
-                 notch_x_left + notch_w, sy + notch_h//2],
-                fill=notch_color
-            )
-            # Right notch
-            draw.rectangle(
-                [notch_x_right, sy - notch_h//2,
-                 notch_x_right + notch_w, sy + notch_h//2],
-                fill=notch_color
-            )
+    # --- Top-left specular highlight on outer ring ---
+    if size >= 48:
+        spec_angle = math.radians(225)  # top-left
+        spec_cx = cx + math.cos(spec_angle) * outer_r * 0.85
+        spec_cy = cy + math.sin(spec_angle) * outer_r * 0.85
+        spec_r = max(1, size // 18)
+        draw.ellipse(
+            [spec_cx - spec_r, spec_cy - spec_r,
+             spec_cx + spec_r, spec_cy + spec_r],
+            fill=(255, 255, 255, 60),
+        )
 
-    # --- "K" branding text (only at larger sizes) ---
+    # --- "AI" text badge at bottom-right (large sizes only) ---
     if size >= 64:
         try:
             from PIL import ImageFont
-            font_size = max(8, size // 7)
+            font_size = max(7, size // 10)
             try:
                 font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", font_size)
             except Exception:
@@ -176,13 +192,27 @@ def render_icon(size):
                 except Exception:
                     font = ImageFont.load_default()
 
-            # Draw "K" at bottom-right with semi-transparent blue
-            k_x = size - pad - font_size - size // 12
-            k_y = size - pad - font_size - size // 14
-            # Shadow
-            draw.text((k_x + 1, k_y + 1), "K", font=font, fill=(0, 0, 0, 120))
-            # Main text
-            draw.text((k_x, k_y), "K", font=font, fill=(180, 210, 255, 200))
+            # Position at bottom-right corner
+            text = "AI"
+            bbox = font.getbbox(text)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+
+            tx = size - pad - tw - size // 14
+            ty = size - pad - th - size // 12
+
+            # Badge background pill
+            badge_pad = max(2, size // 32)
+            draw_rounded_rect(
+                draw,
+                [tx - badge_pad, ty - badge_pad // 2,
+                 tx + tw + badge_pad, ty + th + badge_pad // 2],
+                max(2, badge_pad),
+                (*accent_dim, 200),
+            )
+
+            # Text
+            draw.text((tx, ty), text, font=font, fill=white)
         except Exception:
             pass
 
@@ -207,9 +237,6 @@ def create_ico(output_path: str = "kling_ui.ico"):
         images.append(img)
 
     print(f"  Saving {output_path}...")
-    # Save largest image as base; append all others.
-    # Do NOT pass sizes= — that makes Pillow rescale from source instead of
-    # preserving our per-size renders.
     base = images[-1]   # 256x256 is the base
     rest = images[:-1]  # [16, 32, 48, 64, 128]
     base.save(
@@ -218,7 +245,6 @@ def create_ico(output_path: str = "kling_ui.ico"):
         append_images=rest,
     )
     print(f"  Done! Icon saved to: {output_path}")
-    # Quick sanity check
     size_bytes = Path(output_path).stat().st_size
     print(f"  File size: {size_bytes:,} bytes")
 
@@ -231,8 +257,6 @@ def create_ico(output_path: str = "kling_ui.ico"):
 
 
 if __name__ == "__main__":
-    import os
-    # Output next to this script
     script_dir = Path(__file__).parent
     ico_path = str(script_dir / "kling_ui.ico")
     create_ico(ico_path)

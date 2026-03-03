@@ -6,10 +6,16 @@ import logging
 import re
 import base64
 import time
+import threading
 from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# BFL polling limits
+BFL_MAX_WAIT_SECONDS = 180  # 3-minute wall-clock cap
+BFL_POLL_INTERVAL = 5
+BFL_MAX_CONSECUTIVE_ERRORS = 5
 
 
 class SelfieGenerator:
@@ -123,9 +129,13 @@ class SelfieGenerator:
         self._freeimage_key = freeimage_key
         self._bfl_api_key = bfl_api_key or ""
         self._progress_callback: Optional[Callable[[str, str], None]] = None
+        self._cancel_event: Optional["threading.Event"] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
         self._progress_callback = cb
+
+    def set_cancel_event(self, event: "threading.Event") -> None:
+        self._cancel_event = event
 
     def _report(self, msg: str, level: str = "info"):
         if self._progress_callback:
@@ -144,12 +154,20 @@ class SelfieGenerator:
         return endpoint
 
     @classmethod
-    def normalize_handoff_identity(cls, payload: Any) -> Optional[Dict[str, str]]:
-        """Normalize Step 1 JSON payload into the expected identity field map."""
+    def normalize_handoff_identity(
+        cls, payload: Any, required_fields: Optional[List[str]] = None
+    ) -> Optional[Dict[str, str]]:
+        """Normalize Step 1 JSON payload into the expected identity field map.
+
+        Args:
+            payload: Parsed JSON dict from Vision analysis.
+            required_fields: If given, validate these fields instead of HANDOFF_JSON_KEYS.
+        """
         if not isinstance(payload, dict):
             return None
+        fields = required_fields or list(cls.HANDOFF_JSON_KEYS)
         normalized: Dict[str, str] = {}
-        for key in cls.HANDOFF_JSON_KEYS:
+        for key in fields:
             value = payload.get(key)
             if value is None:
                 return None
@@ -332,6 +350,9 @@ class SelfieGenerator:
                 return model.get("provider", "fal")
         return "fal"
 
+    def _is_cancelled(self) -> bool:
+        return self._cancel_event is not None and self._cancel_event.is_set()
+
     def _generate_fal_raw(
         self,
         image_path: str,
@@ -345,6 +366,10 @@ class SelfieGenerator:
         actual_seed: int,
     ) -> bool:
         """Run the fal.ai generation pipeline. Returns True on success."""
+        if self._is_cancelled():
+            self._report("Generation cancelled", "warning")
+            return False
+
         from fal_utils import (
             upload_to_freeimage,
             fal_queue_submit,
@@ -392,6 +417,7 @@ class SelfieGenerator:
         final = fal_queue_poll(
             self.api_key, status_url, self._progress_callback,
             max_wait_seconds=120,
+            cancel_event=self._cancel_event,
         )
         if not final:
             self._report("Generation failed or timed out", "error")
@@ -420,6 +446,10 @@ class SelfieGenerator:
         actual_seed: int = -1,
     ) -> bool:
         """Run the BFL (api.bfl.ai) generation pipeline. Returns True on success."""
+        if self._is_cancelled():
+            self._report("Generation cancelled", "warning")
+            return False
+
         import requests
         from PIL import Image
         from io import BytesIO
@@ -499,15 +529,45 @@ class SelfieGenerator:
 
         # Poll for result (BFL status values: Pending, Ready, Error)
         self._report("Waiting for BFL generation...", "progress")
-        max_polls = 120
-        for i in range(max_polls):
-            time.sleep(5)
+        poll_start = time.monotonic()
+        poll_num = 0
+        consecutive_errors = 0
+
+        while True:
+            elapsed_s = int(time.monotonic() - poll_start)
+
+            # Wall-clock timeout
+            if elapsed_s >= BFL_MAX_WAIT_SECONDS:
+                self._report(
+                    f"BFL generation timed out after {elapsed_s}s — model may be overloaded",
+                    "error",
+                )
+                return False
+
+            # Cancellation check
+            if self._is_cancelled():
+                self._report("BFL generation cancelled", "warning")
+                return False
+
+            time.sleep(BFL_POLL_INTERVAL)
+            poll_num += 1
+
             try:
-                poll_resp = requests.get(polling_url, headers={"x-key": self._bfl_api_key}, timeout=30)
+                poll_resp = requests.get(
+                    polling_url, headers={"x-key": self._bfl_api_key}, timeout=30,
+                )
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json()
+                consecutive_errors = 0  # Reset on successful poll
             except Exception as exc:
-                self._report(f"BFL poll error: {exc}", "warning")
+                consecutive_errors += 1
+                self._report(f"BFL poll error ({consecutive_errors}): {exc}", "warning")
+                if consecutive_errors >= BFL_MAX_CONSECUTIVE_ERRORS:
+                    self._report(
+                        f"BFL polling aborted after {consecutive_errors} consecutive errors",
+                        "error",
+                    )
+                    return False
                 continue
 
             status = poll_data.get("status", "")
@@ -526,11 +586,11 @@ class SelfieGenerator:
                 self._report(f"BFL generation failed: {err_msg}", "error")
                 return False
             else:
-                if i % 6 == 0:
-                    self._report(f"BFL status: {status} (poll {i+1})...", "progress")
-
-        self._report("BFL generation timed out", "error")
-        return False
+                if poll_num % 6 == 0:
+                    self._report(
+                        f"BFL status: {status} (poll {poll_num}, {elapsed_s}s elapsed)...",
+                        "progress",
+                    )
 
     def _bfl_download(self, url: str, output_path: str) -> bool:
         """Download a BFL result image to disk."""

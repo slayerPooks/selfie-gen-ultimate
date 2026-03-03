@@ -8,6 +8,7 @@ from typing import Callable
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
+from path_utils import get_gen_images_folder
 
 
 class OutpaintTab(tk.Frame):
@@ -350,7 +351,10 @@ class OutpaintTab(tk.Frame):
 
         output_folder = config.get("output_folder", "")
         if not output_folder or not os.path.isdir(output_folder):
-            output_folder = os.path.dirname(image_path)
+            ref = self.image_session.reference_entry
+            ref_path = ref.path if ref else image_path
+            output_folder = get_gen_images_folder(ref_path)
+        os.makedirs(output_folder, exist_ok=True)
 
         prompt = self.prompt_text.get("1.0", tk.END).strip()
         output_format = self.format_var.get()

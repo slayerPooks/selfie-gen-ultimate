@@ -8,13 +8,6 @@ from typing import Callable, Optional
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
 
-try:
-    from selfie_prompt_composer import DEFAULT_GENDER, DEFAULT_CAMERA_STYLE
-except Exception:
-    DEFAULT_GENDER = "female"
-    DEFAULT_CAMERA_STYLE = "phone_selfie"
-
-
 class PrepTab(tk.Frame):
     """Tab 1: Analyze portrait images using vision AI."""
 
@@ -67,6 +60,7 @@ class PrepTab(tk.Frame):
         self._config_saver = config_saver
         self._selfie_prompt_writer = selfie_prompt_writer
         self._selfie_config_getter = None  # set via set_selfie_config_getter
+        self._notebook_switcher_selfie = None  # set via set_notebook_switcher_selfie
         self._busy = False
         self._prompt_edit_mode = False
         self._last_result = ""
@@ -87,6 +81,10 @@ class PrepTab(tk.Frame):
     def set_selfie_config_getter(self, getter: Callable[[], dict]):
         """Set a getter for live Step 2 composer options (gender, style)."""
         self._selfie_config_getter = getter
+
+    def set_notebook_switcher_selfie(self, switcher: Callable[[], None]):
+        """Set callback to switch notebook to the Selfie tab."""
+        self._notebook_switcher_selfie = switcher
 
     def _resolve_default_vision_prompt(self) -> str:
         """Resolve shared default prompt from VisionAnalyzer when available."""
@@ -339,7 +337,7 @@ class PrepTab(tk.Frame):
 
         self.write_btn = tk.Button(
             write_frame,
-            text="Send to Step 2",
+            text="Send to Selfie Gen \u2192 Custom JSON",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
@@ -471,8 +469,19 @@ class PrepTab(tk.Frame):
             try:
                 from vision_analyzer import VisionAnalyzer
 
+                # If the user hasn't customized the system prompt, auto-generate
+                # it from the Selfie template's {json.FIELD} tags so the Vision
+                # API returns exactly the fields the template needs.
+                effective_prompt = system_prompt
+                if effective_prompt == self._default_vision_prompt:
+                    template_fields = self.get_config().get("selfie_template_fields")
+                    if template_fields and isinstance(template_fields, list):
+                        effective_prompt = VisionAnalyzer.build_json_system_prompt(
+                            template_fields
+                        )
+
                 analyzer = VisionAnalyzer(
-                    api_key, model, system_prompt=system_prompt
+                    api_key, model, system_prompt=effective_prompt
                 )
                 analyzer.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
@@ -511,41 +520,22 @@ class PrepTab(tk.Frame):
         self.log(f"Analysis error: {error}", "error")
 
     def _on_send_to_step2(self):
-        """Compose a selfie prompt from the analysis and send to Step 2."""
+        """Send raw Vision output directly to Step 2.
+
+        SelfieTab.set_prompt() handles JSON parsing and template resolution —
+        no need to wrap via SelfiePromptComposer.
+        """
         description = self.result_text.get("1.0", tk.END).strip()
         if not description:
             return
 
-        # Use live Step 2 widget values if available, else fall back to config
-        if self._selfie_config_getter:
-            live = self._selfie_config_getter()
-            gender = live.get("composer_gender", DEFAULT_GENDER)
-            camera_style = live.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
-        else:
-            gender = self.config.get("composer_gender", DEFAULT_GENDER)
-            camera_style = self.config.get("composer_camera_style", DEFAULT_CAMERA_STYLE)
-
-        try:
-            from selfie_prompt_composer import SelfiePromptComposer
-
-            composer = SelfiePromptComposer()
-            composed = composer.compose(
-                gender=gender,
-                camera_style=camera_style,
-                additional_details=description,
-            )
-        except ImportError:
-            composed = description
-        except Exception as e:
-            self.log(f"Compose error: {e}", "error")
-            composed = description
-
         if self._selfie_prompt_writer:
-            self._selfie_prompt_writer(composed)
-            self.log("Prompt sent to Step 2 (Generate Selfie)", "success")
+            self._selfie_prompt_writer(description)
+            self.log("Prompt sent to Selfie Gen", "success")
+            if self._notebook_switcher_selfie:
+                self._notebook_switcher_selfie()
         else:
-            # Fallback to legacy prompt slot writer
-            self.prompt_writer(composed)
+            self.prompt_writer(description)
             self.log("Prompt written to active slot", "success")
 
     def _set_busy(self, busy: bool):

@@ -11,7 +11,7 @@ from typing import Callable, Optional, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from path_utils import VALID_EXTENSIONS
+from path_utils import VALID_EXTENSIONS, get_gen_images_folder
 
 logger = logging.getLogger(__name__)
 
@@ -581,13 +581,15 @@ class QueueManager:
 
                 # Determine output folder
                 if use_source_folder:
-                    actual_output = item.source_folder
-                    self.log_verbose(f"  Output: source folder", "debug")
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
+                    self.log_verbose(f"  Output: gen-images/", "debug")
                 elif not output_folder or not os.path.isdir(output_folder):
-                    # Custom folder selected but not set or invalid - use source folder
-                    actual_output = item.source_folder
+                    # Custom folder selected but not set or invalid - use gen-images/
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
                     self.log(
-                        f"No valid output folder set - saving to source folder",
+                        f"No valid output folder set - saving to gen-images/",
                         "warning",
                     )
                 else:
@@ -680,7 +682,7 @@ class QueueManager:
                     actual_output,
                     prompt,
                     negative_prompt,
-                    use_source_folder,
+                    False,  # always False — we already computed gen-images/ path
                     custom_output_path,
                     skip_duplicate_check=skip_check,
                     video_duration=video_duration,

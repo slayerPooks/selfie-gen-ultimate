@@ -90,7 +90,7 @@ class CropPolisher:
             return False
 
         payload = {
-            "image_url": image_url,
+            "image_urls": [image_url],
             "prompt": prompt,
             "num_images": 1,
             "output_format": "png",
