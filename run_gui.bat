@@ -1,38 +1,58 @@
 @echo off
-setlocal
-:: ============================================================
-::  Kling UI - GUI Launcher
-::  Launches gui_launcher.py with venv python if available,
-::  falls back to system python.
-:: ============================================================
+setlocal enabledelayedexpansion
 
-set BATCH_DIR=%~dp0
-set GUI_SCRIPT=%BATCH_DIR%gui_launcher.py
-set VENV_PYTHON=%BATCH_DIR%venv\Scripts\python.exe
+set "BATCH_DIR=%~dp0"
+set "GUI_SCRIPT=%BATCH_DIR%gui_launcher.py"
+set "VENV_DIR=%BATCH_DIR%venv"
+set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
+set "REQUIREMENTS=%BATCH_DIR%requirements.txt"
 
-:: Prefer venv python, fall back to system python
-if exist "%VENV_PYTHON%" (
-    set PYTHON=%VENV_PYTHON%
-    echo Using venv python: %VENV_PYTHON%
-) else (
-    set PYTHON=python
-    echo venv not found, using system python.
-    echo Run run_kling_ui.bat first if you need dependencies installed.
+if exist "%VENV_PYTHON%" goto :launch
+
+echo.
+echo  Creating virtual environment...
+echo.
+python -m venv "%VENV_DIR%"
+if !errorlevel! neq 0 (
+    echo.
+    echo  ERROR: Failed to create venv. Is Python installed and on PATH?
+    echo.
+    pause
+    exit /b 1
+)
+echo  venv created.
+echo.
+
+echo  Installing dependencies from requirements.txt...
+echo.
+"%VENV_PYTHON%" -m pip install --upgrade pip >nul 2>&1
+"%VENV_PYTHON%" -m pip install --only-binary :all: -r "%REQUIREMENTS%"
+if !errorlevel! neq 0 (
+    echo.
+    echo  Retrying without binary constraint...
+    "%VENV_PYTHON%" -m pip install -r "%REQUIREMENTS%"
 )
 
+echo.
+echo  Installing optional face analysis dependencies...
+"%VENV_PYTHON%" -m pip install retina-face >nul 2>&1
+
+echo.
+echo  Setup complete!
+echo.
+
+:launch
+echo Using venv: %VENV_PYTHON%
 echo Starting Kling UI GUI...
 echo.
 
-"%PYTHON%" -u "%GUI_SCRIPT%"
-set EXIT_CODE=%errorlevel%
+"%VENV_PYTHON%" -u "%GUI_SCRIPT%"
+set "EXIT_CODE=!errorlevel!"
 
 echo.
-if %EXIT_CODE% neq 0 (
-    echo ============================================
-    echo   CRASH  ^(exit code: %EXIT_CODE%^)
-    echo ============================================
-    echo.
-    echo Check crash_log.txt in this folder for details.
+if !EXIT_CODE! neq 0 (
+    echo  CRASH - exit code: !EXIT_CODE!
+    echo  Check crash_log.txt for details.
     echo.
 )
 
