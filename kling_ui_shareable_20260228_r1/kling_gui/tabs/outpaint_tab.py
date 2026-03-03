@@ -8,6 +8,7 @@ from typing import Callable
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
+from path_utils import get_gen_images_folder
 
 
 class OutpaintTab(tk.Frame):
@@ -32,121 +33,197 @@ class OutpaintTab(tk.Frame):
         self._build_ui()
 
     def _build_ui(self):
-        # Expansion settings
-        expand_frame = tk.LabelFrame(
+        # ── Expand Mode Toggle ──────────────────────────────────────────
+        mode_frame = tk.LabelFrame(
             self,
-            text="Expansion (pixels)",
+            text="Expand Mode",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        expand_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        mode_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
 
-        grid = tk.Frame(expand_frame, bg=COLORS["bg_panel"])
-        grid.pack(fill=tk.X, padx=5, pady=5)
+        mode_row = tk.Frame(mode_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=5, pady=5)
 
-        # Top
+        self._expand_mode_var = tk.StringVar(
+            value=self.config.get("outpaint_expand_mode", "percentage")
+        )
+        tk.Radiobutton(
+            mode_row,
+            text="Percentage (simple)",
+            variable=self._expand_mode_var,
+            value="percentage",
+            command=self._on_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+        tk.Radiobutton(
+            mode_row,
+            text="Pixels (manual L/R/T/B)",
+            variable=self._expand_mode_var,
+            value="pixels",
+            command=self._on_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(15, 0))
+
+        # ── Percentage Controls ─────────────────────────────────────────
+        self._pct_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+
+        pct_row = tk.Frame(self._pct_frame, bg=COLORS["bg_panel"])
+        pct_row.pack(fill=tk.X, padx=10, pady=(2, 0))
+
         tk.Label(
-            grid,
-            text="Top:",
+            pct_row,
+            text="Expand all sides by:",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=0, column=0, sticky="w")
-        self.top_var = tk.IntVar(
-            value=self.config.get("outpaint_expand_top", 140)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.top_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=0, column=1, padx=5, pady=2)
+        ).pack(side=tk.LEFT)
 
-        # Bottom
+        self._pct_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_percentage", 30)
+        )
+        self._pct_scale = tk.Scale(
+            pct_row,
+            from_=5,
+            to=100,
+            resolution=5,
+            orient=tk.HORIZONTAL,
+            variable=self._pct_var,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            troughcolor=COLORS["bg_input"],
+            highlightthickness=0,
+            length=200,
+            font=(FONT_FAMILY, 8),
+        )
+        self._pct_scale.pack(side=tk.LEFT, padx=(5, 0))
+
         tk.Label(
-            grid,
-            text="Bottom:",
+            pct_row,
+            text="%",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=0, column=2, sticky="w")
-        self.bottom_var = tk.IntVar(
-            value=self.config.get("outpaint_expand_bottom", 140)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.bottom_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=0, column=3, padx=5, pady=2)
+        ).pack(side=tk.LEFT)
 
-        # Left
+        # Quick preset buttons for percentage
+        pct_presets = tk.Frame(self._pct_frame, bg=COLORS["bg_panel"])
+        pct_presets.pack(fill=tk.X, padx=10, pady=(2, 5))
+
         tk.Label(
-            grid,
-            text="Left:",
-            font=(FONT_FAMILY, 9),
+            pct_presets,
+            text="Presets:",
+            font=(FONT_FAMILY, 8),
             bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=1, column=0, sticky="w")
-        self.left_var = tk.IntVar(
-            value=self.config.get("outpaint_expand_left", 140)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.left_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=1, padx=5, pady=2)
+            fg=COLORS["text_dim"],
+        ).pack(side=tk.LEFT, padx=(0, 4))
 
-        # Right
-        tk.Label(
-            grid,
-            text="Right:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=1, column=2, sticky="w")
-        self.right_var = tk.IntVar(
-            value=self.config.get("outpaint_expand_right", 140)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.right_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=3, padx=5, pady=2)
-
-        # Preset buttons
-        uniform_frame = tk.Frame(expand_frame, bg=COLORS["bg_panel"])
-        uniform_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
-
-        for px, text in [(70, "70px"), (140, "140px"), (280, "280px")]:
+        for pct in [10, 20, 30, 50, 75]:
+            label = f"{pct}%"
+            if pct == 30:
+                label = "30% (default)"
             tk.Button(
-                uniform_frame,
-                text=text,
+                pct_presets,
+                text=label,
                 font=(FONT_FAMILY, 8),
                 bg=COLORS["bg_input"],
                 fg=COLORS["text_light"],
-                command=lambda p=px: self._set_uniform(p),
+                command=lambda p=pct: self._pct_var.set(p),
                 cursor="hand2",
                 relief=tk.FLAT,
                 padx=6,
             ).pack(side=tk.LEFT, padx=2)
 
-        # Prompt (optional)
+        # ── Pixels Controls ─────────────────────────────────────────────
+        self._px_frame = tk.LabelFrame(
+            self,
+            text="Expansion (pixels per side)",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+
+        grid = tk.Frame(self._px_frame, bg=COLORS["bg_panel"])
+        grid.pack(fill=tk.X, padx=5, pady=5)
+
+        # Top
+        tk.Label(
+            grid, text="Top:", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).grid(row=0, column=0, sticky="w")
+        self.top_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_top", 140)
+        )
+        tk.Entry(
+            grid, textvariable=self.top_var, width=6,
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], font=(FONT_FAMILY, 9),
+        ).grid(row=0, column=1, padx=5, pady=2)
+
+        # Bottom
+        tk.Label(
+            grid, text="Bottom:", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).grid(row=0, column=2, sticky="w")
+        self.bottom_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_bottom", 140)
+        )
+        tk.Entry(
+            grid, textvariable=self.bottom_var, width=6,
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], font=(FONT_FAMILY, 9),
+        ).grid(row=0, column=3, padx=5, pady=2)
+
+        # Left
+        tk.Label(
+            grid, text="Left:", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).grid(row=1, column=0, sticky="w")
+        self.left_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_left", 140)
+        )
+        tk.Entry(
+            grid, textvariable=self.left_var, width=6,
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], font=(FONT_FAMILY, 9),
+        ).grid(row=1, column=1, padx=5, pady=2)
+
+        # Right
+        tk.Label(
+            grid, text="Right:", font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).grid(row=1, column=2, sticky="w")
+        self.right_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_right", 140)
+        )
+        tk.Entry(
+            grid, textvariable=self.right_var, width=6,
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"], font=(FONT_FAMILY, 9),
+        ).grid(row=1, column=3, padx=5, pady=2)
+
+        # Pixel preset buttons
+        uniform_frame = tk.Frame(self._px_frame, bg=COLORS["bg_panel"])
+        uniform_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+        for px, text in [(70, "70px"), (140, "140px"), (280, "280px"), (500, "500px")]:
+            tk.Button(
+                uniform_frame, text=text, font=(FONT_FAMILY, 8),
+                bg=COLORS["bg_input"], fg=COLORS["text_light"],
+                command=lambda p=px: self._set_uniform(p),
+                cursor="hand2", relief=tk.FLAT, padx=6,
+            ).pack(side=tk.LEFT, padx=2)
+
+        # ── Prompt (optional) ───────────────────────────────────────────
         prompt_frame = tk.LabelFrame(
             self,
             text="Guidance Prompt (optional)",
@@ -158,7 +235,7 @@ class OutpaintTab(tk.Frame):
 
         self.prompt_text = tk.Text(
             prompt_frame,
-            height=2,
+            height=3,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -172,29 +249,24 @@ class OutpaintTab(tk.Frame):
             "1.0", self.config.get("outpaint_prompt", "")
         )
 
-        # Output format
+        # ── Output format ───────────────────────────────────────────────
         fmt_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         fmt_frame.pack(fill=tk.X, padx=10, pady=5)
 
         tk.Label(
-            fmt_frame,
-            text="Output Format:",
+            fmt_frame, text="Output Format:",
             font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
         self.format_var = tk.StringVar(
             value=self.config.get("outpaint_format", "png")
         )
         ttk.Combobox(
-            fmt_frame,
-            textvariable=self.format_var,
-            values=["png", "jpg"],
-            state="readonly",
-            width=6,
+            fmt_frame, textvariable=self.format_var,
+            values=["png", "jpg"], state="readonly", width=6,
         ).pack(side=tk.LEFT, padx=5)
 
-        # Expand button
+        # ── Expand button ───────────────────────────────────────────────
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
@@ -203,7 +275,7 @@ class OutpaintTab(tk.Frame):
             text="Expand Image",
             font=(FONT_FAMILY, 11, "bold"),
             bg=COLORS["accent_blue"],
-            fg="white",
+            fg="#111111",
             command=self._on_expand,
             cursor="hand2",
             relief=tk.FLAT,
@@ -213,23 +285,54 @@ class OutpaintTab(tk.Frame):
         self.expand_btn.pack(side=tk.LEFT)
 
         self.status_label = tk.Label(
-            btn_frame,
-            text="",
+            btn_frame, text="",
             font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
+            bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
 
+        # Apply initial mode visibility
+        self._apply_mode_ui()
+
+    # ── Mode switching ──────────────────────────────────────────────────
+
+    def _on_mode_changed(self):
+        self._apply_mode_ui()
+        mode = self._expand_mode_var.get()
+        label = "Percentage" if mode == "percentage" else "Pixels"
+        self.log(f"Expand mode: {label}", "info")
+
+    def _apply_mode_ui(self):
+        if self._expand_mode_var.get() == "percentage":
+            self._px_frame.pack_forget()
+            self._pct_frame.pack(fill=tk.X, padx=0, pady=0)
+        else:
+            self._pct_frame.pack_forget()
+            self._px_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+
     def _set_uniform(self, px: int):
         """Set all expansion values uniformly."""
-        for var in [
-            self.top_var,
-            self.bottom_var,
-            self.left_var,
-            self.right_var,
-        ]:
+        for var in [self.top_var, self.bottom_var, self.left_var, self.right_var]:
             var.set(px)
+
+    # ── Percentage → pixel calculation ──────────────────────────────────
+
+    @staticmethod
+    def _calculate_expand_pixels(
+        image_path: str, percentage: int,
+    ) -> tuple:
+        """Calculate L/R/T/B pixel expansion from image dimensions and %."""
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            width, height = img.size
+
+        pct = percentage / 100.0
+        lr = min(700, int(width * pct))
+        tb = min(700, int(height * pct))
+        return lr, lr, tb, tb  # left, right, top, bottom
+
+    # ── Generation ──────────────────────────────────────────────────────
 
     def _on_expand(self):
         if self._busy:
@@ -248,29 +351,51 @@ class OutpaintTab(tk.Frame):
 
         output_folder = config.get("output_folder", "")
         if not output_folder or not os.path.isdir(output_folder):
-            output_folder = os.path.dirname(image_path)
+            ref = self.image_session.reference_entry
+            ref_path = ref.path if ref else image_path
+            output_folder = get_gen_images_folder(ref_path)
+        os.makedirs(output_folder, exist_ok=True)
 
         prompt = self.prompt_text.get("1.0", tk.END).strip()
-
-        # Read numeric vars BEFORE setting busy — .get() raises TclError
-        # if the entry contains non-numeric text.
-        try:
-            expand_left = self.left_var.get()
-            expand_right = self.right_var.get()
-            expand_top = self.top_var.get()
-            expand_bottom = self.bottom_var.get()
-        except (tk.TclError, ValueError):
-            self.log("Invalid numeric value in expand settings", "error")
-            return
-
         output_format = self.format_var.get()
+        mode = self._expand_mode_var.get()
+
+        if mode == "percentage":
+            try:
+                pct = self._pct_var.get()
+            except (tk.TclError, ValueError):
+                self.log("Invalid percentage value", "error")
+                return
+            try:
+                expand_left, expand_right, expand_top, expand_bottom = (
+                    self._calculate_expand_pixels(image_path, pct)
+                )
+            except Exception as e:
+                self.log(f"Could not read image dimensions: {e}", "error")
+                return
+            self.log(
+                f"Expanding {pct}% → L={expand_left} R={expand_right} "
+                f"T={expand_top} B={expand_bottom} px",
+                "debug",
+            )
+        else:
+            try:
+                expand_left = self.left_var.get()
+                expand_right = self.right_var.get()
+                expand_top = self.top_var.get()
+                expand_bottom = self.bottom_var.get()
+            except (tk.TclError, ValueError):
+                self.log("Invalid numeric value in expand settings", "error")
+                return
+
         self._set_busy(True)
 
         def _run():
             try:
                 from outpaint_generator import OutpaintGenerator
 
-                gen = OutpaintGenerator(api_key)
+                freeimage_key = self.get_config().get("freeimage_api_key")
+                gen = OutpaintGenerator(api_key, freeimage_key=freeimage_key)
                 gen.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)
@@ -324,6 +449,8 @@ class OutpaintTab(tk.Frame):
 
     def get_config_updates(self) -> dict:
         return {
+            "outpaint_expand_mode": self._expand_mode_var.get(),
+            "outpaint_expand_percentage": self._pct_var.get(),
             "outpaint_expand_left": self.left_var.get(),
             "outpaint_expand_right": self.right_var.get(),
             "outpaint_expand_top": self.top_var.get(),

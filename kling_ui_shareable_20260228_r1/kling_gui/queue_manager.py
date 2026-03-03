@@ -11,36 +11,45 @@ from typing import Callable, Optional, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from path_utils import VALID_EXTENSIONS
+from path_utils import VALID_EXTENSIONS, get_gen_images_folder
 
 logger = logging.getLogger(__name__)
 
 
 def _model_short_from_endpoint(endpoint: str) -> str:
-    """Derive model short name using the same mapping logic as generator."""
+    """Derive model short name using the same mapping logic as generator.
+
+    Each model variant (pro/standard/master) gets a distinct name so filenames
+    are unambiguous.  E.g. k25tPro vs k25tStd for 2.5 Turbo Pro vs Standard.
+    """
     endpoint = (endpoint or "").lower()
     if not endpoint:
         return "model"
 
+    def _tier(ep: str) -> str:
+        if "/master/" in ep or ep.endswith("/master"):
+            return "Master"
+        if "/standard/" in ep or ep.endswith("/standard"):
+            return "Std"
+        return "Pro"
+
     if "kling" in endpoint:
         if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
             return "k30pro" if "pro" in endpoint else "k30std"
-        if "v2.6" in endpoint:
-            return "k26pro"
         if "v2.5-turbo" in endpoint or "v2.5/turbo" in endpoint or "v2.5turbo" in endpoint:
-            return "k25turbo"
+            return f"k25t{_tier(endpoint)}"
+        if "v2.6" in endpoint:
+            return f"k26{_tier(endpoint).lower()}"
         if "v2.5" in endpoint:
             return "k25"
-        if "v2.1/master" in endpoint:
-            return "k21master"
         if "v2.1" in endpoint:
-            return "k21pro"
-        if "v2/master" in endpoint:
-            return "k20master"
+            return f"k21{_tier(endpoint).lower()}"
+        if "v2/" in endpoint or endpoint.endswith("/v2"):
+            return f"k20{_tier(endpoint).lower()}"
         if "v1.6" in endpoint:
-            return "k16"
+            return f"k16{_tier(endpoint).lower()}"
         if "v1.5" in endpoint:
-            return "k15"
+            return f"k15{_tier(endpoint).lower()}"
         if "o1" in endpoint:
             return "kO1"
         return "kling"
@@ -572,13 +581,15 @@ class QueueManager:
 
                 # Determine output folder
                 if use_source_folder:
-                    actual_output = item.source_folder
-                    self.log_verbose(f"  Output: source folder", "debug")
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
+                    self.log_verbose("  Output: gen-images/", "debug")
                 elif not output_folder or not os.path.isdir(output_folder):
-                    # Custom folder selected but not set or invalid - use source folder
-                    actual_output = item.source_folder
+                    # Custom folder selected but not set or invalid - use gen-images/
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
                     self.log(
-                        f"No valid output folder set - saving to source folder",
+                        "No valid output folder set - saving to gen-images/",
                         "warning",
                     )
                 else:
@@ -671,7 +682,7 @@ class QueueManager:
                     actual_output,
                     prompt,
                     negative_prompt,
-                    use_source_folder,
+                    False,  # always False — we already computed gen-images/ path
                     custom_output_path,
                     skip_duplicate_check=skip_check,
                     video_duration=video_duration,

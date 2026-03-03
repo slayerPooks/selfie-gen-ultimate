@@ -2,6 +2,9 @@
 
 from typing import Optional, List
 
+DEFAULT_GENDER = "female"
+DEFAULT_CAMERA_STYLE = "phone_selfie"
+
 
 # Camera/pose styles
 CAMERA_STYLES = {
@@ -55,8 +58,8 @@ class SelfiePromptComposer:
 
     def compose(
         self,
-        gender: str = "female",
-        camera_style: str = "phone_selfie",
+        gender: str = DEFAULT_GENDER,
+        camera_style: str = DEFAULT_CAMERA_STYLE,
         background: Optional[str] = None,
         lighting: Optional[str] = None,
         additional_details: str = "",

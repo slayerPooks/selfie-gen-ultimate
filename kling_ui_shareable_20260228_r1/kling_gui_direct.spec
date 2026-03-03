@@ -36,6 +36,8 @@ hiddenimports = [
     'kling_gui.log_display',
     'kling_gui.queue_manager',
     'kling_gui.video_looper',
+    'kling_gui.theme',
+    'kling_gui.model_manager_dialog',
 
     # Tkinter
     'tkinter',
@@ -109,6 +111,11 @@ if Path(ICON_PATH).exists():
 template_path = str(SPEC_DIR / 'default_config_template.json')
 if Path(template_path).exists():
     datas.append((template_path, '.'))
+
+# models.json (model list — editable by user, bundled as default)
+models_json_path = str(SPEC_DIR / 'models.json')
+if Path(models_json_path).exists():
+    datas.append((models_json_path, '.'))
 
 # -----------------------------------------------------------------------
 # Analysis

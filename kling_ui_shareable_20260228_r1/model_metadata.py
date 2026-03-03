@@ -2,53 +2,88 @@
 Shared model metadata for video generation models.
 
 The model list is loaded from models.json (next to this file) so it can be
-updated without touching source code.  Falls back to a hardcoded list only
-when models.json is missing.
+updated without touching source code.  Supports two formats:
+  - New (endpoint-only): models list contains endpoint strings
+  - Legacy (dict): models list contains dicts with name, endpoint, etc.
+Falls back to a hardcoded list only when models.json is missing.
 """
 
 import json
 import os
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Vague API names — these are too generic to show in the dropdown.
+# When the API returns one of these, we prefer the curated name from models.json.
+# ---------------------------------------------------------------------------
+_VAGUE_NAMES = frozenset({"kling video", "minimax video", "hunyuan video"})
 
 # ---------------------------------------------------------------------------
 # Hardcoded fallback — used ONLY when models.json is missing
 # ---------------------------------------------------------------------------
 _FALLBACK_MODELS = [
-    {
-        "name": "Kling 2.5 Turbo Pro",
-        "endpoint": "fal-ai/kling-video/v2.5/turbo-pro/image-to-video",
-        "duration_options": [5, 10],
-        "duration_default": 5,
-        "description": "Fast turbo video generation",
-    },
-    {
-        "name": "Kling 2.1 Professional",
-        "endpoint": "fal-ai/kling-video/v2.1/pro/image-to-video",
-        "duration_options": [5, 10],
-        "duration_default": 5,
-        "description": "Professional quality video generation",
-    },
-    {
-        "name": "Hunyuan Video (Base)",
-        "endpoint": "fal-ai/hunyuan-video/image-to-video",
-        "duration_options": [5, 10],
-        "duration_default": 5,
-        "description": "Tencent Hunyuan video model",
-    },
-    {
-        "name": "MiniMax Video (Base)",
-        "endpoint": "fal-ai/minimax-video/image-to-video",
-        "duration_options": [6],
-        "duration_default": 6,
-        "description": "MiniMax video generation",
-    },
+    {"name": "Kling v2.5 Turbo Pro", "endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "duration_default": 10},
+    {"name": "MiniMax Video", "endpoint": "fal-ai/minimax-video/image-to-video", "duration_default": 10},
 ]
+
+
+def _endpoint_to_short_name(endpoint: str) -> str:
+    """Derive a readable display name from endpoint string as offline fallback.
+
+    Examples:
+        fal-ai/kling-video/v3/pro/image-to-video → Kling Video v3 Pro
+        fal-ai/minimax-video/image-to-video → MiniMax Video
+        fal-ai/hunyuan-video/v1.5/image-to-video → Hunyuan Video v1.5
+    """
+    if not endpoint:
+        return "Unknown Model"
+
+    # Remove prefix/suffix
+    parts = (
+        endpoint.replace("fal-ai/", "")
+        .replace("/image-to-video", "")
+        .replace("/video-to-video", "")
+    )
+
+    components = [p for p in parts.split("/") if p]
+    if not components:
+        return endpoint
+
+    display_parts = []
+    for comp in components:
+        cleaned = comp.replace("-", " ").replace("_", " ")
+        # Version number: keep lowercase v, capitalize rest
+        if re.match(r"^v\d", cleaned):
+            # e.g. "v2.5 turbo" → "v2.5 Turbo"
+            sub_parts = cleaned.split()
+            result = sub_parts[0]  # keep version as-is
+            for sp in sub_parts[1:]:
+                result += " " + sp.title()
+            display_parts.append(result)
+        elif cleaned.lower() == "o1":
+            display_parts.append("O1")
+        else:
+            display_parts.append(cleaned.title())
+
+    name = " ".join(display_parts)
+
+    # Fix common brand capitalization
+    name = name.replace("Minimax", "MiniMax")
+    name = name.replace("Kling Video", "Kling Video")
+    name = name.replace("Hunyuan Video", "Hunyuan Video")
+
+    return name.strip()
 
 
 def _load_models_from_file() -> list:
     """Load model list from models.json next to this file.
+
+    Handles two formats:
+      - New: models is a list of endpoint strings
+      - Legacy: models is a list of dicts with name + endpoint
 
     Returns the models list on success, or _FALLBACK_MODELS if the file is
     missing, malformed, or empty.
@@ -61,17 +96,40 @@ def _load_models_from_file() -> list:
     try:
         with open(models_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        models = data.get("models", [])
-        if not models:
+        models_raw = data.get("models", [])
+        user_notes = data.get("user_notes", {})
+
+        if not models_raw:
             logger.warning("models.json has no 'models' list — using fallback")
             return _FALLBACK_MODELS
-        # Validate minimum required fields
-        valid = [m for m in models if m.get("name") and m.get("endpoint")]
-        if not valid:
+
+        models = []
+        for entry in models_raw:
+            if isinstance(entry, str):
+                # Endpoint-only string (e.g. browse-added models)
+                models.append({
+                    "name": _endpoint_to_short_name(entry),
+                    "endpoint": entry,
+                    "user_notes": user_notes.get(entry, ""),
+                })
+            elif isinstance(entry, dict):
+                # Dict with name + endpoint (+ optional release, notes, etc.)
+                if entry.get("endpoint"):
+                    ep = entry["endpoint"]
+                    # Derive name from endpoint if not provided
+                    if not entry.get("name"):
+                        entry["name"] = _endpoint_to_short_name(ep)
+                    # Carry over user_notes from the map
+                    if ep in user_notes and "user_notes" not in entry:
+                        entry["user_notes"] = user_notes[ep]
+                    models.append(entry)
+
+        if not models:
             logger.warning("models.json has no valid entries — using fallback")
             return _FALLBACK_MODELS
-        logger.debug("Loaded %d models from models.json", len(valid))
-        return valid
+
+        logger.debug("Loaded %d models from models.json", len(models))
+        return models
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to load models.json (%s) — using fallback", exc)
         return _FALLBACK_MODELS
@@ -90,21 +148,55 @@ MODEL_METADATA = _load_models_from_file()
 def get_model_display_name(model: dict) -> str:
     """Build the dropdown label for a model.
 
-    Format (when release/cost are available):
-        "Kling 3.0 Pro (Feb 2026), ~$2.80"
+    Name priority:
+      1. model["name"] — user-curated from models.json (always preferred)
+      2. model["api_display_name"] — but ONLY if not vague
+      3. _endpoint_to_short_name() — offline fallback
 
-    Falls back gracefully when those fields are absent (e.g. API-fetched models).
+    Pricing priority:
+      1. model["pricing_info"] from live API → "$X.XX/10s"
+      2. model["est_cost_10s"] legacy → "~$X.XX"
+
+    Examples:
+        "Kling 3.0 Pro (Feb 2026), $2.24/10s"
+        "Kling 3.0 Pro (Feb 2026)"
+        "MiniMax Video (2024), $0.50/video"
     """
-    name = model.get("name", "Unknown Model")
-    release = model.get("release", "")
-    cost = model.get("est_cost_10s", "")
+    # Name: prefer models.json name, fall back to non-vague API name, then offline
+    name = model.get("name", "")
+    if not name:
+        api_name = model.get("api_display_name", "")
+        if api_name and api_name.strip().lower() not in _VAGUE_NAMES:
+            name = api_name
+        else:
+            name = _endpoint_to_short_name(model.get("endpoint", ""))
 
-    if release and cost:
-        return f"{name} ({release}), ~{cost}"
+    release = model.get("release", "")
+
+    # Pricing: prefer live API, fall back to est_cost_10s
+    cost_str = ""
+    pricing = model.get("pricing_info", {})
+    if pricing and pricing.get("unit_price"):
+        unit = pricing.get("unit", "")
+        price = pricing["unit_price"]
+        if unit == "second":
+            cost_str = f"${price * 10:.2f}/10s"
+        elif unit == "video":
+            cost_str = f"${price:.2f}/video"
+        elif unit == "image":
+            cost_str = f"${price:.2f}/image"
+        else:
+            cost_str = f"${price:.2f}/{unit}" if unit else f"${price:.2f}"
+    elif model.get("est_cost_10s"):
+        cost_str = f"~{model['est_cost_10s']}"
+
+    # Assemble: "Name (release), cost"
+    if release and cost_str:
+        return f"{name} ({release}), {cost_str}"
     if release:
         return f"{name} ({release})"
-    if cost:
-        return f"{name}, ~{cost}"
+    if cost_str:
+        return f"{name}, {cost_str}"
     return name
 
 
@@ -112,7 +204,7 @@ def get_model_display_name(model: dict) -> str:
 # Convenience lookups (unchanged API)
 # ---------------------------------------------------------------------------
 
-def get_model_by_endpoint(endpoint: str) -> dict:
+def get_model_by_endpoint(endpoint: str):
     """Return a copy of the model dict matching `endpoint`, or None."""
     for model in MODEL_METADATA:
         if model.get("endpoint") == endpoint:
@@ -132,5 +224,33 @@ def get_duration_default(endpoint: str) -> int:
     """Default duration (seconds) for the given endpoint."""
     model = get_model_by_endpoint(endpoint)
     if model:
-        return model.get("duration_default", 5)
-    return 5
+        return model.get("duration_default", 10)
+    return 10
+
+
+# ---------------------------------------------------------------------------
+# Prompt length limits (from fal.ai OpenAPI schemas)
+# ---------------------------------------------------------------------------
+
+# Pattern-based limits: (substring_in_endpoint, max_chars)
+_PROMPT_LIMITS = [
+    ("minimax", 2000),
+    ("kling-video/v3", None),     # v3 has no documented limit
+    ("kling-video", 2500),        # v2.x / v1.x / O1
+    ("hunyuan", 2500),            # not in schema but safe default
+]
+
+# Default fallback
+_DEFAULT_PROMPT_LIMIT = 2500
+
+
+def get_prompt_limit(endpoint: str) -> int:
+    """Return the maximum prompt length (chars) for the given model endpoint.
+
+    Falls back to _DEFAULT_PROMPT_LIMIT (2500) for unknown models.
+    """
+    ep = endpoint.lower()
+    for pattern, limit in _PROMPT_LIMITS:
+        if pattern in ep:
+            return limit
+    return _DEFAULT_PROMPT_LIMIT

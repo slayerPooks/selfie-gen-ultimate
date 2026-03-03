@@ -13,8 +13,9 @@ class OutpaintGenerator:
 
     ENDPOINT = "fal-ai/image-apps-v2/outpaint"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, freeimage_key: Optional[str] = None):
         self.api_key = api_key
+        self._freeimage_key = freeimage_key
         self._progress_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
@@ -60,7 +61,8 @@ class OutpaintGenerator:
         # Upload image (use higher max_size for outpainting — preserve more detail)
         self._report("Uploading image for outpainting...", "upload")
         image_url = upload_to_freeimage(
-            image_path, max_size=2048, progress_cb=self._progress_callback
+            image_path, max_size=2048, progress_cb=self._progress_callback,
+            api_key=self._freeimage_key,
         )
         if not image_url:
             self._report("Failed to upload image", "error")

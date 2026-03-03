@@ -2,6 +2,7 @@
 
 import os
 import time
+import threading
 import requests
 import logging
 from pathlib import Path
@@ -14,8 +15,24 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
-# Freeimage.host API key — read from environment only
+# Freeimage.host API key from environment (optional)
 _FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
+
+
+def _extract_http_error_detail(resp: requests.Response, limit: int = 500) -> str:
+    """Return a readable error detail from an HTTP response."""
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            if "detail" in data:
+                return str(data["detail"])[:limit]
+            if "error" in data:
+                return str(data["error"])[:limit]
+            if "message" in data:
+                return str(data["message"])[:limit]
+        return str(data)[:limit]
+    except Exception:
+        return (resp.text or "").strip()[:limit]
 
 
 def upload_to_freeimage(
@@ -150,9 +167,13 @@ def fal_queue_submit(
                 return None
 
             elif response.status_code != 200:
-                logger.error("Queue submit failed: %s — %s", response.status_code, response.text)
+                detail = _extract_http_error_detail(response)
+                logger.error("Queue submit failed: %s — %s", response.status_code, detail)
                 if progress_cb:
-                    progress_cb(f"Submit failed: HTTP {response.status_code}", "error")
+                    progress_cb(
+                        f"Submit failed: HTTP {response.status_code} — {detail}",
+                        "error",
+                    )
                 if attempt < max_retries - 1:
                     time.sleep(5)
                     continue
@@ -209,6 +230,8 @@ def fal_queue_poll(
     api_key: str,
     status_url: str,
     progress_cb: ProgressCallback = None,
+    max_wait_seconds: int = 600,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Optional[dict]:
     """Poll fal.ai queue until completion.
 
@@ -216,7 +239,13 @@ def fal_queue_poll(
       - First 2 min: 5 s polls
       - Next 3 min: 10 s polls
       - After 5 min: 15 s polls
-    Max wait: 20 minutes (240 attempts at 5 s base).
+
+    Args:
+        max_wait_seconds: Maximum wall-clock seconds to poll before giving up.
+            Default 600 (10 min) for video gen.  Callers doing image gen
+            should pass a shorter value (e.g. 120 s).
+        cancel_event: Optional threading.Event checked before each sleep.
+            If set, polling returns None immediately.
 
     Returns the final result dict (output/data/images key) or None on failure.
     """
@@ -228,6 +257,24 @@ def fal_queue_poll(
     start_time = time.monotonic()
 
     for attempt in range(1, max_attempts + 1):
+        # Hard wall-clock timeout
+        elapsed_s = time.monotonic() - start_time
+        if elapsed_s >= max_wait_seconds:
+            elapsed_min = int(elapsed_s / 60)
+            logger.error("Polling timed out after %d s (%d min)", int(elapsed_s), elapsed_min)
+            if progress_cb:
+                progress_cb(
+                    f"Timed out after {int(elapsed_s)}s — model may be unavailable or overloaded",
+                    "error",
+                )
+            return None
+
+        # Cancellation check
+        if cancel_event is not None and cancel_event.is_set():
+            if progress_cb:
+                progress_cb("Generation cancelled", "warning")
+            return None
+
         # Backoff schedule
         if attempt <= 24:
             delay = base_delay
@@ -245,7 +292,7 @@ def fal_queue_poll(
                 progress_cb(f"Still waiting... {elapsed} min elapsed", "progress")
 
         try:
-            resp = requests.get(status_url, headers=status_headers, timeout=30)
+            resp = _get_with_auth_fallback(status_url, status_headers, timeout=30)
 
             if resp.status_code == 404:
                 logger.error("Job not found (404) — request may have expired")
@@ -270,6 +317,16 @@ def fal_queue_poll(
 
             elif resp.status_code not in (200, 202):
                 consecutive_errors += 1
+                detail = _extract_http_error_detail(resp)
+                logger.warning(
+                    "Polling returned HTTP %s (attempt %d/%d): %s",
+                    resp.status_code, attempt, max_attempts, detail,
+                )
+                if progress_cb:
+                    progress_cb(
+                        f"Polling HTTP {resp.status_code}: {detail}",
+                        "warning",
+                    )
                 if consecutive_errors >= max_consecutive_errors:
                     logger.error("Too many errors (%d) — giving up", consecutive_errors)
                     if progress_cb:
@@ -324,6 +381,23 @@ def fal_queue_poll(
     return None
 
 
+def _unwrap_payload(data: dict) -> dict:
+    """Unwrap nested output/data wrappers to find the payload with images/video.
+
+    fal.ai responses may nest the actual result under 'output' or 'data' keys.
+    This helper drills down to the innermost dict containing 'images' or 'video'.
+    """
+    if not isinstance(data, dict):
+        return data
+    if "video" in data or "images" in data:
+        return data
+    if "output" in data and isinstance(data.get("output"), dict):
+        return _unwrap_payload(data["output"])
+    if "data" in data and isinstance(data.get("data"), dict):
+        return _unwrap_payload(data["data"])
+    return data
+
+
 def _extract_result(
     status_result: dict,
     status_headers: dict,
@@ -338,17 +412,10 @@ def _extract_result(
     - response_url indirection (fetches the actual result)
     Returns the raw result dict so callers can inspect keys they care about.
     """
-    # Structure 1: has an 'output' key
-    if "output" in status_result:
-        return status_result["output"]
-
-    # Structure 2: direct video key
-    if "video" in status_result or "images" in status_result:
-        return status_result
-
-    # Structure 3: has a 'data' key
-    if "data" in status_result:
-        return status_result["data"]
+    # Structures 1-3: output / direct / data wrappers
+    unwrapped = _unwrap_payload(status_result)
+    if unwrapped is not status_result or "images" in unwrapped or "video" in unwrapped:
+        return unwrapped
 
     # Structure 4: response_url indirection
     response_url = status_result.get("response_url")
@@ -356,7 +423,7 @@ def _extract_result(
         if progress_cb:
             progress_cb("Fetching result from response_url...", "api")
         try:
-            r = requests.get(response_url, headers=status_headers, timeout=30)
+            r = _get_with_auth_fallback(response_url, status_headers, timeout=30)
             if r.status_code == 200:
                 result_data = r.json()
                 # Check for API-level errors inside result
@@ -375,14 +442,48 @@ def _extract_result(
                     if progress_cb:
                         progress_cb("API validation error in result", "error")
                     return None
-                return result_data
+                # Unwrap nested wrappers in the fetched result too
+                return _unwrap_payload(result_data)
+            else:
+                detail = _extract_http_error_detail(r)
+                logger.error(
+                    "response_url returned HTTP %s: %s",
+                    r.status_code, detail,
+                )
+                if progress_cb:
+                    progress_cb(
+                        f"response_url failed: HTTP {r.status_code} — {detail}",
+                        "error",
+                    )
+                return None
         except Exception as e:
             logger.warning("Failed to fetch response_url: %s", e)
+            if progress_cb:
+                progress_cb(f"Failed to fetch result: {e}", "error")
+            return None
 
     logger.error("Could not extract result from COMPLETED response")
     if progress_cb:
         progress_cb("Could not extract result from completed response", "error")
     return None
+
+
+def _get_with_auth_fallback(url: str, headers: dict, timeout: int = 30) -> requests.Response:
+    """GET with auth fallback for fal queue endpoints.
+
+    Some fal queue/result URLs may reject `Key` auth while accepting `Bearer`.
+    We keep `Key` as primary and retry once with `Bearer` on auth/validation codes.
+    """
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    auth_value = headers.get("Authorization", "")
+    if (
+        resp.status_code in (401, 403, 422)
+        and auth_value.startswith("Key ")
+    ):
+        bearer_headers = dict(headers)
+        bearer_headers["Authorization"] = auth_value.replace("Key ", "Bearer ", 1)
+        return requests.get(url, headers=bearer_headers, timeout=timeout)
+    return resp
 
 
 def fal_download_file(

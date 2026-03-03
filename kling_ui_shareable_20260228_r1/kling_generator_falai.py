@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Callable, Dict, Any
 import requests
 import logging
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +13,7 @@ import traceback
 from datetime import datetime
 
 from model_schema_manager import ModelSchemaManager
+from model_metadata import get_prompt_limit
 
 # Setup logging
 logging.basicConfig(
@@ -29,6 +30,7 @@ class FalAIKlingGenerator:
         model_endpoint: Optional[str] = None,
         model_display_name: Optional[str] = None,
         prompt_slot: int = 1,
+        freeimage_key: Optional[str] = None,
     ):
         self.api_key = api_key
         self.verbose = verbose
@@ -52,9 +54,12 @@ class FalAIKlingGenerator:
             )
             self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
 
-        # Freeimage.host guest API key
-        self.freeimage_key = os.getenv(
-            "FREEIMAGE_API_KEY", "6d207e02198a847aa98d0a2a901485a5"
+        # Freeimage.host API key (GUI config overrides env, guest key as final fallback)
+        configured_freeimage_key = (freeimage_key or "").strip()
+        self.freeimage_key = (
+            configured_freeimage_key
+            or os.getenv("FREEIMAGE_API_KEY", "").strip()
+            or "6d207e02198a847aa98d0a2a901485a5"
         )
 
         # Default prompt for head movement
@@ -73,9 +78,56 @@ class FalAIKlingGenerator:
         # Progress callback for GUI verbose mode
         self._progress_callback = None
 
+        # Last generation error for UI/reporting
+        self.last_error_message: Optional[str] = None
+
     def set_progress_callback(self, callback):
         """Set a callback for progress updates (used by GUI verbose mode)."""
         self._progress_callback = callback
+
+    def _set_last_error(self, message: str):
+        """Store the last generation error for queue/UI reporting."""
+        self.last_error_message = message
+
+    @staticmethod
+    def _extract_video_url(data: dict) -> Optional[str]:
+        """Extract video URL from all known fal.ai response structures.
+
+        Checks: video.url, video[0].url, output.video.url, data.video.url,
+        response.video.url — handles both dict and list video fields.
+        """
+        if not isinstance(data, dict):
+            return None
+
+        # Helper to pull .url from a video field that may be dict or list
+        def _url_from_video(video_field):
+            if isinstance(video_field, dict):
+                return video_field.get("url")
+            if isinstance(video_field, list) and video_field:
+                first = video_field[0]
+                if isinstance(first, dict):
+                    return first.get("url")
+                if isinstance(first, str):
+                    return first
+            if isinstance(video_field, str):
+                return video_field
+            return None
+
+        # Direct: video.url / video[0].url
+        if "video" in data:
+            url = _url_from_video(data["video"])
+            if url:
+                return url
+
+        # Nested wrappers: output.video, data.video, response.video
+        for wrapper_key in ("output", "data", "response"):
+            wrapper = data.get(wrapper_key)
+            if isinstance(wrapper, dict) and "video" in wrapper:
+                url = _url_from_video(wrapper["video"])
+                if url:
+                    return url
+
+        return None
 
     def update_model(self, model_endpoint: str, model_display_name: str):
         """Update the model endpoint and display name.
@@ -92,6 +144,15 @@ class FalAIKlingGenerator:
             )
             self.model_endpoint = "fal-ai/kling-video/v2.1/pro/image-to-video"
 
+    def update_freeimage_key(self, freeimage_key: Optional[str]):
+        """Update Freeimage API key from UI config (fallback to env, then guest key)."""
+        configured_freeimage_key = (freeimage_key or "").strip()
+        self.freeimage_key = (
+            configured_freeimage_key
+            or os.getenv("FREEIMAGE_API_KEY", "").strip()
+            or "6d207e02198a847aa98d0a2a901485a5"
+        )
+
     def update_prompt_slot(self, slot: int):
         """Update the current prompt slot.
 
@@ -103,39 +164,45 @@ class FalAIKlingGenerator:
         """Get a short identifier for the current model based on the endpoint.
 
         Used in video filenames to indicate which model was used.
+        Each model variant (pro/standard/master) gets a distinct name.
         Examples:
-            fal-ai/kling-video/v2.1/pro/image-to-video -> k21pro
-            fal-ai/kling-video/v2.5-turbo/pro/image-to-video -> k25turbo
-            fal-ai/wan-25-preview/image-to-video -> wan25
-            fal-ai/veo3/image-to-video -> veo3
+            fal-ai/kling-video/v2.5-turbo/pro/image-to-video -> k25tPro
+            fal-ai/kling-video/v2.5-turbo/standard/image-to-video -> k25tStd
+            fal-ai/kling-video/v3/pro/image-to-video -> k30pro
         """
         endpoint = self.model_endpoint.lower()
+
+        # Tier suffix helper — appends Pro/Std/Master based on endpoint path
+        def _tier(endpoint: str) -> str:
+            if "/master/" in endpoint or endpoint.endswith("/master"):
+                return "Master"
+            if "/standard/" in endpoint or endpoint.endswith("/standard"):
+                return "Std"
+            return "Pro"  # default for /pro/ or unspecified
 
         # Common model mappings
         if "kling" in endpoint:
             # Extract version info — ordered most-specific to least-specific
             if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
                 return "k30pro" if "pro" in endpoint else "k30std"
-            elif "v2.6" in endpoint:
-                return "k26pro"
             elif (
                 "v2.5-turbo" in endpoint
                 or "v2.5/turbo" in endpoint
                 or "v2.5turbo" in endpoint
             ):
-                return "k25turbo"
+                return f"k25t{_tier(endpoint)}"
+            elif "v2.6" in endpoint:
+                return f"k26{_tier(endpoint).lower()}"
             elif "v2.5" in endpoint:
                 return "k25"
-            elif "v2.1/master" in endpoint:
-                return "k21master"
             elif "v2.1" in endpoint:
-                return "k21pro"
-            elif "v2/master" in endpoint:
-                return "k20master"
+                return f"k21{_tier(endpoint).lower()}"
+            elif "v2/" in endpoint or endpoint.endswith("/v2"):
+                return f"k20{_tier(endpoint).lower()}"
             elif "v1.6" in endpoint:
-                return "k16"
+                return f"k16{_tier(endpoint).lower()}"
             elif "v1.5" in endpoint:
-                return "k15"
+                return f"k15{_tier(endpoint).lower()}"
             elif "o1" in endpoint:
                 return "kO1"
             else:
@@ -277,6 +344,10 @@ class FalAIKlingGenerator:
         """Upload image to freeimage.host"""
         try:
             img = Image.open(image_path)
+
+            # Apply EXIF orientation (phone photos are often stored rotated
+            # with an EXIF tag indicating the correct orientation)
+            img = ImageOps.exif_transpose(img)
 
             # Resize if needed
             max_size = 1200
@@ -466,6 +537,8 @@ class FalAIKlingGenerator:
             config: Config dict containing prompt_titles and saved_prompts (for enhanced filenames)
             timestamp: Generation start time for consistent filenames (defaults to now)
         """
+        self.last_error_message = None
+
         try:
             # Determine actual output folder
             if use_source_folder:
@@ -487,23 +560,20 @@ class FalAIKlingGenerator:
             # Upload image
             image_url = self.upload_to_freeimage(character_image_path)
             if not image_url:
-                logger.error("Failed to upload image")
+                error_msg = "Failed to upload image"
+                self._set_last_error(error_msg)
+                logger.error(error_msg)
                 return None
 
             # Prepare prompt
             prompt = custom_prompt if custom_prompt else self.default_prompt
 
-            # Truncate prompt if it exceeds API limit (2500 characters)
-            MAX_PROMPT_LENGTH = 2500
-            if len(prompt) > MAX_PROMPT_LENGTH:
-                original_length = len(prompt)
-                prompt = prompt[:MAX_PROMPT_LENGTH]
-                if self.verbose:
-                    logger.warning(
-                        f"⚠ Prompt truncated from {original_length} to {MAX_PROMPT_LENGTH} characters (API limit)"
-                    )
+            # Warn if prompt exceeds model-specific API limit (never truncate silently)
+            prompt_limit = get_prompt_limit(self.model_endpoint)
+            if prompt_limit and len(prompt) > prompt_limit:
                 self._report_progress(
-                    f"⚠ Prompt truncated to {MAX_PROMPT_LENGTH} chars", "warning"
+                    f"⚠ Prompt is {len(prompt)} chars — model limit is {prompt_limit}. "
+                    f"API may reject this request.", "warning"
                 )
 
             # fal.ai API request
@@ -519,9 +589,11 @@ class FalAIKlingGenerator:
             payload_full: Dict[str, Any] = {
                 "image_url": image_url,
                 "prompt": prompt,
-                "duration": str(duration),
-                "aspect_ratio": aspect_ratio,
+                "duration": duration,  # fal.ai expects integer, not string
             }
+
+            if aspect_ratio:
+                payload_full["aspect_ratio"] = aspect_ratio
 
             # Add optional parameters if they differ from defaults or are explicitly set
             if resolution:
@@ -565,6 +637,7 @@ class FalAIKlingGenerator:
             max_submit_retries = 3
             request_id = None
             status_url = None
+            response_url = None  # URL to fetch actual result (video data)
 
             for submit_attempt in range(max_submit_retries):
                 try:
@@ -587,13 +660,16 @@ class FalAIKlingGenerator:
                         continue
 
                     elif response.status_code == 402:
-                        logger.error(
-                            "💳 Payment required - insufficient credits in your fal.ai account"
+                        error_msg = (
+                            "Payment required - insufficient credits in your fal.ai account"
                         )
+                        self._set_last_error(error_msg)
+                        logger.error(f"💳 {error_msg}")
                         return None
 
                     elif response.status_code != 200:
-                        logger.error(f"❌ Request failed: {response.status_code}")
+                        error_msg = f"Request failed: HTTP {response.status_code}"
+                        logger.error(f"❌ {error_msg}")
                         logger.error(f"Response: {response.text}")
                         if submit_attempt < max_submit_retries - 1:
                             logger.info(
@@ -601,13 +677,13 @@ class FalAIKlingGenerator:
                             )
                             time.sleep(5)
                             continue
+                        self._set_last_error(error_msg)
                         return None
 
                     result = response.json()
                     request_id = result.get("request_id")
-                    status_url = result.get(
-                        "status_url"
-                    )  # Get the status URL from response
+                    status_url = result.get("status_url")
+                    response_url = result.get("response_url")  # URL to fetch actual result
 
                     if not request_id or not status_url:
                         logger.error("✗ No request ID or status URL returned")
@@ -647,11 +723,15 @@ class FalAIKlingGenerator:
                     return None
 
             if not request_id:
-                logger.error("✗ Failed to get request ID after all retries")
+                error_msg = "Failed to get request ID after retries"
+                self._set_last_error(error_msg)
+                logger.error(f"✗ {error_msg}")
                 return None
 
             if not status_url:
-                logger.error("✗ Failed to get status URL after all retries")
+                error_msg = "Failed to get status URL after retries"
+                self._set_last_error(error_msg)
+                logger.error(f"✗ {error_msg}")
                 return None
 
             if self.verbose:
@@ -765,131 +845,129 @@ class FalAIKlingGenerator:
                         continue
 
                     elif status == "COMPLETED":
-                        # Debug: log the full response to see structure
-                        logger.debug(" Status: COMPLETED")
-                        logger.debug(f" Full response keys: {list(status_result.keys())}")
-                        logger.debug(f" Full response: {status_result}")
-
-                        # Try multiple possible response structures
+                        self._report_progress("Status: COMPLETED — fetching result", "progress")
                         video_url = None
 
-                        # Structure 1: output.video.url
-                        if "output" in status_result:
-                            logger.debug(" Trying Structure 1: output.video.url")
-                            output_data = status_result.get("output", {})
-                            logger.debug(f" output keys: {list(output_data.keys()) if isinstance(output_data, dict) else 'not a dict'}")
-                            video_url = output_data.get("video", {}).get("url")
-                            if video_url:
-                                logger.debug(f" Found video URL in Structure 1: {video_url}")
-                            else:
-                                logger.debug(" No video URL in Structure 1")
+                        # Step 1: Determine result URL
+                        # Priority: submit-time response_url > status response_url > constructed
+                        result_url = response_url  # from submit response
+                        if not result_url:
+                            result_url = status_result.get("response_url")
+                        if not result_url:
+                            # Construct from convention (full model endpoint path)
+                            result_url = f"https://queue.fal.run/{self.model_endpoint}/requests/{request_id}"
 
-                        # Structure 2: video.url
-                        if not video_url and "video" in status_result:
-                            logger.debug(" Trying Structure 2: video.url")
-                            video_data = status_result.get("video", {})
-                            logger.debug(f" video keys: {list(video_data.keys()) if isinstance(video_data, dict) else 'not a dict'}")
-                            video_url = video_data.get("url")
-                            if video_url:
-                                logger.debug(f" Found video URL in Structure 2: {video_url}")
-                            else:
-                                logger.debug(" No video URL in Structure 2")
+                        # Step 2: Fetch actual result — try multiple URL strategies
+                        result_data = None
+                        fetch_urls = [result_url]
 
-                        # Structure 3: data.video.url
-                        if not video_url and "data" in status_result:
-                            logger.debug(" Trying Structure 3: data.video.url")
-                            data_obj = status_result.get("data", {})
-                            logger.debug(f" data keys: {list(data_obj.keys()) if isinstance(data_obj, dict) else 'not a dict'}")
-                            video_url = data_obj.get("video", {}).get("url")
-                            if video_url:
-                                logger.debug(f" Found video URL in Structure 3: {video_url}")
-                            else:
-                                logger.debug(" No video URL in Structure 3")
+                        # If result_url doesn't include the full endpoint, also try constructed URL
+                        constructed_url = f"https://queue.fal.run/{self.model_endpoint}/requests/{request_id}"
+                        if constructed_url != result_url:
+                            fetch_urls.append(constructed_url)
 
-                        # Structure 4: response_url might contain the result
-                        if not video_url and "response_url" in status_result:
-                            response_url = status_result.get("response_url")
-                            if self.verbose:
-                                logger.info(
-                                    f"Fetching result from response_url: {response_url}"
-                                )
+                        for try_url in fetch_urls:
                             try:
-                                logger.debug(f" Fetching from response_url with headers: {status_headers}")
+                                self._report_progress(f"Fetching result from: {try_url}", "api")
                                 result_response = requests.get(
-                                    response_url, headers=status_headers, timeout=30
+                                    try_url, headers=status_headers, timeout=30
                                 )
-                                logger.debug(f" Response status code: {result_response.status_code}")
-                                logger.debug(f" Response text (first 1000 chars): {result_response.text[:1000]}")
+                                self._report_progress(
+                                    f"Result fetch HTTP {result_response.status_code}", "debug"
+                                )
+
                                 if result_response.status_code == 200:
                                     result_data = result_response.json()
-                                    logger.debug(f" Parsed JSON successfully")
-                                    if self.verbose:
-                                        logger.info(
-                                            f"DEBUG - Result data keys: {list(result_data.keys())}"
-                                        )
-                                        logger.info(
-                                            f"DEBUG - Result data: {result_data}"
-                                        )
+                                    self._report_progress(
+                                        f"Result keys: {list(result_data.keys())}", "debug"
+                                    )
 
-                                    # Check for errors in result data (API validation errors)
+                                    # Check for API errors in result
                                     if "error" in result_data:
-                                        logger.error(
-                                            f"❌ API Error: {result_data['error']}"
-                                        )
+                                        error_detail = result_data["error"]
+                                        if isinstance(error_detail, dict):
+                                            error_msg = error_detail.get("message") or error_detail.get("detail") or str(error_detail)
+                                        else:
+                                            error_msg = str(error_detail)
+                                        error_msg = f"API error in result: {error_msg}"
+                                        self._set_last_error(error_msg)
+                                        self._report_progress(f"❌ {error_msg}", "error")
                                         return None
+
                                     if "detail" in result_data:
-                                        # Parse validation errors like duration invalid
                                         detail = result_data["detail"]
                                         if isinstance(detail, list):
+                                            parts = []
                                             for err in detail:
                                                 msg = err.get("msg", str(err))
                                                 loc = err.get("loc", [])
-                                                logger.error(
-                                                    f"❌ Validation Error: {msg} (field: {loc})"
-                                                )
+                                                parts.append(f"{msg} (field: {loc})")
+                                            error_msg = f"Validation error: {'; '.join(parts)}"
                                         else:
-                                            logger.error(f"❌ API Detail: {detail}")
+                                            error_msg = f"API detail: {detail}"
+                                        self._set_last_error(error_msg)
+                                        self._report_progress(f"❌ {error_msg}", "error")
                                         return None
 
-                                    # Try all structures in result_data
-                                    logger.debug(" Extracting video URL from result_data")
-                                    video_url = result_data.get("video", {}).get("url")
+                                    # Extract video URL from result data
+                                    video_url = self._extract_video_url(result_data)
                                     if video_url:
-                                        logger.debug(f" Found video URL in result_data.video.url: {video_url}")
-
-                                    if not video_url:
-                                        video_url = (
-                                            result_data.get("output", {})
-                                            .get("video", {})
-                                            .get("url")
+                                        self._report_progress("Found video URL in result data", "debug")
+                                        break
+                                    else:
+                                        self._report_progress(
+                                            f"No video URL in result. Keys: {list(result_data.keys())}. "
+                                            f"Full: {str(result_data)[:300]}", "warning"
                                         )
-                                        if video_url:
-                                            logger.debug(f" Found video URL in result_data.output.video.url: {video_url}")
-
-                                    if not video_url:
-                                        video_url = (
-                                            result_data.get("data", {})
-                                            .get("video", {})
-                                            .get("url")
-                                        )
-                                        if video_url:
-                                            logger.debug(f" Found video URL in result_data.data.video.url: {video_url}")
                                 else:
-                                    logger.debug(f" Non-200 status from response_url: {result_response.status_code}")
-                                    logger.debug(f" Response text: {result_response.text[:1000]}")
-
-                            except Exception as e:
-                                if self.verbose:
-                                    logger.warning(
-                                        f"Failed to fetch from response_url: {e}"
+                                    resp_text = result_response.text[:500]
+                                    self._report_progress(
+                                        f"Result fetch HTTP {result_response.status_code}: {resp_text}",
+                                        "warning",
                                     )
+                                    # 422 = validation error (e.g. prompt too long for this model)
+                                    if result_response.status_code == 422:
+                                        try:
+                                            err_data = result_response.json()
+                                            details = err_data.get("detail", [])
+                                            if isinstance(details, list):
+                                                msgs = [d.get("msg", str(d)) for d in details]
+                                                error_msg = f"Validation error: {'; '.join(msgs)}"
+                                            else:
+                                                error_msg = f"Validation error: {details}"
+                                        except Exception:
+                                            error_msg = f"Validation error (HTTP 422): {resp_text}"
+                                        self._set_last_error(error_msg)
+                                        self._report_progress(f"❌ {error_msg}", "error")
+                                        return None
+                                    # Detect model removal/deprecation
+                                    if result_response.status_code == 404 and "not found" in resp_text.lower():
+                                        error_msg = (
+                                            f"Model endpoint unavailable on fal.ai: {self.model_endpoint}. "
+                                            f"This model may have been removed or renamed. Try a different model."
+                                        )
+                                        self._set_last_error(error_msg)
+                                        self._report_progress(f"❌ {error_msg}", "error")
+                                        return None
+                            except Exception as e:
+                                self._report_progress(
+                                    f"Failed to fetch result from {try_url}: {e}", "warning"
+                                )
 
+                        # Step 3: Fallback — check status response body (some models inline results)
                         if not video_url:
-                            logger.debug("No video URL found after checking all structures")
-                            logger.debug(f" status_result keys: {list(status_result.keys())}")
-                            logger.debug(f" status_result: {status_result}")
-                            logger.error("✗ No video URL in response")
-                            logger.error("✗ Checked structures: output.video.url, video.url, data.video.url, response_url")
+                            video_url = self._extract_video_url(status_result)
+                            if video_url:
+                                self._report_progress("Found video URL in status response (inline)", "debug")
+
+                        # Step 4: Give up if no URL found
+                        if not video_url:
+                            diag_keys = list(result_data.keys()) if result_data else list(status_result.keys())
+                            diag_body = str(result_data or status_result)[:500]
+                            error_msg = f"No video URL returned by API (keys: {diag_keys})"
+                            self._set_last_error(error_msg)
+                            self._report_progress(f"✗ {error_msg}", "error")
+                            self._report_progress(f"✗ Response: {diag_body}", "error")
                             return None
 
                         if self.verbose:
@@ -971,18 +1049,36 @@ class FalAIKlingGenerator:
                                     return None
 
                     elif status in ["FAILED", "ERROR"]:
-                        error_msg = status_result.get("error", "Unknown error")
-                        logger.error(f"✗ Generation failed: {error_msg}")
+                        raw_error = status_result.get("error")
+                        if isinstance(raw_error, dict):
+                            error_msg = raw_error.get("message") or raw_error.get("detail") or str(raw_error)
+                        else:
+                            error_msg = raw_error
 
-                        # Check if it's a retriable error
-                        if (
-                            "quota" in error_msg.lower()
-                            or "credit" in error_msg.lower()
-                        ):
+                        if not error_msg:
+                            detail = status_result.get("detail")
+                            if isinstance(detail, list):
+                                error_msg = "; ".join(str(x) for x in detail)
+                            elif detail:
+                                error_msg = str(detail)
+
+                        if not error_msg:
+                            error_msg = status_result.get("message")
+
+                        if not error_msg:
+                            error_msg = f"Unknown error ({status_result})"
+
+                        final_error = f"Generation failed: {error_msg}"
+                        self._set_last_error(final_error)
+                        logger.error(f"✗ {final_error}")
+
+                        # Check if it's a retriable/account error
+                        lowered = error_msg.lower()
+                        if "quota" in lowered or "credit" in lowered:
                             logger.error(
                                 "💳 Insufficient credits - please add more credits to your fal.ai account"
                             )
-                        elif "timeout" in error_msg.lower():
+                        elif "timeout" in lowered:
                             logger.error(
                                 "⏱️ Server timeout - fal.ai may be overloaded, try again later"
                             )
@@ -1022,7 +1118,9 @@ class FalAIKlingGenerator:
                     continue
 
             # Timeout reached
-            logger.error(f"✗ Timeout after {max_attempts * base_delay // 60} minutes")
+            error_msg = f"Timeout after {max_attempts * base_delay // 60} minutes"
+            self._set_last_error(error_msg)
+            logger.error(f"✗ {error_msg}")
             logger.error("💡 Possible causes:")
             logger.error(
                 "   - fal.ai servers are overloaded (try again during off-peak hours)"
@@ -1032,7 +1130,9 @@ class FalAIKlingGenerator:
             return None
 
         except Exception as e:
-            logger.error(f"✗ Error: {str(e)}")
+            error_msg = str(e)
+            self._set_last_error(error_msg)
+            logger.error(f"✗ Error: {error_msg}")
             logger.error(f"✗ Full traceback:\n{traceback.format_exc()}")
             return None
 

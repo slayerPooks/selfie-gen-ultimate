@@ -20,12 +20,10 @@ if exist "%VENV_PYTHON%" (
     echo Run run_kling_ui.bat first if you need dependencies installed.
 )
 
-set LOG=%BATCH_DIR%gui_launch.log
 echo Starting Kling UI GUI...
-echo Log: %LOG%
 echo.
 
-"%PYTHON%" -u "%GUI_SCRIPT%" > "%LOG%" 2>&1
+"%PYTHON%" -u "%GUI_SCRIPT%"
 set EXIT_CODE=%errorlevel%
 
 echo.
@@ -34,7 +32,7 @@ if %EXIT_CODE% neq 0 (
     echo   CRASH  ^(exit code: %EXIT_CODE%^)
     echo ============================================
     echo.
-    echo Check crash_log.txt in the same folder for details.
+    echo Check crash_log.txt in this folder for details.
     echo.
 )
 

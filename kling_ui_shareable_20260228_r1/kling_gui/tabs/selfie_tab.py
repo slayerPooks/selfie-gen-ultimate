@@ -1,17 +1,90 @@
 """Selfie Tab — Generate selfie-style portraits using FLUX PuLID."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 import threading
 import os
-from typing import Callable
+import shutil
+import platform
+import subprocess
+import json
+import re
+from typing import Callable, Dict, List, Optional
 
 from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
+from path_utils import get_gen_images_folder
+
+try:
+    from selfie_prompt_composer import DEFAULT_GENDER
+except Exception:
+    DEFAULT_GENDER = "female"
 
 
 class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
+
+    DEFAULT_PROMPT_TEMPLATE = (
+        "Transform this passport photo into a natural selfie: A {json.gender} with "
+        "{json.hair}, {json.skin}, {json.eyes}, and a {json.face_shape}, wearing "
+        "{json.clothing}, taking a front-facing camera selfie with one arm FULLY "
+        "extended but phone not visible in frame, looking directly at camera with "
+        "{json.expression}. Shot in portrait orientation zoomed out to show head "
+        "SLIGHTLY OFF-CENTER, with extensive space around all sides. Full torso "
+        "visible with significant background space above and around subject. "
+        "Background: {sunny backyard patio|cozy kitchen|home office|living room "
+        "couch|coffee shop window}. Lighting: natural lighting. Authentic "
+        "front-facing iPhone X camera quality, natural skin imperfections, uneven "
+        "lighting, slightly off-center composition. Include realistic flaws: minor "
+        "focus issues, natural skin texture with EVIDENT pores and minimal makeup, "
+        "casual messy hair, wrinkled clothing, candid expression. Other arm relaxed "
+        "at side, natural one-handed selfie pose. Maintain EXACT facial features, "
+        "bone structure, and identity from reference image. Raw unfiltered AMATEUR "
+        "smartphone selfie aesthetic with imperfect framing and natural shadows."
+    )
+    DEFAULT_WILDCARD_TEMPLATE = (
+        "A raw, unedited iPhone 7 front-camera selfie of a {young adult|middle-aged} "
+        "{woman|man} wearing a {black|gray|white|maroon|navy} "
+        "{hoodie|t-shirt|sweater|jacket|blouse}. "
+        "{Neutral|Slight smile|Relaxed|Confident} expression. "
+        "Phone held at arm's length, slightly off-center, natural edge distortion. "
+        "Background is {sunny park with green trees|cozy kitchen with warm light|"
+        "living room with TV glow|outdoor street in urban daylight|"
+        "cafe with soft window light}. "
+        "Warm practical lighting. Amateur photography aesthetic, unfiltered iPhone 7 quality."
+    )
+    DISABLED_BY_DEFAULT_ENDPOINTS = {
+        "fal-ai/bytedance/seedream/v5/edit",
+    }
+
+    # Known fields for auto-migrating old {field} syntax → {json.field}
+    _KNOWN_JSON_FIELDS = {
+        "hair", "skin", "eyes", "face_shape", "age_range",
+        "gender", "clothing", "expression",
+    }
+
+    @staticmethod
+    def _extract_json_fields(template: str) -> List[str]:
+        """Extract {json.FIELD} tag names from template. Returns ['hair', 'skin', ...]."""
+        return re.findall(r"\{json\.([a-zA-Z0-9_]+)\}", template)
+
+    @classmethod
+    def _migrate_template_syntax(cls, template: str) -> str:
+        """Migrate old {field} syntax to {json.field} for known fields.
+
+        E.g. '{hair}' → '{json.hair}' but '{sunny patio|cozy kitchen}' stays unchanged
+        (wildcards contain '|').
+        """
+        def _maybe_migrate(match):
+            inner = match.group(1)
+            # Wildcards contain '|' — skip them
+            if "|" in inner:
+                return match.group(0)
+            # Known field names get the json. prefix
+            if inner in cls._KNOWN_JSON_FIELDS:
+                return "{json." + inner + "}"
+            return match.group(0)
+        return re.sub(r"\{([^{}]+)\}", _maybe_migrate, template)
 
     def __init__(
         self,
@@ -28,126 +101,276 @@ class SelfieTab(tk.Frame):
         self.get_config = config_getter
         self.log = log_callback
         self._busy = False
+        self._last_result_path = ""
+        # Cancellation events (three-tier)
+        self._cancel_current = threading.Event()  # skip active model, advance
+        self._cancel_all = threading.Event()       # stop after current model
+        self._abort_flow = threading.Event()       # immediate full termination
+        self._model_options = self._load_model_options()
+        self._model_vars: Dict[str, tk.BooleanVar] = {}
+        self._handoff_identity_data: Optional[Dict[str, str]] = None
+        self._handoff_resolved = False
+        self._prompt_template_edit_mode = False
+        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE  # overwritten in _build_ui
+        self._prompt_mode_var = tk.StringVar(
+            value=config.get("selfie_prompt_mode", "json_handoff")
+        )
 
         self._build_ui()
 
     def _build_ui(self):
+        # Pack btn_frame FIRST so it always reserves its bottom strip,
+        # even when content_frame overflows vertically.
+        btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=8)
+        self._btn_frame = btn_frame  # buttons added at end of method
+
+        content_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
         # Prompt section (uses composed prompt or custom)
         prompt_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Selfie Prompt",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
             labelanchor="nw",
         )
-        prompt_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        prompt_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        # Composer controls
-        composer_frame = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
-        composer_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        # Gender
+        # Prompt mode toggle
+        mode_row = tk.Frame(prompt_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=4, pady=(4, 2))
         tk.Label(
-            composer_frame,
-            text="Subject:",
-            font=(FONT_FAMILY, 9),
+            mode_row,
+            text="Mode:",
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=0, column=0, sticky="w", padx=2)
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Radiobutton(
+            mode_row,
+            text="Customized (AI Analysis)",
+            variable=self._prompt_mode_var,
+            value="json_handoff",
+            command=self._on_prompt_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Radiobutton(
+            mode_row,
+            text="Generic (Wildcards)",
+            variable=self._prompt_mode_var,
+            value="wildcards",
+            command=self._on_prompt_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+
+        # Hidden variables for composer (kept for config compat)
         self.gender_var = tk.StringVar(
-            value=self.config.get("composer_gender", "female")
+            value=self.config.get("composer_gender", DEFAULT_GENDER)
         )
-        gender_combo = ttk.Combobox(
-            composer_frame,
-            textvariable=self.gender_var,
-            values=["female", "male", "neutral"],
-            state="readonly",
-            width=10,
+        self.style_var = tk.StringVar(
+            value=self.config.get("composer_camera_style", "candid")
         )
-        gender_combo.grid(row=0, column=1, padx=5, pady=2)
 
-        # Camera style
-        tk.Label(
-            composer_frame,
-            text="Style:",
-            font=(FONT_FAMILY, 9),
+        # Customized (AI Analysis) mode — single template text box
+        self._customized_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Prompt Template  {json.field} + {opt1|opt2} wildcards",
+            font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=0, column=2, sticky="w", padx=2)
-        self.style_var = tk.StringVar(
-            value=self.config.get("composer_camera_style", "phone_selfie")
         )
-        styles = [
-            "phone_selfie",
-            "mirror_selfie",
-            "professional",
-            "candid",
-            "close_up",
-        ]
-        style_combo = ttk.Combobox(
-            composer_frame,
-            textvariable=self.style_var,
-            values=styles,
-            state="readonly",
-            width=15,
-        )
-        style_combo.grid(row=0, column=3, padx=5, pady=2)
+        # Don't pack yet — managed by _apply_prompt_mode_ui()
 
-        # Compose button
-        compose_btn = tk.Button(
-            composer_frame,
-            text="Compose",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._compose_prompt,
-            cursor="hand2",
-            relief=tk.FLAT,
-        )
-        compose_btn.grid(row=0, column=4, padx=5)
-
-        # Prompt text
-        self.prompt_text = tk.Text(
-            prompt_frame,
-            height=3,
+        self.prompt_template_text = tk.Text(
+            self._customized_frame,
+            height=7,
             wrap=tk.WORD,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             font=("Consolas", 9),
             insertbackground=COLORS["text_light"],
             padx=5,
-            pady=5,
+            pady=4,
         )
-        self.prompt_text.pack(fill=tk.X, padx=5, pady=(0, 5))
-        self.prompt_text.insert(
-            "1.0",
-            "Photo of a person, casual phone selfie, photorealistic",
+        self.prompt_template_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
+
+        # Load saved template with migration from old {field} → {json.field} syntax
+        saved_template = self.config.get(
+            "selfie_prompt_template", self.DEFAULT_PROMPT_TEMPLATE
         )
+        saved_template = (saved_template or self.DEFAULT_PROMPT_TEMPLATE).strip()
+        saved_template = self._migrate_template_syntax(saved_template)
+
+        # One-time migration: old template used {scene} placeholder — replace with new default
+        if "{scene}" in saved_template:
+            saved_template = self.DEFAULT_PROMPT_TEMPLATE
+            self.config["selfie_prompt_template"] = saved_template
+
+        self.prompt_template_text.insert("1.0", saved_template)
+        self._raw_template = saved_template
+        self.prompt_template_text.config(state=tk.DISABLED)
+
+        template_actions = tk.Frame(self._customized_frame, bg=COLORS["bg_panel"])
+        template_actions.pack(fill=tk.X, padx=4, pady=(0, 2))
+        self.edit_template_btn = tk.Button(
+            template_actions,
+            text="Edit Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_edit_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        )
+        self.edit_template_btn.pack(side=tk.LEFT)
+        self.save_template_btn = tk.Button(
+            template_actions,
+            text="Save Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+            state=tk.DISABLED,
+        )
+        self.save_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self.reset_template_btn = tk.Button(
+            template_actions,
+            text="Reset Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["btn_red"],
+            fg="white",
+            command=self._on_reset_prompt_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        )
+        self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        self._customized_status = tk.Label(
+            self._customized_frame,
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._customized_status.pack(fill=tk.X, padx=6, pady=(0, 3))
+
+        # Wildcard template (Dynamic Wildcards mode — hidden by default)
+        self._wildcard_frame = tk.LabelFrame(
+            prompt_frame,
+            text="Wildcard Template  {option1|option2|option3}",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        # Don't pack yet — managed by _apply_prompt_mode_ui()
+
+        self._wildcard_text = tk.Text(
+            self._wildcard_frame,
+            height=7,
+            wrap=tk.WORD,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=("Consolas", 9),
+            insertbackground=COLORS["text_light"],
+            padx=5,
+            pady=4,
+        )
+        self._wildcard_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
+
+        saved_wildcard = self.config.get(
+            "selfie_wildcard_template", self.DEFAULT_WILDCARD_TEMPLATE
+        )
+        self._wildcard_text.insert("1.0", (saved_wildcard or self.DEFAULT_WILDCARD_TEMPLATE).strip())
+        self._wildcard_text.config(state=tk.DISABLED)
+
+        wildcard_actions = tk.Frame(self._wildcard_frame, bg=COLORS["bg_panel"])
+        wildcard_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
+        self._edit_wildcard_btn = tk.Button(
+            wildcard_actions,
+            text="Edit Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_edit_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        )
+        self._edit_wildcard_btn.pack(side=tk.LEFT)
+        self._save_wildcard_btn = tk.Button(
+            wildcard_actions,
+            text="Save Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+            state=tk.DISABLED,
+        )
+        self._save_wildcard_btn.pack(side=tk.LEFT, padx=(5, 0))
+        tk.Button(
+            wildcard_actions,
+            text="Reset Template",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["btn_red"],
+            fg="white",
+            command=self._on_reset_wildcard_template,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=7,
+            pady=1,
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        # Apply initial prompt mode visibility
+        self._apply_prompt_mode_ui()
 
         # Settings
         settings_frame = tk.LabelFrame(
-            self,
+            content_frame,
             text="Generation Settings",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        settings_frame.pack(fill=tk.X, padx=10, pady=5)
+        settings_frame.pack(fill=tk.X, padx=8, pady=4)
 
         grid = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
-        grid.pack(fill=tk.X, padx=5, pady=5)
+        grid.pack(fill=tk.X, padx=4, pady=4)
 
-        # ID Weight
+        # Face Resemblance (ID Weight)
         tk.Label(
             grid,
-            text="ID Weight:",
+            text="Face Resemblance:",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).grid(row=0, column=0, sticky="w")
         self.id_weight_var = tk.DoubleVar(
-            value=self.config.get("selfie_id_weight", 0.8)
+            value=self.config.get("selfie_id_weight", 1.0)
         )
         id_scale = tk.Scale(
             grid,
@@ -162,48 +385,45 @@ class SelfieTab(tk.Frame):
             highlightthickness=0,
             length=150,
         )
-        id_scale.grid(row=0, column=1, padx=5, pady=2)
+        id_scale.grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
-        # Dimensions
+        # Aspect Ratio (replaces manual Width/Height)
+        self._aspect_ratios = {
+            "Portrait (3:4)": (896, 1152),
+            "Landscape (16:9)": (1280, 720),
+            "Square (1:1)": (1024, 1024),
+        }
         tk.Label(
             grid,
-            text="Width:",
+            text="Aspect Ratio:",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=1, column=0, sticky="w")
-        self.width_var = tk.IntVar(
-            value=self.config.get("selfie_width", 896)
-        )
-        tk.Entry(
-            grid,
-            textvariable=self.width_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
 
-        tk.Label(
+        # Determine saved selection from config dimensions
+        default_ratio_name = "Portrait (3:4)"
+        default_w, default_h = self._aspect_ratios[default_ratio_name]
+        try:
+            saved_w = int(self.config.get("selfie_width", default_w))
+            saved_h = int(self.config.get("selfie_height", default_h))
+        except (TypeError, ValueError):
+            saved_w, saved_h = default_w, default_h
+        dims_to_name = {dims: name for name, dims in self._aspect_ratios.items()}
+        saved_ratio = dims_to_name.get((saved_w, saved_h))
+        if not saved_ratio:
+            custom_ratio = f"Custom ({saved_w}x{saved_h})"
+            self._aspect_ratios[custom_ratio] = (saved_w, saved_h)
+            saved_ratio = custom_ratio
+        self.aspect_var = tk.StringVar(value=saved_ratio)
+        aspect_combo = ttk.Combobox(
             grid,
-            text="Height:",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        ).grid(row=1, column=2, sticky="w")
-        self.height_var = tk.IntVar(
-            value=self.config.get("selfie_height", 1152)
+            textvariable=self.aspect_var,
+            values=list(self._aspect_ratios.keys()),
+            state="readonly",
+            width=18,
         )
-        tk.Entry(
-            grid,
-            textvariable=self.height_var,
-            width=6,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            insertbackground=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-        ).grid(row=1, column=3, sticky="w", padx=5, pady=2)
+        aspect_combo.grid(row=0, column=3, padx=5, pady=2, sticky="w")
 
         # Seed
         tk.Label(
@@ -212,7 +432,7 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
-        ).grid(row=2, column=0, sticky="w")
+        ).grid(row=1, column=0, sticky="w")
         self.seed_var = tk.IntVar(value=self.config.get("selfie_seed", -1))
         tk.Entry(
             grid,
@@ -222,7 +442,7 @@ class SelfieTab(tk.Frame):
             fg=COLORS["text_light"],
             insertbackground=COLORS["text_light"],
             font=(FONT_FAMILY, 9),
-        ).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        ).grid(row=1, column=1, sticky="w", padx=5, pady=2)
 
         self.random_seed_var = tk.BooleanVar(
             value=self.config.get("selfie_random_seed", True)
@@ -236,11 +456,156 @@ class SelfieTab(tk.Frame):
             selectcolor=COLORS["bg_input"],
             activebackground=COLORS["bg_panel"],
             font=(FONT_FAMILY, 9),
-        ).grid(row=2, column=2, columnspan=2, sticky="w")
+        ).grid(row=1, column=2, columnspan=2, sticky="w", padx=(12, 0))
 
-        # Generate button
-        btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Model selection
+        models_frame = tk.LabelFrame(
+            content_frame,
+            text="Step 2 Models",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        models_frame.pack(fill=tk.X, padx=8, pady=4)
+
+        models_list_container = tk.Frame(models_frame, bg=COLORS["bg_panel"])
+        models_list_container.pack(fill=tk.X, padx=4, pady=3)
+        models_canvas = tk.Canvas(
+            models_list_container,
+            bg=COLORS["bg_panel"],
+            highlightthickness=0,
+            borderwidth=0,
+            height=140,
+        )
+        models_scroll = ttk.Scrollbar(
+            models_list_container,
+            orient=tk.VERTICAL,
+            command=models_canvas.yview,
+        )
+        models_canvas.configure(yscrollcommand=models_scroll.set)
+        models_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        models_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        models_grid_frame = tk.Frame(models_canvas, bg=COLORS["bg_panel"])
+        models_grid_frame.grid_columnconfigure(0, weight=1)
+        models_grid_frame.grid_columnconfigure(1, weight=1)
+        models_window_id = models_canvas.create_window(
+            (0, 0),
+            window=models_grid_frame,
+            anchor="nw",
+        )
+
+        def _on_models_grid_configure(_event):
+            models_canvas.configure(scrollregion=models_canvas.bbox("all"))
+
+        def _on_models_canvas_configure(event):
+            models_canvas.itemconfigure(models_window_id, width=event.width)
+
+        models_grid_frame.bind("<Configure>", _on_models_grid_configure)
+        models_canvas.bind("<Configure>", _on_models_canvas_configure)
+
+        saved_models = self.config.get("selfie_selected_models", {})
+        for idx, model in enumerate(self._model_options):
+            endpoint = model.get("endpoint", "")
+            label = model.get("label", endpoint)
+            default_checked = (
+                endpoint == "fal-ai/flux-pulid"
+                and endpoint not in self.DISABLED_BY_DEFAULT_ENDPOINTS
+            )
+            checked = bool(saved_models.get(endpoint, default_checked))
+            var = tk.BooleanVar(value=checked)
+            self._model_vars[endpoint] = var
+            tk.Checkbutton(
+                models_grid_frame,
+                text=label,
+                variable=var,
+                bg=COLORS["bg_panel"],
+                fg=COLORS["text_light"],
+                selectcolor=COLORS["bg_input"],
+                activebackground=COLORS["bg_panel"],
+                font=(FONT_FAMILY, 8),
+                anchor="w",
+            ).grid(
+                row=idx // 2,
+                column=idx % 2,
+                sticky="w",
+                padx=(8, 20),
+                pady=0,
+            )
+
+        # Save location settings
+        save_frame = tk.LabelFrame(
+            content_frame,
+            text="Save Location",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        save_frame.pack(fill=tk.X, padx=8, pady=4)
+
+        save_mode = self.config.get("selfie_output_mode", "")
+        if save_mode not in ("source", "custom"):
+            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
+        self.output_mode_var = tk.StringVar(value=save_mode)
+        self.output_path_var = tk.StringVar(
+            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
+        )
+
+        mode_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=4, pady=(3, 1))
+        tk.Radiobutton(
+            mode_row,
+            text="Save Next To Source Image",
+            variable=self.output_mode_var,
+            value="source",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Radiobutton(
+            mode_row,
+            text="Save In Custom Folder",
+            variable=self.output_mode_var,
+            value="custom",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+
+        path_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
+        path_row.pack(fill=tk.X, padx=4, pady=(0, 3))
+        self.output_entry = tk.Entry(
+            path_row,
+            textvariable=self.output_path_var,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief=tk.FLAT,
+        )
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.browse_btn = tk.Button(
+            path_row,
+            text="Browse",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._browse_output_folder,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+        )
+        self.browse_btn.pack(side=tk.LEFT)
+        self._update_output_entry_state()
+
+        # Action buttons (btn_frame was packed at top of _build_ui)
+        btn_frame = self._btn_frame
 
         self.generate_btn = tk.Button(
             btn_frame,
@@ -256,6 +621,48 @@ class SelfieTab(tk.Frame):
         )
         self.generate_btn.pack(side=tk.LEFT)
 
+        self.save_as_btn = tk.Button(
+            btn_frame,
+            text="Save As...",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            command=self._on_save_as,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.save_as_btn.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.open_file_btn = tk.Button(
+            btn_frame,
+            text="Open Image",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_open_result_file,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.open_file_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.open_folder_btn = tk.Button(
+            btn_frame,
+            text="Open Folder",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            command=self._on_open_result_folder,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.open_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
+
         self.status_label = tk.Label(
             btn_frame,
             text="",
@@ -265,22 +672,261 @@ class SelfieTab(tk.Frame):
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
 
-    def _compose_prompt(self):
-        """Compose prompt from selected options."""
-        try:
-            from selfie_prompt_composer import SelfiePromptComposer
+        # Cancel bar — shown only when generating
+        self._cancel_bar = tk.Frame(self, bg=COLORS["bg_panel"])
+        # Not packed initially — shown in _set_busy(True)
 
-            composer = SelfiePromptComposer()
-            prompt = composer.compose(
-                gender=self.gender_var.get(),
-                camera_style=self.style_var.get(),
+        self._skip_btn = tk.Button(
+            self._cancel_bar,
+            text="Skip Model",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["warning"],
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_skip_model,
+        )
+        self._skip_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._stop_btn = tk.Button(
+            self._cancel_bar,
+            text="Stop After This",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg="#FFA500",
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_stop_after,
+        )
+        self._stop_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._abort_btn = tk.Button(
+            self._cancel_bar,
+            text="Abort All",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_red"],
+            fg="white",
+            relief=tk.FLAT,
+            padx=10, pady=3,
+            cursor="hand2",
+            command=self._on_abort_all,
+        )
+        self._abort_btn.pack(side=tk.LEFT)
+
+    def _on_skip_model(self):
+        self._cancel_current.set()
+        self._skip_btn.config(text="Skipping...", state=tk.DISABLED)
+
+    def _on_stop_after(self):
+        self._cancel_all.set()
+        self._stop_btn.config(text="Stopping...", state=tk.DISABLED)
+
+    def _on_abort_all(self):
+        self._abort_flow.set()
+        self._cancel_current.set()  # Also interrupt active model
+        self._abort_btn.config(text="Aborting...", state=tk.DISABLED)
+
+    def set_prompt(self, text: str):
+        """Set the prompt text (called by Step 1 'Send to Step 2').
+
+        If text is valid JSON matching the template's {json.FIELD} tags,
+        resolves the template and shows the result. Otherwise treats
+        text as a plain prompt.
+        """
+        raw_text = (text or "").strip()
+        if not raw_text:
+            self._handoff_identity_data = None
+            self._handoff_resolved = False
+            return
+
+        payload = self._extract_handoff_json(raw_text)
+
+        normalized = None
+        if payload is not None:
+            try:
+                from selfie_generator import SelfieGenerator
+                # Use template-driven fields instead of hardcoded HANDOFF_JSON_KEYS
+                template = self._get_raw_template_text()
+                fields = self._extract_json_fields(template)
+                normalized = SelfieGenerator.normalize_handoff_identity(
+                    payload, required_fields=fields or None
+                )
+            except Exception:
+                normalized = None
+
+        if normalized:
+            self._handoff_identity_data = normalized
+            self._handoff_resolved = True
+            resolved = self._build_handoff_prompt()
+            # Show resolved prompt in the template text box
+            self.prompt_template_text.config(state=tk.NORMAL)
+            self.prompt_template_text.delete("1.0", tk.END)
+            self.prompt_template_text.insert("1.0", resolved)
+            self.prompt_template_text.config(state=tk.DISABLED)
+            self._customized_status.config(
+                text="Prompt resolved from AI analysis \u2014 ready to generate",
+                fg=COLORS["success"],
             )
-            self.prompt_text.delete("1.0", tk.END)
-            self.prompt_text.insert("1.0", prompt)
-        except ImportError:
-            self.log("selfie_prompt_composer module not found", "error")
-        except Exception as e:
-            self.log(f"Compose error: {e}", "error")
+            return
+
+        # Not valid JSON — treat as plain prompt override
+        self._handoff_identity_data = None
+        self._handoff_resolved = False
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", raw_text)
+        self.prompt_template_text.config(state=tk.DISABLED)
+        self._customized_status.config(
+            text="Plain text prompt loaded (no JSON fields resolved)",
+            fg=COLORS["warning"],
+        )
+
+    def _extract_handoff_json(self, raw_text: str) -> Optional[dict]:
+        """Parse JSON payload even when Step 1 sends wrapper text around it."""
+        if not raw_text:
+            return None
+
+        candidates = [raw_text]
+        first_brace = raw_text.find("{")
+        last_brace = raw_text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            candidates.append(raw_text[first_brace : last_brace + 1])
+
+        for candidate in candidates:
+            try:
+                payload = json.loads(candidate.strip())
+                if isinstance(payload, dict):
+                    return payload
+            except Exception:
+                continue
+        return None
+
+    def _get_selected_dimensions(self) -> tuple:
+        """Return (width, height) for the currently selected aspect ratio."""
+        return self._aspect_ratios.get(self.aspect_var.get(), self._aspect_ratios["Portrait (3:4)"])
+
+    def _get_prompt_template_text(self) -> str:
+        """Return current text box content (may be resolved or raw template)."""
+        if not hasattr(self, "prompt_template_text"):
+            return self.DEFAULT_PROMPT_TEMPLATE
+        text = self.prompt_template_text.get("1.0", tk.END).strip()
+        return text if text else self.DEFAULT_PROMPT_TEMPLATE
+
+    def _get_raw_template_text(self) -> str:
+        """Return the raw template (with {json.FIELD} tags) from config/default.
+
+        Unlike _get_prompt_template_text(), this always returns the unresolved
+        template — even if the text box currently shows a resolved prompt.
+        """
+        return self._raw_template
+
+    def _set_prompt_template_edit_mode(self, enabled: bool):
+        self._prompt_template_edit_mode = enabled
+        self.prompt_template_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        self.edit_template_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self.save_template_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _on_edit_prompt_template(self):
+        self._set_prompt_template_edit_mode(True)
+        # Always show raw template for editing (not resolved text)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", self._raw_template)
+        self.prompt_template_text.focus_set()
+        self.prompt_template_text.mark_set(tk.INSERT, tk.END)
+
+    def _on_save_prompt_template(self):
+        text = self._get_prompt_template_text()
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", text)
+        self._set_prompt_template_edit_mode(False)
+        # Update the raw template source of truth
+        self._raw_template = text
+        self.config["selfie_prompt_template"] = text
+        self.config["selfie_template_fields"] = self._extract_json_fields(text)
+        # Reset handoff state since template changed
+        self._handoff_identity_data = None
+        self._handoff_resolved = False
+        self._customized_status.config(
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            fg=COLORS["text_dim"],
+        )
+        self.log("Selfie prompt template saved", "success")
+
+    def _on_reset_prompt_template(self):
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", self.DEFAULT_PROMPT_TEMPLATE)
+        self._set_prompt_template_edit_mode(False)
+        # Update raw template source of truth
+        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE
+        self._handoff_identity_data = None
+        self._handoff_resolved = False
+        self.config["selfie_prompt_template"] = self.DEFAULT_PROMPT_TEMPLATE
+        self.config["selfie_template_fields"] = self._extract_json_fields(self.DEFAULT_PROMPT_TEMPLATE)
+        self._customized_status.config(
+            text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
+            fg=COLORS["text_dim"],
+        )
+        self.log("Selfie prompt template reset to default", "info")
+
+    def _on_prompt_mode_changed(self):
+        self._apply_prompt_mode_ui()
+        mode_label = "Customized (AI Analysis)" if self._prompt_mode_var.get() == "json_handoff" else "Generic (Wildcards)"
+        self.log(f"Prompt mode: {mode_label}", "info")
+
+    def _apply_prompt_mode_ui(self):
+        """Show/hide widgets based on the active prompt mode."""
+        if self._prompt_mode_var.get() == "wildcards":
+            self._customized_frame.pack_forget()
+            self._wildcard_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+        else:
+            self._wildcard_frame.pack_forget()
+            self._customized_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+    def _set_wildcard_edit_mode(self, enabled: bool):
+        self._wildcard_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        self._edit_wildcard_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self._save_wildcard_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _on_edit_wildcard_template(self):
+        self._set_wildcard_edit_mode(True)
+        self._wildcard_text.focus_set()
+        self._wildcard_text.mark_set(tk.INSERT, tk.END)
+
+    def _on_save_wildcard_template(self):
+        text = self._wildcard_text.get("1.0", tk.END).strip()
+        if not text:
+            text = self.DEFAULT_WILDCARD_TEMPLATE
+        self._wildcard_text.config(state=tk.NORMAL)
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", text)
+        self._set_wildcard_edit_mode(False)
+        self.log("Wildcard template saved", "success")
+
+    def _on_reset_wildcard_template(self):
+        self._wildcard_text.config(state=tk.NORMAL)
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", self.DEFAULT_WILDCARD_TEMPLATE)
+        self._set_wildcard_edit_mode(False)
+        self.log("Wildcard template reset to default", "info")
+
+    def _build_handoff_prompt(self) -> str:
+        """Resolve {json.FIELD} tags in the template using _handoff_identity_data.
+
+        Leaves {opt1|opt2} wildcard blocks untouched — those resolve per-model at generation.
+        """
+        if not self._handoff_identity_data:
+            return ""
+        template = self._get_raw_template_text()
+
+        def _replace_json_tag(match):
+            field = match.group(1)
+            return self._handoff_identity_data.get(field, f"{{json.{field}}}")
+
+        return re.sub(r"\{json\.([a-zA-Z0-9_]+)\}", _replace_json_tag, template)
 
     def _on_generate(self):
         if self._busy:
@@ -288,58 +934,172 @@ class SelfieTab(tk.Frame):
 
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
-        if not api_key:
-            self.log("fal.ai API key required (set in Video tab)", "error")
-            return
+        bfl_api_key = config.get("bfl_api_key", "")
 
         image_path = self.image_session.active_image_path
         if not image_path:
             self.log("No image selected in carousel", "warning")
             return
 
-        prompt = self.prompt_text.get("1.0", tk.END).strip()
-        if not prompt:
-            self.log("Prompt is empty", "warning")
+        # For output folder: use original input image's directory when in "source" mode
+        # to avoid saving to %TEMP% when intermediates (face crop, polish, outpaint) are active
+        if self.output_mode_var.get() == "source":
+            ref_entry = self.image_session.reference_entry
+            output_source_path = ref_entry.path if ref_entry else image_path
+        else:
+            output_source_path = image_path
+
+        mode = self._prompt_mode_var.get()
+        wildcard_template = None
+        if mode == "wildcards":
+            raw = self._wildcard_text.get("1.0", tk.END).strip()
+            if not raw:
+                self.log("Wildcard template is empty", "warning")
+                return
+            # Save raw template — wildcards will be resolved per-model in _run()
+            wildcard_template = raw
+            prompt = raw  # placeholder; each model gets a fresh resolution
+        elif self._handoff_resolved:
+            # Customized mode with {json.FIELD} resolved, wildcards still present
+            resolved_text = self._get_prompt_template_text().strip()
+            if not resolved_text:
+                self.log("Prompt template is empty", "warning")
+                return
+            wildcard_template = resolved_text  # per-model wildcard resolution
+            prompt = resolved_text
+        else:
+            # Customized mode without handoff — use raw template text as-is
+            prompt = self._get_prompt_template_text().strip()
+            if not prompt:
+                self.log("Prompt is empty", "warning")
+                return
+
+        selected_models = self._get_selected_models()
+        if not selected_models:
+            self.log("Select at least one Step 2 model", "warning")
             return
 
-        output_folder = config.get("output_folder", "")
-        if not output_folder or not os.path.isdir(output_folder):
-            output_folder = os.path.dirname(image_path)
+        # Validate API keys per provider
+        needs_fal = any(m.get("provider", "fal") == "fal" for m in selected_models)
+        needs_bfl = any(m.get("provider") == "bfl" for m in selected_models)
+        if needs_fal and not api_key:
+            self.log("fal.ai API key required for selected fal.ai models", "error")
+            return
+        if needs_bfl and not bfl_api_key:
+            self.log("BFL API key required for selected BFL models", "error")
+            return
+
+        try:
+            output_folder = self._resolve_output_folder(output_source_path)
+        except Exception as e:
+            self.log(f"Invalid output folder: {e}", "error")
+            return
 
         # Read numeric vars BEFORE setting busy — .get() raises TclError
         # if the entry contains non-numeric text.
         try:
             seed = -1 if self.random_seed_var.get() else self.seed_var.get()
             id_weight = self.id_weight_var.get()
-            width = self.width_var.get()
-            height = self.height_var.get()
+            width, height = self._get_selected_dimensions()
         except (tk.TclError, ValueError):
             self.log("Invalid numeric value in settings", "error")
             return
 
         self._set_busy(True)
 
+        total_models = len(selected_models)
+
         def _run():
             try:
                 from selfie_generator import SelfieGenerator
 
-                gen = SelfieGenerator(api_key)
+                freeimage_key = self.get_config().get("freeimage_api_key")
+                gen = SelfieGenerator(api_key, freeimage_key=freeimage_key, bfl_api_key=bfl_api_key)
                 gen.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)
                     )
                 )
-                result = gen.generate(
-                    image_path=image_path,
-                    prompt=prompt,
-                    output_folder=output_folder,
-                    id_weight=id_weight,
-                    width=width,
-                    height=height,
-                    seed=seed,
-                )
+                gen.set_cancel_event(self._cancel_current)
+                results = []
+                failed_models = []
+                skipped_models = []
+
+                for idx, model in enumerate(selected_models):
+                    # Check abort/stop before each model
+                    if self._abort_flow.is_set():
+                        self.winfo_toplevel().after(
+                            0, lambda: self.log("Generation aborted by user", "warning")
+                        )
+                        break
+                    if self._cancel_all.is_set():
+                        self.winfo_toplevel().after(
+                            0, lambda: self.log("Stopping after current model (user request)", "warning")
+                        )
+                        break
+
+                    # Reset per-model cancel event for the new model
+                    self._cancel_current.clear()
+
+                    endpoint = model.get("endpoint", "")
+                    label = model.get("label", endpoint)
+
+                    # Update status with model progress
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda i=idx, t=total_models, l=label: self.status_label.config(
+                            text=f"Model {i+1}/{t}: {l[:20]}..."
+                        ),
+                    )
+
+                    # Resolve wildcards per-model for variety
+                    if wildcard_template:
+                        model_prompt = SelfieGenerator.resolve_wildcards(wildcard_template)
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda l=label, p=model_prompt: self.log(
+                                f"[{l}] Resolved prompt: {p[:120]}...", "debug"
+                            ),
+                        )
+                    else:
+                        model_prompt = prompt
+
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda l=label, e=endpoint: self.log(
+                            f"Generating with {l} ({e})...", "task"
+                        ),
+                    )
+                    result = gen.generate(
+                        image_path=image_path,
+                        prompt=model_prompt,
+                        output_folder=output_folder,
+                        id_weight=id_weight,
+                        width=width,
+                        height=height,
+                        seed=seed,
+                        model_endpoint=endpoint,
+                        model_label=label,
+                    )
+                    if result:
+                        results.append((model, result))
+                        # Show result immediately in carousel
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda m=model, r=result: self._show_single_result(m, r),
+                        )
+                    elif self._cancel_current.is_set():
+                        # User skipped this model — don't count as failure
+                        skipped_models.append(label)
+                        self.winfo_toplevel().after(
+                            0,
+                            lambda l=label: self.log(f"Skipped: {l}", "warning"),
+                        )
+                    else:
+                        failed_models.append(label)
+
                 self.winfo_toplevel().after(
-                    0, lambda: self._on_complete(result)
+                    0, lambda r=results, fl=failed_models, sk=skipped_models: self._on_complete_batch(r, fl, sk)
                 )
             except Exception as e:
                 err = str(e)
@@ -352,12 +1112,89 @@ class SelfieTab(tk.Frame):
     def _on_complete(self, result):
         self._set_busy(False)
         if result:
-            self.image_session.add_image(result, "selfie")
-            self.log(
-                f"Selfie generated: {os.path.basename(result)}", "success"
-            )
+            self._last_result_path = result
+            similarity = self._extract_similarity_from_result_path(result)
+            selfie_label = f"Selfie (Sim: {similarity})" if similarity is not None else "Selfie (Sim: N/A)"
+            self.image_session.add_image(result, "selfie", label=selfie_label)
+            message = f"Selfie generated: {os.path.basename(result)}"
+            if similarity is not None:
+                message = f"Selfie generated (Similarity {similarity}): {os.path.basename(result)}"
+            self.log(message, "success")
+            self._refresh_result_actions()
         else:
             self.log("Selfie generation failed", "error")
+
+    @staticmethod
+    def _truncate_model_label(label: str) -> str:
+        text = (label or "").strip()
+        if not text:
+            return "Model"
+        return text[:18]
+
+    @staticmethod
+    def _extract_similarity_from_result_path(path: str) -> Optional[str]:
+        """Extract similarity token from output filename (e.g. *_sim72_001.png)."""
+        if not path:
+            return None
+        name = os.path.basename(path).lower()
+        match = re.search(r"_sim(\d+|na)_\d{3}\.png$", name)
+        if not match:
+            return None
+        token = match.group(1)
+        return "n/a" if token == "na" else f"{token}%"
+
+    def _format_selfie_label(self, model_label: str, result_path: str) -> str:
+        short_model = self._truncate_model_label(model_label)
+        similarity = self._extract_similarity_from_result_path(result_path)
+        if similarity is None:
+            return f"{short_model} (Sim: N/A)"
+        return f"{short_model} (Sim: {similarity})"
+
+    def _show_single_result(self, model: dict, result: str):
+        """Add a single completed result to the carousel immediately."""
+        label = model.get("label", model.get("endpoint", "model"))
+        similarity = self._extract_similarity_from_result_path(result)
+        self._last_result_path = result
+        self.image_session.add_image(
+            result,
+            "selfie",
+            label=self._format_selfie_label(label, result),
+        )
+        message = f"Selfie generated [{label}]: {os.path.basename(result)}"
+        if similarity is not None:
+            message = (
+                f"Selfie generated [{label}] (Similarity {similarity}): "
+                f"{os.path.basename(result)}"
+            )
+        self.log(message, "success")
+        self._refresh_result_actions()
+
+    def _on_complete_batch(self, results, failed_models, skipped_models=None):
+        """Final summary after all models have run (results already shown progressively)."""
+        self._set_busy(False)
+        skipped = skipped_models or []
+
+        if not results and not skipped:
+            self.log("Selfie generation failed for all selected models", "error")
+
+        total = len(results) + len(failed_models) + len(skipped)
+        if results and (failed_models or skipped):
+            self.log(
+                f"Batch complete: {len(results)}/{total} succeeded",
+                "info",
+            )
+
+        if failed_models:
+            self.log(
+                f"Failed models: {', '.join(failed_models)}",
+                "warning",
+            )
+
+        if skipped:
+            self.log(
+                f"Skipped models: {', '.join(skipped)}",
+                "info",
+            )
 
     def _on_error(self, error):
         self._set_busy(False)
@@ -369,18 +1206,176 @@ class SelfieTab(tk.Frame):
             state=tk.DISABLED if busy else tk.NORMAL,
             text="Generating..." if busy else "Generate Selfie",
         )
+        if busy:
+            # Clear all cancel events and reset button states
+            self._cancel_current.clear()
+            self._cancel_all.clear()
+            self._abort_flow.clear()
+            self._skip_btn.config(text="Skip Model", state=tk.NORMAL)
+            self._stop_btn.config(text="Stop After This", state=tk.NORMAL)
+            self._abort_btn.config(text="Abort All", state=tk.NORMAL)
+            self._cancel_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
+        else:
+            self._cancel_bar.pack_forget()
+        if busy:
+            self.save_as_btn.config(state=tk.DISABLED)
+            self.open_file_btn.config(state=tk.DISABLED)
+            self.open_folder_btn.config(state=tk.DISABLED)
+        else:
+            self._refresh_result_actions()
         self.status_label.config(
             text="Processing..." if busy else "",
             fg=COLORS["progress"] if busy else COLORS["text_dim"],
         )
 
+    def _on_output_mode_changed(self):
+        self._update_output_entry_state()
+        mode_desc = (
+            "next to source image"
+            if self.output_mode_var.get() == "source"
+            else "custom folder"
+        )
+        self.log(f"Selfie save mode set to {mode_desc}", "info")
+
+    def _update_output_entry_state(self):
+        use_custom = self.output_mode_var.get() == "custom"
+        self.output_entry.config(state=tk.NORMAL if use_custom else tk.DISABLED)
+        self.browse_btn.config(state=tk.NORMAL if use_custom else tk.DISABLED)
+
+    def _browse_output_folder(self):
+        initial_dir = self.output_path_var.get().strip() or os.path.expanduser("~")
+        folder = filedialog.askdirectory(
+            title="Select Selfie Output Folder",
+            initialdir=initial_dir,
+        )
+        if folder:
+            self.output_path_var.set(folder)
+            self.log(f"Selfie output folder set: {folder}", "success")
+
+    def _resolve_output_folder(self, source_image_path: str) -> str:
+        if self.output_mode_var.get() == "custom":
+            custom_folder = self.output_path_var.get().strip()
+            if not custom_folder:
+                raise ValueError("Custom output folder is empty")
+            os.makedirs(custom_folder, exist_ok=True)
+            return custom_folder
+        gen_dir = get_gen_images_folder(source_image_path)
+        if not gen_dir:
+            raise ValueError("Could not resolve source image folder")
+        os.makedirs(gen_dir, exist_ok=True)
+        return gen_dir
+
+    def _refresh_result_actions(self):
+        has_result = bool(
+            self._last_result_path and os.path.isfile(self._last_result_path)
+        )
+        self.save_as_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+        self.open_file_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+        self.open_folder_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+
+    def _open_path_in_explorer(self, path: str):
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.run(["open", path], check=True)
+            else:
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self.log(f"Could not open {path}: {e}", "error")
+
+    def _on_open_result_file(self):
+        if not self._last_result_path or not os.path.isfile(self._last_result_path):
+            self.log("No generated selfie file to open", "warning")
+            return
+        self._open_path_in_explorer(self._last_result_path)
+
+    def _on_open_result_folder(self):
+        if not self._last_result_path:
+            self.log("No generated selfie folder to open", "warning")
+            return
+        folder = os.path.dirname(self._last_result_path)
+        if not folder or not os.path.isdir(folder):
+            self.log("Generated selfie folder does not exist", "warning")
+            return
+        self._open_path_in_explorer(folder)
+
+    def _on_save_as(self):
+        if not self._last_result_path or not os.path.isfile(self._last_result_path):
+            self.log("No generated selfie to save", "warning")
+            return
+        initial_dir = os.path.dirname(self._last_result_path)
+        initial_file = os.path.basename(self._last_result_path)
+        target_path = filedialog.asksaveasfilename(
+            title="Save Selfie As",
+            initialdir=initial_dir,
+            initialfile=initial_file,
+            defaultextension=".png",
+            filetypes=[
+                ("PNG Image", "*.png"),
+                ("JPEG Image", "*.jpg;*.jpeg"),
+                ("WebP Image", "*.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not target_path:
+            return
+        try:
+            if os.path.abspath(target_path) == os.path.abspath(self._last_result_path):
+                self.log("Selected path is the same as existing generated file", "info")
+                return
+            target_dir = os.path.dirname(target_path)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+            shutil.copy2(self._last_result_path, target_path)
+            self.log(f"Saved copy: {target_path}", "success")
+        except Exception as e:
+            self.log(f"Save failed: {e}", "error")
+
+    def _load_model_options(self) -> List[dict]:
+        try:
+            from selfie_generator import SelfieGenerator
+            return SelfieGenerator.get_available_models()
+        except Exception:
+            return [
+                {
+                    "endpoint": "fal-ai/flux-pulid",
+                    "label": "PuLID Flux",
+                    "api_url": "https://fal.ai/models/fal-ai/flux-pulid/api",
+                }
+            ]
+
+    def _get_selected_models(self) -> List[dict]:
+        selected = []
+        for model in self._model_options:
+            endpoint = model.get("endpoint", "")
+            var = self._model_vars.get(endpoint)
+            if var and var.get():
+                selected.append(model)
+        return selected
+
     def get_config_updates(self) -> dict:
+        width, height = self._get_selected_dimensions()
+        # Save the raw template (not the resolved view)
+        raw_template = self._get_raw_template_text()
+        template_fields = self._extract_json_fields(raw_template)
         return {
             "composer_gender": self.gender_var.get(),
             "composer_camera_style": self.style_var.get(),
             "selfie_id_weight": self.id_weight_var.get(),
-            "selfie_width": self.width_var.get(),
-            "selfie_height": self.height_var.get(),
+            "selfie_width": width,
+            "selfie_height": height,
             "selfie_seed": self.seed_var.get(),
             "selfie_random_seed": self.random_seed_var.get(),
+            "selfie_output_mode": self.output_mode_var.get(),
+            "selfie_output_folder": self.output_path_var.get().strip(),
+            "selfie_prompt_template": raw_template,
+            "selfie_template_fields": template_fields,
+            "selfie_selected_models": {
+                endpoint: bool(var.get())
+                for endpoint, var in self._model_vars.items()
+            },
+            "selfie_prompt_mode": self._prompt_mode_var.get(),
+            "selfie_wildcard_template": self._wildcard_text.get("1.0", tk.END).strip(),
         }

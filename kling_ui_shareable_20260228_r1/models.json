@@ -1,126 +1,24 @@
 {
-  "_comment": "Edit this file to add/remove/update models. Restart the app to apply changes.",
-  "_fields": {
-    "name": "Display name shown in menus",
-    "endpoint": "fal.ai API endpoint ID",
-    "release": "Release period shown in dropdown (e.g. 'Feb 2026')",
-    "est_cost_10s": "Estimated cost for a 10-second video (e.g. '$1.40')",
-    "duration_options": "List of supported durations in seconds",
-    "duration_default": "Default duration to pre-select",
-    "notes": "Tooltip text shown when hovering the info icon (optional)"
-  },
   "models": [
-    {
-      "name": "Kling 3.0 Pro",
-      "endpoint": "fal-ai/kling-video/v3/pro/image-to-video",
-      "release": "Feb 2026",
-      "est_cost_10s": "$2.80",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #1 for head-turn workflows\n\n• Unmatched Physical Isolation: Best physics engine for moving the head while perfectly freezing shoulders and torso.\n• Zero Drift: Highly resistant to AI wobble during slow movements like a 40° turn — camera stays absolutely locked."
-    },
-    {
-      "name": "Kling 3.0 Standard",
-      "endpoint": "fal-ai/kling-video/v3/standard/image-to-video",
-      "release": "Feb 2026",
-      "est_cost_10s": "$1.40",
-      "duration_options": [5, 10],
-      "duration_default": 5
-    },
-    {
-      "name": "Kling O1",
-      "endpoint": "fal-ai/kling-video/o1/image-to-video",
-      "release": "Dec 2025",
-      "est_cost_10s": "$1.00",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #4 for head-turn workflows\n\n• Enhanced Subject Consistency: Built as a unified multimodal model that locks onto an identity and refuses to let the face morph or warp as the head turns."
-    },
-    {
-      "name": "Kling 2.6 Pro",
-      "endpoint": "fal-ai/kling-video/v2.6/pro/image-to-video",
-      "release": "Dec 2025",
-      "est_cost_10s": "$1.40",
-      "duration_options": [5, 10],
-      "duration_default": 5
-    },
-    {
-      "name": "Kling 2.5 Turbo Pro",
-      "endpoint": "fal-ai/kling-video/v2.5/turbo-pro/image-to-video",
-      "release": "Sep 2025",
-      "est_cost_10s": "$1.00",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #2 for head-turn workflows\n\n• Reliable Staple: Handles strict prompt instructions exceptionally well with high facial consistency.\n• Cost-Effective Precision: Nearly the same mechanical accuracy as 3.0 at a fraction of the cost — best price/performance balance."
-    },
-    {
-      "name": "Kling 2.1 Professional",
-      "endpoint": "fal-ai/kling-video/v2.1/pro/image-to-video",
-      "release": "Early 2025",
-      "est_cost_10s": "$1.40",
-      "duration_options": [5, 10],
-      "duration_default": 5
-    },
-    {
-      "name": "Kling 2.0 Master",
-      "endpoint": "fal-ai/kling-video/v2/master/image-to-video",
-      "release": "Early 2025",
-      "est_cost_10s": "$2.80",
-      "duration_options": [5, 10],
-      "duration_default": 5
-    },
-    {
-      "name": "Kling V1.6",
-      "endpoint": "fal-ai/kling-video/v1.6/image-to-video",
-      "release": "Late 2024",
-      "est_cost_10s": "$0.50",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #7 for head-turn workflows\n\n• Legacy Control: Still benefits from Kling's core focus on prompt adherence and physical logic.\n• Limitation: May struggle with micro-adjustments of a lifelike human face compared to 2.5 or 3.0."
-    },
-    {
-      "name": "Kling V1.5",
-      "endpoint": "fal-ai/kling-video/v1.5/image-to-video",
-      "release": "Mid 2024",
-      "est_cost_10s": "$0.50",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #7 for head-turn workflows\n\n• Legacy Control: Still benefits from Kling's core focus on prompt adherence and physical logic.\n• Limitation: May struggle with micro-adjustments of a lifelike human face compared to 2.5 or 3.0."
-    },
-    {
-      "name": "MiniMax Hailuo V2.3 Pro",
-      "endpoint": "fal-ai/minimax-video/v2.3/pro/image-to-video",
-      "release": "Oct 2025",
-      "est_cost_10s": "$0.80",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #3 for head-turn workflows\n\n• Forensic Cleanliness: Incredible temporal stability with no exposure flickering across frames — perfect clean slate.\n• Photorealistic Skin Textures: Maintains natural, consistent lighting on faces without injecting artificial highlights during movement."
-    },
-    {
-      "name": "MiniMax Video (Base)",
-      "endpoint": "fal-ai/minimax-video/image-to-video",
-      "release": "Oct 2024",
-      "est_cost_10s": "$0.45",
-      "duration_options": [6],
-      "duration_default": 6,
-      "notes": "★ Ranked #5 for head-turn workflows\n\n• Budget Stability: Offers much of the same temporal consistency and clean lighting as the Pro version.\n• Best cheap option that preserves forensic integrity."
-    },
-    {
-      "name": "Hunyuan Video 1.5",
-      "endpoint": "fal-ai/hunyuan-video/v1.5/image-to-video",
-      "release": "Nov 2025",
-      "est_cost_10s": "$0.80",
-      "duration_options": [5, 10],
-      "duration_default": 5,
-      "notes": "★ Ranked #6 for head-turn workflows\n\n• Anti-Jitter Architecture: Specifically designed to reduce frame-to-frame jitter — crucial for slow, smooth motion.\n• Strong Silhouettes: Keeps the subject's outline sharp against the background, preventing warp as the head moves."
-    },
-    {
-      "name": "Hunyuan Video (Base)",
-      "endpoint": "fal-ai/hunyuan-video/image-to-video",
-      "release": "Dec 2024",
-      "est_cost_10s": "$0.80",
-      "duration_options": [5, 10],
-      "duration_default": 5
-    }
-  ]
+    {"endpoint": "fal-ai/kling-video/v3/pro/image-to-video", "name": "Kling 3.0 Pro", "release": "Feb 2026"},
+    {"endpoint": "fal-ai/kling-video/v3/standard/image-to-video", "name": "Kling 3.0 Standard", "release": "Feb 2026"},
+    {"endpoint": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "name": "Kling 2.5 Turbo Pro", "release": "Mid 2025"},
+    {"endpoint": "fal-ai/kling-video/v2.5-turbo/standard/image-to-video", "name": "Kling 2.5 Turbo Standard", "release": "Mid 2025"},
+    {"endpoint": "fal-ai/kling-video/o1/image-to-video", "name": "Kling O1", "release": "Dec 2025"},
+    {"endpoint": "fal-ai/kling-video/v2.6/pro/image-to-video", "name": "Kling 2.6 Pro", "release": "2025"},
+    {"endpoint": "fal-ai/kling-video/v2.1/pro/image-to-video", "name": "Kling 2.1 Pro", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v2/master/image-to-video", "name": "Kling 2.0 Master", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v1.6/pro/image-to-video", "name": "Kling 1.6", "release": "2024"},
+    {"endpoint": "fal-ai/kling-video/v1.5/pro/image-to-video", "name": "Kling 1.5", "release": "2024"},
+    {"endpoint": "fal-ai/minimax-video/image-to-video", "name": "MiniMax Video", "release": "2024"},
+    {"endpoint": "fal-ai/hunyuan-video/v1.5/image-to-video", "name": "Hunyuan Video v1.5", "release": "2025"},
+    {"endpoint": "fal-ai/hunyuan-video/image-to-video", "name": "Hunyuan Video", "release": "2024"}
+  ],
+  "user_notes": {
+    "fal-ai/kling-video/v3/pro/image-to-video": "★ Ranked #1 for head-turn workflows\n\n• Unmatched Physical Isolation: Best physics engine for moving the head while perfectly freezing shoulders and torso.\n• Zero Drift: Highly resistant to AI wobble during slow movements like a 40° turn — camera stays absolutely locked.",
+    "fal-ai/kling-video/o1/image-to-video": "★ Ranked #4 for head-turn workflows\n\n• Enhanced Subject Consistency: Built as a unified multimodal model that locks onto an identity and refuses to let the face morph or warp as the head turns.",
+    "fal-ai/kling-video/v2.5-turbo/pro/image-to-video": "★ Fast & affordable workhorse\n\n• Quick generation times at a budget-friendly price.",
+    "fal-ai/minimax-video/image-to-video": "★ Ranked #5 for head-turn workflows\n\n• Budget Stability: Offers much of the same temporal consistency and clean lighting as the Pro version.\n• Best cheap option that preserves forensic integrity.",
+    "fal-ai/hunyuan-video/v1.5/image-to-video": "★ Ranked #6 for head-turn workflows\n\n• Anti-Jitter Architecture: Specifically designed to reduce frame-to-frame jitter — crucial for slow, smooth motion.\n• Strong Silhouettes: Keeps the subject's outline sharp against the background, preventing warp as the head moves."
+  }
 }

@@ -13,10 +13,77 @@ class VisionAnalyzer:
     """Analyze portrait images using OpenRouter vision models."""
 
     ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+    DEFAULT_SYSTEM_PROMPT = (
+        "You are a JSON API. You only output valid JSON. Never write explanations, "
+        "never use markdown, never use code blocks, never say anything outside the JSON.\n\n"
+        "Analyze the portrait image and return exactly this JSON structure with "
+        "descriptive phrase values — never single words:\n"
+        '{"hair":"...","skin":"...","eyes":"...","face_shape":"...","age_range":"...",'
+        '"gender":"...","clothing":"...","expression":"..."}\n\n'
+        "Rules:\n"
+        "- Output MUST start with { and end with }\n"
+        "- No text before or after the JSON\n"
+        "- No markdown fences, no commentary\n"
+        "- All values must be descriptive phrases\n"
+        '- clothing: if not visible, write "casual everyday outfit"\n'
+        '- gender: write only "man" or "woman"'
+    )
+    DEFAULT_USER_PROMPT = (
+        "Analyze this portrait and return the JSON."
+    )
 
-    def __init__(self, api_key: str, model: str = "bytedance-seed/seed-1.6-flash"):
+    # Field hints used by build_json_system_prompt() for dynamic schemas
+    _FIELD_HINTS = {
+        "hair": "hair color, length, and style",
+        "skin": "skin tone and complexion",
+        "eyes": "eye color and shape",
+        "face_shape": "face shape (oval, round, square, etc.)",
+        "age_range": "estimated age range (e.g. 'early to mid-twenties')",
+        "gender": "write only 'man' or 'woman'",
+        "clothing": "visible clothing description; if not visible write 'casual everyday outfit'",
+        "expression": "facial expression",
+    }
+
+    @staticmethod
+    def build_json_system_prompt(required_fields: list) -> str:
+        """Build a system prompt requesting JSON with exactly these fields.
+
+        Fields present in _FIELD_HINTS get descriptive guidance; unknown fields
+        get a hint derived from the field name.
+        """
+        schema_parts = []
+        for f in required_fields:
+            hint = VisionAnalyzer._FIELD_HINTS.get(f, f.replace("_", " "))
+            schema_parts.append(f'"{f}":"<{hint}>"')
+        schema = "{" + ",".join(schema_parts) + "}"
+
+        return (
+            "You are a JSON API. You only output valid JSON. Never write explanations, "
+            "never use markdown, never use code blocks, never say anything outside the JSON.\n\n"
+            f"Analyze the portrait image and return exactly this JSON structure with "
+            f"descriptive phrase values — never single words:\n{schema}\n\n"
+            "Rules:\n"
+            "- Output MUST start with { and end with }\n"
+            "- No text before or after the JSON\n"
+            "- No markdown fences, no commentary\n"
+            "- All values must be descriptive phrases"
+        )
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "bytedance-seed/seed-1.6-flash",
+        system_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
+    ):
         self.api_key = api_key
         self.model = model
+        self.system_prompt = (
+            system_prompt.strip() if system_prompt and system_prompt.strip() else self.DEFAULT_SYSTEM_PROMPT
+        )
+        self.user_prompt = (
+            user_prompt.strip() if user_prompt and user_prompt.strip() else self.DEFAULT_USER_PROMPT
+        )
         self._progress_callback: Optional[Callable[[str, str], None]] = None
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
@@ -58,20 +125,10 @@ class VisionAnalyzer:
 
         self._report(f"Sending to {self.model}...", "api")
 
-        system_prompt = (
-            "You are a portrait photo analyzer for AI video generation. "
-            "Analyze the provided portrait image and generate a detailed prompt "
-            "that describes the subject's appearance, pose, expression, clothing, "
-            "hair, and setting. The prompt should be suitable for generating a "
-            "realistic video of this person with natural subtle movements like "
-            "breathing, blinking, and slight head movement. "
-            "Return ONLY the prompt text, no explanations or formatting."
-        )
-
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": self.system_prompt},
                 {
                     "role": "user",
                     "content": [
@@ -81,7 +138,7 @@ class VisionAnalyzer:
                         },
                         {
                             "type": "text",
-                            "text": "Analyze this portrait and generate a video animation prompt.",
+                            "text": self.user_prompt,
                         },
                     ],
                 },
