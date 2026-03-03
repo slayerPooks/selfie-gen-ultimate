@@ -93,8 +93,18 @@ def get_crash_log_path() -> str:
 def is_frozen() -> bool:
     """
     Check if running as a frozen executable.
-    
+
     Returns:
         bool: True if running as exe, False if running as script
     """
     return getattr(sys, 'frozen', False)
+
+
+def get_gen_images_folder(source_path: str) -> str:
+    """Return the gen-images subfolder path next to the given source file.
+
+    Pure path computation — does NOT call os.makedirs.
+    Each caller is responsible for creating it before writing.
+    """
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    return os.path.join(source_dir, "gen-images")

@@ -4,224 +4,150 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kling UI is a batch video generation tool using fal.ai Platform API to create AI videos from images. It provides:
-- **CLI Mode**: Terminal-based Rich UI menu system
-- **GUI Mode**: Tkinter drag-and-drop interface with queue management
-- **Balance Tracking**: Optional real-time fal.ai credit monitoring via Selenium
+Kling UI is an AI media generation toolkit using fal.ai and BFL APIs. It provides a 5-tab Tkinter GUI for face cropping, portrait analysis, selfie generation, image outpainting, and batch video generation, plus a CLI mode via Rich.
 
 ## Commands
 
 ```bash
-# Run CLI application
+# Setup
+python -m venv venv && venv/Scripts/pip install -r requirements.txt
+
+# Run CLI (menu-driven, option 6 launches GUI)
 python kling_automation_ui.py
 
 # Launch GUI directly
 python -c "from kling_gui import KlingGUIWindow; KlingGUIWindow().run()"
 
-# Check dependencies
+# Check/install dependencies
 python dependency_checker.py
 
-# Test balance checker (opens Chrome for login)
-python selenium_balance_checker.py
+# Build standalone EXE (PyInstaller)
+build_gui_exe.bat
 
-# Install dependencies
-pip install requests pillow rich selenium webdriver-manager tkinterdnd2
+# Type checking
+npx pyright  # uses pyrightconfig.json (basic mode, Python 3.10)
 ```
+
+There are no tests. Verify changes by running the GUI and testing the relevant tab.
 
 ## Architecture
 
-### Core Files
+### Entry Points
 
-| File | Purpose |
-|------|---------|
-| `kling_automation_ui.py` | CLI menu system (`KlingAutomationUI` class) |
-| `kling_generator_falai.py` | fal.ai API integration with progress callbacks |
-| `dependency_checker.py` | Checks/installs Python packages and external tools |
-| `kling_config.json` | Persistent configuration (auto-generated) |
+- `kling_automation_ui.py` — CLI menu system (Rich UI). Option 6 launches GUI.
+- `kling_gui/main_window.py` — GUI entry. Creates `ttk.Notebook` with 5 tabs + `ImageCarousel` + `ComparePanel`.
+- `gui_launcher.py` — PyInstaller-compatible GUI bootstrap.
+- `run_gui.bat` — Windows launcher with auto-venv.
 
-### Balance Tracking System
+### GUI Tab Architecture (`kling_gui/tabs/`)
 
-| File | Class | Purpose |
-|------|-------|---------|
-| `selenium_balance_checker.py` | `SeleniumBalanceChecker` | Chrome automation to read fal.ai balance page |
-| `balance_tracker.py` | `RealTimeBalanceTracker` | Background thread wrapper with callbacks |
+| Tab | File | Class | Purpose |
+|-----|------|-------|---------|
+| 0. Face Crop | `face_crop_tab.py` | `FaceCropTab` | Extract 3:4 passport face crops via RetinaFace (optional deps: cv2, retinaface) |
+| 1. Prep | `prep_tab.py` | `PrepTab` | Vision AI portrait analysis (OpenRouter API) |
+| 2. Selfie | `selfie_tab.py` | `SelfieTab` | Generate selfies from identity reference via fal.ai + BFL |
+| 3. Outpaint | `outpaint_tab.py` | `OutpaintTab` | Expand images using fal.ai outpaint |
+| 4. Video | `video_tab.py` | `VideoTab` | Batch video generation (wraps ConfigPanel + DropZone + Queue) |
 
-Balance tracking uses a persistent Chrome profile (`chrome_profile/`) to save login session. First run requires manual login; subsequent runs use saved session in headless mode.
+All tabs share an `ImageSession` instance for image pipeline state and a `log_callback` for the unified `LogDisplay`.
 
-### GUI Package (`kling_gui/`)
+### Image Pipeline State (`image_state.py`)
 
-| Module | Class | Purpose |
-|--------|-------|---------|
-| `main_window.py` | `KlingGUIWindow` | Main Tkinter window, assembles all components |
-| `config_panel.py` | `ConfigPanel` | Model/output/prompt settings + verbose toggle |
-| `config_panel.py` | `PromptEditorDialog` | Modal dialog for editing prompts |
-| `queue_manager.py` | `QueueManager` | Thread-safe processing queue with worker thread |
-| `queue_manager.py` | `QueueItem` | Dataclass for queue items with status tracking |
-| `drop_zone.py` | `DropZone` | Drag-and-drop + click-to-browse widget (tkinterdnd2) |
-| `log_display.py` | `LogDisplay` | Color-coded scrolling log widget with verbose tags |
-| `video_looper.py` | `create_looped_video()` | FFmpeg ping-pong loop effect |
-
-### Distribution Package (`distribution/`)
-
-Self-contained distribution folder with auto-venv setup:
-- `run_kling_ui.bat` - Auto-creates venv and installs deps on first run
-- Complete source files for standalone deployment
-- Recipients only need Python 3.8+ installed
-
-### CLI Menu Options
-
-1. Set API Key
-2. Set Output Folder
-3. Process Single File
-4. Process Folder
-5. View/Edit Configuration
-6. **Launch GUI** → Opens `KlingGUIWindow`
-7. **Check Dependencies** → Runs `dependency_checker.py`
-
-### Data Flow
+`ImageSession` tracks images through the multi-tab pipeline. Each `ImageEntry` has a `source_type` ("input", "selfie", "outpaint") and flows through:
 
 ```
-Image → freeimage.host upload → fal.ai queue API → Poll status → Download video
+Input image → Face Crop → Prep (analyze) → Selfie (generate) → Outpaint (expand) → Video (animate)
 ```
 
-1. Images uploaded to freeimage.host (fal.ai requires public URLs)
-2. fal.ai queue API returns `request_id` and `status_url`
-3. Polling with exponential backoff (5s → 10s → 15s)
-4. Video downloaded as `{imagename}_kling_{model}_{pN}.mp4` (e.g., `selfie_kling_k25turbo_p2.mp4`)
+The `ImageCarousel` widget provides visual navigation; `ComparePanel` offers side-by-side comparison with independent navigation.
 
-### Configuration Schema (`kling_config.json`)
+### Backend Generators
 
-```json
-{
-  "falai_api_key": "",
-  "output_folder": "",
-  "use_source_folder": true,
-  "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
-  "model_display_name": "Kling 2.5 Turbo Pro",
-  "current_prompt_slot": 2,
-  "saved_prompts": {"1": "...", "2": "...", "3": null},
-  "video_duration": 10,
-  "loop_videos": false,
-  "allow_reprocess": true,
-  "reprocess_mode": "increment",
-  "verbose_logging": true,
-  "verbose_gui_mode": false,
-  "duplicate_detection": true
-}
+All generators follow the same pattern: `set_progress_callback(cb)` for GUI logging, `_report(msg, level)` internally.
+
+| Module | Class | External API |
+|--------|-------|-------------|
+| `kling_generator_falai.py` | `FalAIKlingGenerator` | fal.ai queue API (video gen) |
+| `selfie_generator.py` | `SelfieGenerator` | fal.ai (FLUX PuLID, Instant Character, etc.) + BFL (Kontext Pro/Max, FLUX 2 Pro) |
+| `outpaint_generator.py` | `OutpaintGenerator` | fal.ai outpaint |
+| `vision_analyzer.py` | `VisionAnalyzer` | OpenRouter chat completions (vision) |
+| `selfie_prompt_composer.py` | `SelfiePromptComposer` | None (local prompt assembly) |
+
+### Dual API Providers in Selfie Generator
+
+`SelfieGenerator` supports two providers selected per-model via `AVAILABLE_MODELS[].provider`:
+- **fal.ai** (default): Uses `fal_utils.fal_queue_submit/poll` pattern. Needs freeimage.host upload first.
+- **BFL** (`provider: "bfl"`): Direct REST API to `api.bfl.ai`. Uses base64 image encoding + polling. Needs separate `bfl_api_key`.
+
+The provider is selected automatically based on the model's `provider` field. BFL models have `api_url` pointing to `api.bfl.ai/v1/...`.
+
+### Shared Utilities
+
+| Module | Purpose |
+|--------|---------|
+| `fal_utils.py` | `upload_to_freeimage()`, `fal_queue_submit()`, `fal_queue_poll()`, `fal_download_file()` — shared by all fal.ai generators |
+| `model_metadata.py` | Loads endpoint list from `models.json`, provides `get_model_by_endpoint()`, `get_model_display_name()`, `get_prompt_limit()` |
+| `model_schema_manager.py` | Queries and caches fal.ai OpenAPI schemas (TTL-based, disk + memory cache at `~/.kling-ui/model_cache/`) |
+| `path_utils.py` | PyInstaller-compatible path resolution (`get_app_dir()`, `get_config_path()`, `is_frozen()`, `VALID_EXTENSIONS`) |
+
+### Data-Driven Model Configuration
+
+**Video models** are defined in `models.json` as a list of dicts with `endpoint`, `name`, and `release` fields. `model_metadata.py` provides `get_model_by_endpoint()`, `get_model_display_name()`, etc. The file also has a `user_notes` map for per-model descriptions. At runtime, `ModelSchemaManager` enriches models with pricing and parameter info from the fal.ai API.
+
+**Selfie models** are hardcoded in `SelfieGenerator.AVAILABLE_MODELS` as a list of dicts with `endpoint`, `label`, `slug`, `provider`, `api_url`.
+
+### Known Code Inconsistency
+
+`config_panel.py` duplicates a `COLORS` dict and `FONT_FAMILY` instead of importing from `theme.py`. All other modules use `theme.py`. When editing theme values, update both locations or refactor to use the single source.
+
+### API Keys Required
+
+| Key | Config Field | Used By |
+|-----|-------------|---------|
+| fal.ai | `falai_api_key` | All fal.ai generators (video, selfie, outpaint) |
+| Freeimage.host | `freeimage_api_key` | Image uploads (fal.ai requires public URLs) |
+| BFL (Black Forest Labs) | `bfl_api_key` | FLUX Kontext / FLUX 2 Pro selfie models |
+| OpenRouter | `openrouter_api_key` | Vision analysis in Prep tab |
+
+### Configuration (`kling_config.json`)
+
+Auto-generated, persisted JSON. Defaults for new installs come from `default_config_template.json` (only covers video prompts + model selection).
+
+Key sections:
+- **Video**: `saved_prompts` (6 slots), `negative_prompts`, `current_model`, `video_duration`, `loop_videos`
+- **Selfie**: `selfie_selected_models`, `selfie_prompt_template`, `selfie_scene_templates`, `selfie_prompt_mode` (json_handoff or wildcard), `selfie_wildcard_template`, `selfie_id_weight`, `selfie_width/height`
+- **Outpaint**: `outpaint_expand_*` (L/R/T/B), `outpaint_prompt`, `outpaint_format`, `outpaint_expand_mode` (pixels or percentage)
+- **Vision**: `openrouter_api_key`, `openrouter_model`, `openrouter_vision_system_prompt`
+- **Face Crop**: `face_crop_multiplier`, `face_crop_auto_switch`
+- **UI state**: `window_geometry`, `sash_*` positions
+
+### Key Data Flows
+
+**Selfie generation (two paths):**
 ```
+json_handoff mode:  Portrait → VisionAnalyzer (OpenRouter) → JSON traits → SelfiePromptComposer template → fal.ai/BFL model
+wildcard mode:      Wildcard template with {opt1|opt2|opt3} → resolve_wildcards() → fal.ai/BFL model
+```
+Vision analyzer returns structured JSON (`hair`, `skin`, `eyes`, `face_shape`, `age_range`, `gender`, `clothing`, `expression`). FLUX PuLID gets an extra realism suffix appended. DeepFace computes face similarity scores post-generation.
 
-**Configuration Notes**:
-- `output_folder`: Defaults to empty - user picks their own folder (saved between sessions)
-- `verbose_gui_mode`: Enables detailed CLI-like output in GUI log panel
-- **Default Prompts**: Slot 1 = basic head turn, Slot 2 = enhanced lifelike animation (recommended)
+**Video generation:**
+```
+Image → freeimage.host upload → fal.ai queue submit → poll status_url → download .mp4
+```
+Output naming: `{imagename}_kling_{model_short}_{pN}.mp4` (model short names derived in `queue_manager._model_short_from_endpoint()`)
 
-### Key Implementation Details
+### Threading Model
 
-**Thread Safety** (`queue_manager.py`):
-- `threading.Lock()` protects `items` list
 - GUI updates via `root.after()` for thread-safe Tkinter calls
-- Worker thread is daemon (stops on window close)
+- `QueueManager` uses `threading.Lock()` on its items list, daemon worker thread
+- All generators run in background threads spawned by their respective tabs
+- `ModelSchemaManager` has its own `threading.Lock()` for cache access
+- Balance tracker (optional) runs headless Chrome in a daemon thread
 
-**Balance Tracker Threading** (`balance_tracker.py`):
-- Headless Chrome runs in background daemon thread
-- 30-second refresh interval by default
-- Callbacks update UI via `set_callback()`
-- Suppresses all Selenium/WebDriver logging to prevent console spam
+### Build / Distribution
 
-**Verbose GUI Mode** (`config_panel.py`, `queue_manager.py`, `kling_generator_falai.py`):
-- Toggle in config panel enables detailed logging
-- Progress callback pattern: generator → queue_manager → log_display
-- Color-coded message levels: upload, task, progress, debug, resize, download, api
-- Displays: image resize info, upload progress, task IDs, polling status, download progress, file sizes, generation times
-
-**Click-to-Browse** (`drop_zone.py`):
-- Drop zone is clickable (in addition to drag-and-drop)
-- Opens file dialog for image selection
-- Supports multi-select with same file type validation
-
-**Log Display Colors** (`log_display.py`):
-```python
-# Standard levels
-"info": "#E0E0E0"       # Light gray
-"success": "#00FF88"    # Bright green
-"error": "#FF6B6B"      # Coral red
-"warning": "#FFD93D"    # Yellow
-
-# Verbose mode levels
-"upload": "#00CED1"     # Dark cyan
-"task": "#87CEEB"       # Sky blue
-"progress": "#FFD700"   # Gold
-"debug": "#808080"      # Gray
-"resize": "#DDA0DD"     # Plum
-"download": "#98FB98"   # Pale green
-"api": "#DA70D6"        # Orchid
-```
-
-**Reprocessing Modes**:
-- `allow_reprocess: false` → Skip existing videos
-- `reprocess_mode: "overwrite"` → Delete and regenerate
-- `reprocess_mode: "increment"` → Save as `_kling_{model}_pN_2.mp4`, `_kling_{model}_pN_3.mp4`
-
-**Model Short Names in Filenames**:
-- Kling 2.5 Turbo: `k25turbo`
-- Kling 2.5: `k25`
-- Kling 2.1 Pro: `k21pro`
-- Kling 2.1 Master: `k21master`
-- Kling O1: `kO1`
-- Wan 2.5: `wan25`
-- Veo 3: `veo3`
-- Ovi: `ovi`
-- LTX-2: `ltx2`
-- Pixverse V5: `pix5`
-- Hunyuan: `hunyuan`
-- MiniMax: `minimax`
-
-**Output Folder Fallback**:
-- If custom output folder is empty/invalid and "Use Source Folder" is unchecked, falls back to source folder with warning
-
-**Output Folder Fallback**:
-- If custom output folder is empty/invalid and "Use Source Folder" is unchecked, falls back to source folder with warning
-
-**Valid Image Extensions**: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.gif`, `.tiff`, `.tif`
-
-### API Endpoints
-
-- **Queue**: `https://queue.fal.run/{model_endpoint}`
-- **Models**: `https://api.fal.ai/v1/models?category=image-to-video`
-- **Concurrency**: Max 5 parallel generations
-- **Format**: 9:16 aspect ratio, 10 seconds duration
-- **Cost**: ~$0.45-0.70 per 10-second video (varies by model)
-
-### Progress Callback Pattern
-
-The generator supports a progress callback for verbose GUI logging:
-
-```python
-# In queue_manager.py
-def progress_callback(message: str, level: str = "info"):
-    self.log_verbose(message, level)
-
-if config.get("verbose_gui_mode", False):
-    self.generator.set_progress_callback(progress_callback)
-
-# In kling_generator_falai.py
-def set_progress_callback(self, callback):
-    """Set a callback for progress updates (used by GUI verbose mode)."""
-    self._progress_callback = callback
-
-def _report_progress(self, message: str, level: str = "info"):
-    """Report progress to callback if set."""
-    if self._progress_callback:
-        self._progress_callback(message, level)
-
-# Called at key points: resize, upload, task creation, polling, download
-```
-
-### Recent Changes (Dec 2024)
-
-- **Empty Default Output Folder**: No longer pre-fills `~/Downloads` - starts blank, remembers user's choice
-- **Verbose GUI Mode**: Checkbox toggle for detailed CLI-like output in GUI
-- **Color-Coded Log Levels**: 7 additional color tags for verbose messages
-- **Click-to-Browse**: Drop zone is clickable to open file explorer dialog
-- **Progress Callbacks**: Generator reports detailed progress to GUI when verbose mode enabled
-- **Fallback Logic**: Uses source folder when custom output folder is empty/invalid
+- `build_gui_exe.bat` runs PyInstaller with `kling_gui_direct.spec`
+- `hooks/hook-tkinterdnd2.py` — custom PyInstaller hook for tkinterdnd2
+- `path_utils.py` ensures correct paths whether running as script or frozen exe
+- `create_icon.py` generates `kling_ui.ico` from scratch
+- Output goes to `dist/KlingUI/`

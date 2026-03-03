@@ -5,38 +5,132 @@ Queue Manager - Thread-safe queue for processing images with status tracking.
 import threading
 import os
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from path_utils import VALID_EXTENSIONS
+from path_utils import VALID_EXTENSIONS, get_gen_images_folder
 
 logger = logging.getLogger(__name__)
+
+
+def _model_short_from_endpoint(endpoint: str) -> str:
+    """Derive model short name using the same mapping logic as generator.
+
+    Each model variant (pro/standard/master) gets a distinct name so filenames
+    are unambiguous.  E.g. k25tPro vs k25tStd for 2.5 Turbo Pro vs Standard.
+    """
+    endpoint = (endpoint or "").lower()
+    if not endpoint:
+        return "model"
+
+    def _tier(ep: str) -> str:
+        if "/master/" in ep or ep.endswith("/master"):
+            return "Master"
+        if "/standard/" in ep or ep.endswith("/standard"):
+            return "Std"
+        return "Pro"
+
+    if "kling" in endpoint:
+        if "/v3/" in endpoint or "/v3-" in endpoint or endpoint.endswith("/v3"):
+            return "k30pro" if "pro" in endpoint else "k30std"
+        if "v2.5-turbo" in endpoint or "v2.5/turbo" in endpoint or "v2.5turbo" in endpoint:
+            return f"k25t{_tier(endpoint)}"
+        if "v2.6" in endpoint:
+            return f"k26{_tier(endpoint).lower()}"
+        if "v2.5" in endpoint:
+            return "k25"
+        if "v2.1" in endpoint:
+            return f"k21{_tier(endpoint).lower()}"
+        if "v2/" in endpoint or endpoint.endswith("/v2"):
+            return f"k20{_tier(endpoint).lower()}"
+        if "v1.6" in endpoint:
+            return f"k16{_tier(endpoint).lower()}"
+        if "v1.5" in endpoint:
+            return f"k15{_tier(endpoint).lower()}"
+        if "o1" in endpoint:
+            return "kO1"
+        return "kling"
+
+    if "wan" in endpoint:
+        return "wan25" if "25" in endpoint else "wan"
+    if "veo3" in endpoint:
+        return "veo3"
+    if "veo" in endpoint:
+        return "veo"
+    if "ovi" in endpoint:
+        return "ovi"
+    if "ltx" in endpoint:
+        return "ltx2"
+    if "pixverse" in endpoint:
+        return "pix5" if "v5" in endpoint else "pixverse"
+    if "hunyuan" in endpoint:
+        return "hunyuan"
+    if "minimax" in endpoint:
+        return "minimax"
+
+    parts = endpoint.replace("/image-to-video", "").split("/")
+    for part in reversed(parts):
+        if part and part != "fal-ai":
+            clean = part.replace("-", "").replace("_", "")[:8]
+            return clean if clean else "model"
+    return "model"
+
+
+def _get_model_short_name(generator) -> str:
+    """Get model short name with compatibility fallback for older generators."""
+    getter = getattr(generator, "get_model_short_name", None)
+    if callable(getter):
+        try:
+            value = str(getter()).strip()
+            if value:
+                return value
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Falling back to endpoint-based model short name after get_model_short_name() error: %s",
+                exc,
+            )
+
+    endpoint = str(getattr(generator, "model_endpoint", "")).strip()
+    if endpoint:
+        return _model_short_from_endpoint(endpoint)
+
+    fallback = str(getattr(generator, "model_display_name", "model"))
+    fallback = re.sub(r"[^A-Za-z0-9]+", "", fallback).lower()
+    return fallback[:16] if fallback else "model"
 
 
 def get_output_video_path(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
+    config: dict = None,
     timestamp: Optional[datetime] = None,
 ) -> Path:
-    """Get the output video path using new enhanced filename format.
+    """Get the output video path: {stem}_{model_short}_{index}.mp4
 
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video will be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
-
-    Returns:
-        Path to output video with format:
-        {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
+    The index is determined by scanning output_folder for existing files so
+    each call returns the next available path for this image+model combination.
     """
     image_name = Path(image_path).stem
-    filename = generator.get_output_filename(image_name, config, timestamp)
+    try:
+        filename = generator.get_output_filename(image_name, output_folder)
+    except (TypeError, AttributeError) as _e:
+        # Backward compatibility for older generator signatures.
+        # AttributeError can occur when a generator expects a config dict but
+        # receives output_folder (a string) and calls .get() on it.
+        # Only treat AttributeError as a legacy-signature indicator when
+        # output_folder is a str (the always-true case); re-raise for anything
+        # else so genuine internal bugs are not silently swallowed.
+        if isinstance(_e, AttributeError) and not isinstance(output_folder, str):
+            raise
+        logger.warning("Legacy generator API fallback triggered (%s); trying older signatures", _e)
+        try:
+            filename = generator.get_output_filename(image_name, config or {}, timestamp)
+        except (TypeError, AttributeError):
+            filename = generator.get_output_filename(image_name)
     return Path(output_folder) / filename
 
 
@@ -44,66 +138,37 @@ def check_video_exists(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
-) -> tuple[bool, Optional[str]]:
-    """
-    Check if a video already exists for this image (any date variant).
+    config: dict = None,
+) -> Tuple[bool, Optional[str]]:
+    """Check if any video already exists for this image+model combination.
 
-    Since date changes daily, checks for pattern:
-    {image_name}-{model_name}-{prompt_part}-p{slot}-*.mp4
-
-    We treat either the base render or its looped sibling as "exists" to
-    avoid overwriting/deleting a looped-only output.
-
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
+    Matches pattern: {stem}_{model_short}_*.mp4  (and *_looped.mp4 variant).
 
     Returns:
-        Tuple of (exists: bool, found_path: str | None)
-        - exists: True if any matching video exists
-        - found_path: Path to the first found video, or None if not found
+        (exists: bool, found_path: str | None)
     """
     import glob
 
     image_name = Path(image_path).stem
-    model_name = generator.model_display_name.replace(" ", "_")
-    slot_str = str(generator.prompt_slot)
+    model_short = _get_model_short_name(generator)
+    prompt_slot = (config or {}).get("current_prompt_slot", getattr(generator, "prompt_slot", 1))
+    try:
+        prompt_slot = max(1, int(prompt_slot))
+    except (TypeError, ValueError):
+        prompt_slot = 1
 
-    # Get prompt part
-    prompt_titles = config.get("prompt_titles", {})
-    if slot_str in prompt_titles and prompt_titles[slot_str]:
-        # Sanitize shorthand (same logic as in generator)
-        shorthand = prompt_titles[slot_str]
-        prompt_part = ''.join(
-            c if c.isalnum() or c in ('_', '-', ' ') else ''
-            for c in shorthand
-        ).replace(" ", "_")
-    else:
-        saved_prompts = config.get("saved_prompts", {})
-        prompt_text = saved_prompts.get(slot_str, "")
-        if prompt_text:
-            prompt_part = generator.sanitize_prompt_description(prompt_text)
-        else:
-            prompt_part = "prompt"
+    slot_prefix = f"{image_name}_{model_short}_p{prompt_slot}_"
+    slot_matches = sorted(glob.glob(str(Path(output_folder) / f"{slot_prefix}*.mp4")))
+    if slot_matches:
+        return True, slot_matches[0]
 
-    # Build glob pattern (match any date)
-    pattern = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*.mp4"
-    pattern_looped = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*_looped.mp4"
-
-    # Search for matching files
-    search_pattern = str(Path(output_folder) / pattern)
-    search_pattern_looped = str(Path(output_folder) / pattern_looped)
-
-    matches = glob.glob(search_pattern)
-    matches_looped = glob.glob(search_pattern_looped)
-
-    # Return first found match
-    all_matches = matches + matches_looped
-    if all_matches:
-        return True, all_matches[0]
+    # Backward compatibility: legacy filenames without slot suffix map to slot 1.
+    if prompt_slot == 1:
+        legacy_prefix = f"{image_name}_{model_short}_"
+        legacy_matches = sorted(glob.glob(str(Path(output_folder) / f"{legacy_prefix}*.mp4")))
+        for path in legacy_matches:
+            if f"_{model_short}_p" not in Path(path).stem:
+                return True, path
     return False, None
 
 
@@ -201,49 +266,33 @@ def get_next_available_path(
     image_path: str,
     output_folder: str,
     generator,
-    config: dict,
+    config: dict = None,
     timestamp: Optional[datetime] = None,
 ) -> Path:
+    """Return the next available output path for this image+model combination.
+
+    Starts from generator-provided naming, then enforces a free candidate locally
+    to keep increment behavior deterministic regardless of generator internals.
     """
-    Find the next available filename with increment suffix.
+    candidate = get_output_video_path(image_path, output_folder, generator, config, timestamp)
+    candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
+    if not candidate.exists() and not candidate_loop.exists():
+        return candidate
 
-    Args:
-        image_path: Path to the source image
-        output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
+    match = re.match(r"^(.*_)(\d+)$", candidate.stem)
+    if match:
+        stem_prefix = match.group(1)
+        counter = int(match.group(2))
+    else:
+        stem_prefix = f"{candidate.stem}_"
+        counter = 0
 
-    Returns:
-        Next available path with increment suffix
-
-    Examples:
-        Image-Model-Prompt-p2-01-17-2026.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_2.mp4
-        Image-Model-Prompt-p2-01-17-2026_2.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_3.mp4
-    """
-    base_path = get_output_video_path(
-        image_path, output_folder, generator, config, timestamp
-    )
-
-    counter = 1
     while True:
-        if counter == 1:
-            candidate = base_path
-        else:
-            # Insert counter before .mp4 extension
-            candidate = base_path.with_name(f"{base_path.stem}_{counter}{base_path.suffix}")
-
+        counter += 1
+        candidate = candidate.with_name(f"{stem_prefix}{counter}{candidate.suffix}")
         candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
-
-        # Return first gap where neither base nor looped variant exists
         if not candidate.exists() and not candidate_loop.exists():
             return candidate
-
-        counter += 1
-        if counter > 999:  # Safety limit
-            raise ValueError(f"Too many versions of {base_path.name}")
 
 
 @dataclass
@@ -532,13 +581,15 @@ class QueueManager:
 
                 # Determine output folder
                 if use_source_folder:
-                    actual_output = item.source_folder
-                    self.log_verbose(f"  Output: source folder", "debug")
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
+                    self.log_verbose("  Output: gen-images/", "debug")
                 elif not output_folder or not os.path.isdir(output_folder):
-                    # Custom folder selected but not set or invalid - use source folder
-                    actual_output = item.source_folder
+                    # Custom folder selected but not set or invalid - use gen-images/
+                    actual_output = get_gen_images_folder(item.path)
+                    os.makedirs(actual_output, exist_ok=True)
                     self.log(
-                        f"No valid output folder set - saving to source folder",
+                        "No valid output folder set - saving to gen-images/",
                         "warning",
                     )
                 else:
@@ -573,8 +624,12 @@ class QueueManager:
 
                     elif reprocess_mode == "overwrite":
                         # Overwrite mode - delete existing file and looped variant
-                        existing_path = get_output_video_path(
-                            item.path, actual_output, self.generator, config, generation_timestamp
+                        existing_path = (
+                            Path(found_video_path)
+                            if found_video_path
+                            else get_output_video_path(
+                                item.path, actual_output, self.generator, config, generation_timestamp
+                            )
                         )
                         looped_path = existing_path.with_name(
                             f"{existing_path.stem}_looped{existing_path.suffix}"
@@ -595,6 +650,9 @@ class QueueManager:
                             if self.on_processing_complete:
                                 self.on_processing_complete(item)
                             continue
+
+                        # Keep overwrite target stable even if generator picks a new indexed filename.
+                        custom_output_path = str(existing_path)
 
                     elif reprocess_mode == "increment":
                         # Increment mode - find next available filename
@@ -624,7 +682,7 @@ class QueueManager:
                     actual_output,
                     prompt,
                     negative_prompt,
-                    use_source_folder,
+                    False,  # always False — we already computed gen-images/ path
                     custom_output_path,
                     skip_duplicate_check=skip_check,
                     video_duration=video_duration,
