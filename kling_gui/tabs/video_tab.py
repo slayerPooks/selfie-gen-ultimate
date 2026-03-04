@@ -38,9 +38,9 @@ class VideoTab(tk.Frame):
 
         self.use_carousel_btn = tk.Button(
             use_carousel_frame,
-            text="Use Carousel Image",
+            text="Start - Using Carousel Image",
             font=(FONT_FAMILY, 9),
-            bg=COLORS["accent_blue"],
+            bg=COLORS["btn_green"],
             fg="white",
             command=self._on_use_carousel,
             cursor="hand2",

@@ -17,11 +17,6 @@ BFL_MAX_WAIT_SECONDS = 180  # 3-minute wall-clock cap
 BFL_POLL_INTERVAL = 5
 BFL_MAX_CONSECUTIVE_ERRORS = 5
 
-# InsightFace singleton (ArcFace model is ~300 MB, load once)
-_insightface_app = None
-_insightface_init_lock = threading.Lock()
-_insightface_infer_lock = threading.Lock()
-
 
 class SelfieGenerator:
     """Generate selfie images using fal.ai image-to-image identity models."""
@@ -231,49 +226,10 @@ class SelfieGenerator:
     ) -> Optional[int]:
         """Compute face similarity using InsightFace (ArcFace).
 
-        Uses RetinaFace detection + alignment + ArcFace embedding.
-        Returns cosine similarity as 0-100 integer, or None if a face
-        cannot be detected in either image.
+        Delegates to the standalone ``face_similarity`` module.
         """
-        global _insightface_app
-
-        try:
-            import insightface.app  # noqa: F811
-            import numpy as np
-            import cv2
-        except ImportError:
-            return None
-
-        # One-time model init (downloads ~300 MB to ~/.insightface/models/)
-        with _insightface_init_lock:
-            if _insightface_app is None:
-                self._report("InsightFace: loading ArcFace model (first run)...", "info")
-                app = insightface.app.FaceAnalysis(
-                    name="buffalo_l",
-                    providers=["CPUExecutionProvider"],
-                )
-                app.prepare(ctx_id=-1, det_size=(640, 640))
-                _insightface_app = app
-
-        def _best_face(img_path: str):
-            img = cv2.imread(img_path)
-            if img is None:
-                return None
-            with _insightface_infer_lock:
-                faces = _insightface_app.get(img)
-            if not faces:
-                return None
-            # Pick highest detection confidence when multiple faces found
-            return max(faces, key=lambda f: f.det_score)
-
-        face1 = _best_face(source_image_path)
-        face2 = _best_face(generated_image_path)
-        if face1 is None or face2 is None:
-            return None
-
-        # Cosine similarity on L2-normalised ArcFace embeddings
-        sim = float(np.dot(face1.normed_embedding, face2.normed_embedding))
-        return min(100, max(0, round(sim * 100)))
+        from face_similarity import compute_face_similarity
+        return compute_face_similarity(source_image_path, generated_image_path, report_cb=self._report)
 
     @classmethod
     def _build_payload(
@@ -404,7 +360,7 @@ class SelfieGenerator:
         )
 
         self._report("Uploading identity reference...", "upload")
-        image_url = upload_to_freeimage(
+        image_url, _ = upload_to_freeimage(
             image_path, progress_cb=self._progress_callback,
             api_key=self._freeimage_key,
         )
@@ -477,7 +433,7 @@ class SelfieGenerator:
             return False
 
         import requests
-        from PIL import Image
+        from PIL import Image, ImageOps
         from io import BytesIO
 
         if not self._bfl_api_key:
@@ -498,6 +454,7 @@ class SelfieGenerator:
         self._report("Encoding image for BFL upload...", "upload")
         try:
             img = Image.open(image_path)
+            img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "P", "LA"):
                 img = img.convert("RGB")
             img.thumbnail((1024, 1024), Image.LANCZOS)

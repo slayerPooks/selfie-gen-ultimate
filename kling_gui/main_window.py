@@ -25,7 +25,7 @@ from .queue_manager import QueueManager, QueueItem
 from .image_state import ImageSession
 from .carousel_widget import ImageCarousel
 from .compare_panel import ComparePanel
-from .tabs import FaceCropTab, PrepTab, SelfieTab, OutpaintTab, VideoTab
+from .tabs import FaceCropTab, PrepTab, SelfieTab, VideoTab
 
 # Try to import the generator
 try:
@@ -43,12 +43,16 @@ COLORS = {
     "bg_main": "#2D2D30",
     "bg_panel": "#3C3C41",
     "bg_input": "#464649",
+    "bg_drop": "#464649",
+    "bg_hover": "#505055",
     "text_light": "#DCDCDC",
     "text_dim": "#B4B4B4",
     "accent_blue": "#6496FF",
     "success": "#64FF64",
     "error": "#FF6464",
     "warning": "#FFA500",
+    "border": "#5A5A5E",
+    "drop_valid": "#329632",
     "btn_green": "#329632",
     "btn_red": "#B43232",
 }
@@ -215,8 +219,17 @@ class SessionManagerDialog(tk.Toplevel):
         # Center and grab
         self.geometry("680x520")
         self.update_idletasks()
-        x = parent.winfo_rootx() + (parent.winfo_width() - 680) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - 520) // 2
+        # Ensure parent geometry is current before reading dimensions
+        parent.update_idletasks()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        # Fallback if parent hasn't been mapped yet (returns 1)
+        if pw < 10:
+            pw = parent.winfo_reqwidth() or 680
+        if ph < 10:
+            ph = parent.winfo_reqheight() or 520
+        x = parent.winfo_rootx() + (pw - 680) // 2
+        y = parent.winfo_rooty() + (ph - 520) // 2
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
         self.grab_set()
         self.focus_set()
@@ -264,7 +277,7 @@ class SessionManagerDialog(tk.Toplevel):
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
-        self._autosave_var = tk.BooleanVar(value=self._config.get("session_autosave_enabled", False))
+        self._autosave_var = tk.BooleanVar(value=self._config.get("session_autosave_enabled", True))
         autosave_cb = tk.Checkbutton(
             autosave_frame, text="Enabled", variable=self._autosave_var,
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
@@ -278,7 +291,7 @@ class SessionManagerDialog(tk.Toplevel):
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
         ).pack(side=tk.LEFT, padx=(0, 4))
 
-        self._interval_var = tk.StringVar(value=self._config.get("session_autosave_interval", "5min"))
+        self._interval_var = tk.StringVar(value=self._config.get("session_autosave_interval", "after_api_action"))
         interval_menu = ttk.Combobox(
             autosave_frame, textvariable=self._interval_var,
             values=["5min", "10min", "15min", "after_api_action"],
@@ -294,6 +307,7 @@ class SessionManagerDialog(tk.Toplevel):
         for text, color, cmd in [
             ("Delete", COLORS["btn_red"], self._on_delete),
             ("Overwrite Save", COLORS["warning"], self._on_overwrite),
+            ("Save New", COLORS["btn_green"], self._on_save_new),
         ]:
             tk.Button(
                 btn_frame, text=text, font=("Segoe UI", 9, "bold"),
@@ -378,6 +392,28 @@ class SessionManagerDialog(tk.Toplevel):
             self._refresh_list()
         except Exception as e:
             self._log_fn(f"Overwrite failed: {e}", "error")
+
+    def _on_save_new(self):
+        """Save current session state as a new session file."""
+        if not self._image_session.count:
+            self._log_fn("No images in session to save", "warning")
+            return
+        from datetime import datetime as _dt
+        default_name = f"session_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+        name = simpledialog.askstring(
+            "Save Session", "Session name:", initialvalue=default_name, parent=self,
+        )
+        if not name:
+            return
+        from .session_manager import save_session
+        try:
+            save_session(
+                self._app_dir, self._image_session, self._config, name=name,
+            )
+            self._log_fn(f"Session saved: {name}", "success")
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Save failed: {e}", "error")
 
     def _on_autosave_changed(self):
         self._config["session_autosave_enabled"] = self._autosave_var.get()
@@ -538,8 +574,8 @@ class KlingGUIWindow:
             "log_backups": 3,
             "duplicate_detection": True,
             "current_prompt_slot": 1,
-            "saved_prompts": {"1": "", "2": "", "3": ""},
-            "negative_prompts": {"1": "", "2": "", "3": ""},
+            "saved_prompts": {str(i): "" for i in range(1, 11)},
+            "negative_prompts": {str(i): "" for i in range(1, 11)},
             "model_capabilities": {},
             "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
             "model_display_name": "Kling 2.5 Turbo Pro",
@@ -598,7 +634,20 @@ class KlingGUIWindow:
         except Exception as e:
             print(f"Warning: Could not load config: {e}")
 
-        # Layer 3: migrate known broken endpoint paths
+        # Layer 3: sanitize prompt slot dicts — ensure all 10 slots exist as
+        # strings, not None.  Shallow .update() above replaces the entire nested
+        # dict, so slots that were missing in the user file (or set to null by
+        # an older CLI) would otherwise surface as None and silently vanish.
+        for key in ("saved_prompts", "negative_prompts", "prompt_titles"):
+            bucket = default_config.get(key)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                default_config[key] = bucket
+            for slot in (str(i) for i in range(1, 11)):
+                if slot not in bucket or bucket[slot] is None:
+                    bucket[slot] = ""
+
+        # Layer 4: migrate known broken endpoint paths
         self._migrate_endpoints(default_config)
 
         return default_config
@@ -785,8 +834,9 @@ class KlingGUIWindow:
             log_callback=self._log,
             notebook_switcher_prep=lambda: self.notebook.select(1),
             notebook_switcher_selfie=lambda: self.notebook.select(2),
+            config_saver=self._save_config,
         )
-        self.notebook.add(self.face_crop_tab, text="0. Face Crop")
+        self.notebook.add(self.face_crop_tab, text="0. Face Crop / AI Polish")
 
         # Tab 1: AI Analysis
         self.prep_tab = PrepTab(
@@ -807,6 +857,7 @@ class KlingGUIWindow:
             config=self.config,
             config_getter=lambda: self.config,
             log_callback=self._log,
+            config_saver=self._save_config,
         )
         self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
 
@@ -820,24 +871,14 @@ class KlingGUIWindow:
             }
         )
 
-        # Tab 3: Expand (Outpaint)
-        self.outpaint_tab = OutpaintTab(
-            self.notebook,
-            image_session=self.image_session,
-            config=self.config,
-            config_getter=lambda: self.config,
-            log_callback=self._log,
-        )
-        self.notebook.add(self.outpaint_tab, text="3. Expand")
-
-        # Tab 4: Video — skeleton first, panels attached after creation
+        # Tab 3: Video — skeleton first, panels attached after creation
         self.video_tab = VideoTab(
             self.notebook,
             image_session=self.image_session,
             log_callback=self._log,
             on_files_dropped=self._on_files_dropped,
         )
-        self.notebook.add(self.video_tab, text="4. Video")
+        self.notebook.add(self.video_tab, text="3. Selfie Video Gen")
 
         # ConfigPanel as proper child of VideoTab (fixes cross-parent packing)
         self.config_panel = ConfigPanel(
@@ -853,10 +894,24 @@ class KlingGUIWindow:
         self.notebook.pack(fill=tk.BOTH, expand=True)
         self.top_h_paned.add(left_pane, minsize=480)
 
-        # Right pane: prompt editor (UNCHANGED — spans full height)
-        right_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_panel"])
-        self.config_panel.build_prompt_panel(right_pane)
-        self.top_h_paned.add(right_pane, minsize=260)
+        # Right pane: context-sensitive (tools on Tab 0, prompts on Tab 3, hidden on Tab 1-2)
+        self._right_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_panel"])
+
+        # Content A: Tab 0 tools panel (Polish + Outpaint + Upscale + Send)
+        self._right_tools_frame = tk.Frame(self._right_pane, bg=COLORS["bg_panel"])
+        self.face_crop_tab.build_tools_panel(self._right_tools_frame)
+
+        # Content B: Prompt panel (Video tab)
+        self._right_prompt_frame = tk.Frame(self._right_pane, bg=COLORS["bg_panel"])
+        self.config_panel.build_prompt_panel(self._right_prompt_frame)
+
+        # Show tools by default (Tab 0 is selected on launch)
+        self._right_tools_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.top_h_paned.add(self._right_pane, minsize=260)
+
+        # Tab change handler for context-sensitive right pane
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ── Bottom section: Horizontal PanedWindow (Carousel | Log+History) ──
         self.bottom_paned = tk.PanedWindow(
@@ -911,14 +966,237 @@ class KlingGUIWindow:
         self._setup_history_panel_content(self.history_frame)
         self.right_paned.add(self.history_frame, minsize=100)
 
-        # Auto-save state
-        self._autosave_path = None  # Fixed path for auto-save overwrites
         self._start_autosave_timer()
 
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
+
+    # ── Context-sensitive right pane ────────────────────────────────
+
+    def _on_tab_changed(self, event=None):
+        """Swap right pane content based on the active tab."""
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return
+
+        if idx == 0:  # Tab 0: show tools panel
+            self._show_right_pane(self._right_tools_frame)
+        elif idx == 3:  # Tab 3 (Video): show prompt slots
+            self._show_right_pane(self._right_prompt_frame)
+        else:  # Tab 1, 2: hide right pane entirely — tabs get full width
+            self._hide_right_pane()
+
+    def _show_right_pane(self, content_frame):
+        """Show the right pane with the specified content."""
+        self._right_tools_frame.pack_forget()
+        self._right_prompt_frame.pack_forget()
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        pane_names = [str(p) for p in self.top_h_paned.panes()]
+        if str(self._right_pane) not in pane_names:
+            self.top_h_paned.add(self._right_pane, minsize=260)
+            saved = self.config.get("sash_prompt_split", 640)
+            self.root.after(50, lambda: self._safe_sash_place(self.top_h_paned, 0, saved, 0))
+
+    def _hide_right_pane(self):
+        """Hide the right pane entirely — left tabs get full width."""
+        pane_names = [str(p) for p in self.top_h_paned.panes()]
+        if str(self._right_pane) in pane_names:
+            try:
+                self.config["sash_prompt_split"] = self.top_h_paned.sash_coord(0)[0]
+            except Exception:
+                pass
+            self.top_h_paned.forget(self._right_pane)
+
+    def _safe_sash_place(self, paned, index, x, y):
+        """Place a sash position, silently ignoring errors."""
+        try:
+            paned.sash_place(index, x, y)
+        except Exception:
+            pass
+
+    # ── Floating Drop Zone ──────────────────────────────────────────
+
+    def _toggle_drop_zone(self):
+        """Toggle the floating drop zone window."""
+        if hasattr(self, "_drop_zone_window") and self._drop_zone_window is not None:
+            try:
+                self._drop_zone_window.destroy()
+            except Exception:
+                pass
+            self._drop_zone_window = None
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Drop Images Here")
+        win.geometry("360x260")
+        win.configure(bg=COLORS["bg_panel"])
+        win.attributes("-topmost", True)
+        win.resizable(True, True)
+
+        bg = COLORS["bg_drop"]
+        hover_bg = COLORS.get("bg_hover", "#505055")
+
+        # Drop area with highlight border
+        drop_frame = tk.Frame(
+            win,
+            bg=bg,
+            highlightbackground=COLORS["border"],
+            highlightthickness=2,
+        )
+        drop_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Centered content container
+        content = tk.Frame(drop_frame, bg=bg)
+        content.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Icon
+        icon_label = tk.Label(
+            content,
+            text="\U0001F4E5",
+            font=("Segoe UI Emoji", 36),
+            bg=bg,
+            fg=COLORS["accent_blue"],
+        )
+        icon_label.pack(pady=(0, 6))
+
+        # Main text
+        main_label = tk.Label(
+            content,
+            text="DRAG & DROP IMAGES",
+            font=("Segoe UI", 13, "bold"),
+            bg=bg,
+            fg=COLORS["text_light"],
+        )
+        main_label.pack(pady=2)
+
+        # Sub-instruction
+        sub_label = tk.Label(
+            content,
+            text="Left click to select  |  Right click to drag",
+            font=("Segoe UI", 9),
+            bg=bg,
+            fg=COLORS["text_dim"],
+        )
+        sub_label.pack(pady=(0, 8))
+
+        # Status label for drop feedback
+        status_label = tk.Label(
+            drop_frame,
+            text="",
+            font=("Segoe UI", 9, "bold"),
+            bg=bg,
+            fg=COLORS["text_light"],
+        )
+        status_label.pack(side=tk.BOTTOM, pady=8)
+        self._drop_zone_status = status_label
+
+        # All interactive widgets
+        widgets = [drop_frame, content, icon_label, main_label, sub_label, status_label]
+
+        # Hover effects
+        def _set_bg(color):
+            for w in widgets:
+                w.config(bg=color)
+
+        def _on_enter(event):
+            _set_bg(hover_bg)
+            drop_frame.config(highlightbackground=COLORS["accent_blue"])
+
+        def _on_leave(event):
+            # Only reset if truly left the drop_frame
+            rx = event.x_root - drop_frame.winfo_rootx()
+            ry = event.y_root - drop_frame.winfo_rooty()
+            if 0 <= rx <= drop_frame.winfo_width() and 0 <= ry <= drop_frame.winfo_height():
+                return
+            _set_bg(bg)
+            drop_frame.config(highlightbackground=COLORS["border"])
+
+        # Make draggable via right-click
+        def _start_drag(event):
+            win._drag_x = event.x
+            win._drag_y = event.y
+
+        def _do_drag(event):
+            x = win.winfo_x() + event.x - win._drag_x
+            y = win.winfo_y() + event.y - win._drag_y
+            win.geometry(f"+{x}+{y}")
+
+        for w in widgets:
+            w.bind("<Button-1>", lambda e: self._browse_and_add_images())
+            w.bind("<ButtonPress-3>", _start_drag)
+            w.bind("<B3-Motion>", _do_drag)
+            w.bind("<Enter>", _on_enter)
+            w.bind("<Leave>", _on_leave)
+            w.config(cursor="hand2")
+
+        # Try to bind DnD if available
+        if HAS_DND:
+            try:
+                for w in [drop_frame, icon_label, main_label, sub_label, content]:
+                    w.drop_target_register("DND_Files")
+                    w.dnd_bind("<<DropEnter>>", lambda e: (
+                        _set_bg(COLORS.get("drop_valid", "#329632")),
+                        status_label.config(text="DROP TO ADD"),
+                    ))
+                    w.dnd_bind("<<DropLeave>>", lambda e: (
+                        _set_bg(bg),
+                        status_label.config(text=""),
+                    ))
+                    w.dnd_bind("<<Drop>>", self._on_drop_zone_drop)
+            except Exception:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", self._toggle_drop_zone)
+        self._drop_zone_window = win
+
+    def _on_drop_zone_drop(self, event):
+        """Handle files dropped onto the floating drop zone."""
+        data = event.data
+        if not data:
+            return
+        # Parse dropped file paths (may be space-separated or brace-quoted)
+        files = []
+        if "{" in data:
+            import re
+            files = re.findall(r"\{([^}]+)\}", data)
+        else:
+            files = data.split()
+
+        added = 0
+        for f in files:
+            f = f.strip()
+            if os.path.isfile(f):
+                ext = os.path.splitext(f)[1].lower()
+                if ext in VALID_EXTENSIONS:
+                    self.image_session.add_image(f, "input")
+                    self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+                    added += 1
+
+        # Show status on floating drop zone
+        if hasattr(self, "_drop_zone_status") and self._drop_zone_status:
+            status = self._drop_zone_status
+            if added:
+                status.config(text=f"Added {added} file(s)", fg=COLORS.get("success", "#50C878"))
+            else:
+                status.config(text="No valid images found", fg=COLORS.get("warning", "#FFA500"))
+            self.root.after(2000, lambda s=status: s.config(text="") if s.winfo_exists() else None)
+
+    def _browse_and_add_images(self):
+        """Open file dialog and add selected images to carousel."""
+        files = filedialog.askopenfilenames(
+            title="Select Images to Add",
+            filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tiff *.tif"),
+                ("All files", "*.*"),
+            ],
+        )
+        if files:
+            for f in files:
+                self.image_session.add_image(f, "input")
+                self._log(f"Added to carousel: {os.path.basename(f)}", "info")
 
     def _apply_ui_config(self):
         """Apply UI layout configuration to existing widgets."""
@@ -1459,6 +1737,39 @@ class KlingGUIWindow:
             command=self._on_save_session,
         )
         save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        # "Add Image" button — browse and add to carousel
+        add_image_btn = tk.Button(
+            header,
+            text="Add Image",
+            font=("Segoe UI", 9, "bold"),
+            bg=COLORS["btn_green"],
+            fg="white",
+            activebackground="#287828",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            cursor="hand2",
+            command=self._browse_and_add_images,
+        )
+        add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        # Floating drop zone toggle
+        self._drop_zone_window = None
+        drop_zone_btn = tk.Button(
+            header,
+            text="\u25CE",  # ◎ target icon
+            font=("Segoe UI", 11),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_panel"],
+            activeforeground=COLORS["text_light"],
+            relief="flat",
+            padx=4, pady=0,
+            cursor="hand2",
+            command=self._toggle_drop_zone,
+        )
+        drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 3), pady=4)
 
     # -- API key badge helpers ------------------------------------------------
 
@@ -2091,7 +2402,7 @@ class KlingGUIWindow:
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
         # Collect and merge any tab-specific config
-        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:
@@ -2354,6 +2665,8 @@ class KlingGUIWindow:
         if not images:
             self._log("Session has no images", "warning")
             return
+        # Suppress auto-calc during restore to avoid scoring every image on load
+        self.carousel.suppress_auto_calc(True)
         # Clear and re-populate the LIVE session (preserves tab references)
         self.image_session.clear()
         loaded_count = 0
@@ -2366,6 +2679,7 @@ class KlingGUIWindow:
                 path,
                 img.get("source_type", "input"),
                 label=img.get("label", ""),
+                similarity=img.get("similarity"),
             )
             loaded_count += 1
         # Restore indices
@@ -2375,16 +2689,21 @@ class KlingGUIWindow:
         ref_idx = session_data.get("reference_index", -1)
         if 0 <= ref_idx < self.image_session.count:
             self.image_session._reference_index = ref_idx
-            self.image_session._notify()
+        # Restore similarity ref
+        sim_ref_idx = session_data.get("similarity_ref_index", -1)
+        if 0 <= sim_ref_idx < self.image_session.count:
+            self.image_session._similarity_ref_index = sim_ref_idx
+        self.image_session._notify()
+        self.carousel.suppress_auto_calc(False)
         self._log(f"Session restored: {loaded_count} images loaded", "success")
 
     # ── Auto-save timer ───────────────────────────────────────────────────────
 
     def _start_autosave_timer(self):
         """Start the auto-save timer if configured."""
-        if not self.config.get("session_autosave_enabled", False):
+        if not self.config.get("session_autosave_enabled", True):
             return
-        interval = self.config.get("session_autosave_interval", "5min")
+        interval = self.config.get("session_autosave_interval", "after_api_action")
         if interval == "after_api_action":
             return  # No timer — triggered by API completion callbacks
         ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
@@ -2398,17 +2717,22 @@ class KlingGUIWindow:
         self._start_autosave_timer()  # Reschedule
 
     def _maybe_autosave(self):
-        """Auto-save if enabled."""
-        if not self.config.get("session_autosave_enabled", False):
+        """Auto-save to a deterministic per-folder file, always overwriting."""
+        if not self.config.get("session_autosave_enabled", True):
             return
         if self.image_session.count == 0:
             return
-        from .session_manager import save_session
+        from .session_manager import save_session, get_autosave_path
+
+        target_path = get_autosave_path(get_app_dir(), self.image_session)
+        autosave_name = os.path.splitext(os.path.basename(target_path))[0]
+        overwrite = target_path if os.path.isfile(target_path) else None
+
         try:
-            self._autosave_path = save_session(
+            save_session(
                 get_app_dir(), self.image_session, self.config,
-                name="_autosave",
-                overwrite_path=self._autosave_path,
+                name=autosave_name,
+                overwrite_path=overwrite,
             )
         except Exception as e:
             if self.logger:
@@ -2418,7 +2742,7 @@ class KlingGUIWindow:
         """Handle window close."""
         # Check both queue and tab worker threads
         busy_tabs = []
-        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab"]:
             tab_widget = getattr(self, tab_name, None)
             if tab_widget and getattr(tab_widget, "_busy", False):
                 busy_tabs.append(tab_name.replace("_tab", "").title())
@@ -2443,7 +2767,7 @@ class KlingGUIWindow:
                 self.queue_manager.stop_processing()
 
         # Collect tab configs before saving
-        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "outpaint_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:

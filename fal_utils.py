@@ -6,8 +6,8 @@ import threading
 import requests
 import logging
 from pathlib import Path
-from typing import Optional, Callable
-from PIL import Image
+from typing import Optional, Callable, Tuple
+from PIL import Image, ImageOps
 import io
 import base64
 
@@ -40,12 +40,15 @@ def upload_to_freeimage(
     max_size: int = 1200,
     progress_cb: ProgressCallback = None,
     api_key: Optional[str] = None,
-) -> Optional[str]:
-    """Upload image to freeimage.host, return public URL.
+) -> Tuple[Optional[str], Optional[Image.Image]]:
+    """Upload image to freeimage.host, return (public_url, processed_pil_image).
 
     Resizes image if larger than max_size on longest side.
     Converts transparent images to RGB JPEG before upload.
-    Returns None on failure.
+    Returns (None, None) on failure.
+
+    The returned PIL image is the exact image that was JPEG-encoded and uploaded,
+    useful for downstream compositing without re-reading from disk.
 
     Args:
         api_key: Explicit freeimage key. Falls back to FREEIMAGE_API_KEY env var.
@@ -54,11 +57,12 @@ def upload_to_freeimage(
     if not key:
         if progress_cb:
             progress_cb("FREEIMAGE_API_KEY not set — set via environment or config", "error")
-        return None
+        return None, None
 
     try:
         img = Image.open(image_path)
         img.load()  # Read pixel data into memory, releasing file handle
+        img = ImageOps.exif_transpose(img)
 
         # Resize if needed
         if img.width > max_size or img.height > max_size:
@@ -83,7 +87,11 @@ def upload_to_freeimage(
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85, optimize=True)
         buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
+        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        # Re-open from JPEG bytes so composite source == what fal.ai receives
+        buffer.seek(0)
+        img = Image.open(buffer)
+        img.load()  # force decode before buffer scope ends
 
         if progress_cb:
             progress_cb(
@@ -107,18 +115,18 @@ def upload_to_freeimage(
                 url = result["image"]["url"]
                 if progress_cb:
                     progress_cb(f"Uploaded: {url}", "upload")
-                return url
+                return url, img
 
         logger.error("Upload failed: %s", response.status_code)
         if progress_cb:
             progress_cb(f"Upload failed: HTTP {response.status_code}", "error")
-        return None
+        return None, None
 
     except Exception as e:
         logger.error("Upload error: %s", e)
         if progress_cb:
             progress_cb(f"Upload error: {e}", "error")
-        return None
+        return None, None
 
 
 def fal_queue_submit(

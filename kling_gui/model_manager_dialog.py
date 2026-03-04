@@ -25,22 +25,22 @@ def _sanitize_release_date(raw: str) -> str:
     """Convert ISO date string to 'Mon YYYY' (e.g., '2026-02-15' -> 'Feb 2026').
 
     Already-friendly strings like 'Feb 2026' or '2024' pass through unchanged.
+    Handles fractional seconds (e.g. '.6847') and full ISO-8601 timestamps.
     """
     if not raw:
         return ""
-    try:
-        from datetime import datetime
-        cleaned = raw.strip()
-        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m"):
-            try:
-                dt = datetime.strptime(cleaned[:len(fmt.replace("%", "x"))], fmt)
-                return dt.strftime("%b %Y")
-            except ValueError:
-                continue
-        # If it's already "Feb 2026" or "2024", return as-is
-        return cleaned
-    except Exception:
-        return raw.strip()
+    import re
+    from datetime import datetime
+    # Strip fractional seconds (e.g. .6847) before parsing
+    cleaned = re.sub(r'\.\d+', '', raw.strip())
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m"):
+        try:
+            dt = datetime.strptime(cleaned, fmt)
+            return dt.strftime("%b %Y")
+        except ValueError:
+            continue
+    # If it's already "Feb 2026" or "2024", return as-is
+    return raw.strip()
 
 
 def _format_short_price(pricing_info: dict) -> str:
@@ -52,6 +52,8 @@ def _format_short_price(pricing_info: dict) -> str:
         return ""
     unit = pricing_info.get("unit", "")
     if unit == "second":
+        return f"${price * 10:.2f}/10s"
+    elif unit == "compute second":
         return f"${price * 10:.2f}/10s"
     elif unit == "video":
         return f"${price:.2f}/video"
@@ -538,10 +540,17 @@ class ModelManagerDialog(tk.Toplevel):
             prefix = "\u2605 " if is_custom else ""  # star for custom
             suffix = ""
 
+            # Release date
+            release = m.get("release", "")
+            if release:
+                sanitized = _sanitize_release_date(release)
+                if sanitized:
+                    suffix += f" ({sanitized})"
+
             # Pricing info
             price_str = _format_short_price(m.get("pricing_info"))
             if price_str:
-                suffix += f" \u2014 {price_str}"  # em-dash
+                suffix += f", {price_str}" if suffix else f" \u2014 {price_str}"
 
             if is_hidden:
                 suffix += "  [hidden]"
@@ -631,7 +640,8 @@ class ModelManagerDialog(tk.Toplevel):
                 model["api_display_name"] = meta["display_name"]
             if meta.get("description"):
                 model["api_description"] = meta["description"]
-            if meta.get("date") and not model.get("release"):
+            # Always update release date from API (overwrite stale estimates)
+            if meta.get("date"):
                 model["release"] = _sanitize_release_date(meta["date"])
 
     def _find_model_by_endpoint(self, endpoint: str) -> Optional[Dict]:
@@ -1043,23 +1053,30 @@ class ModelManagerDialog(tk.Toplevel):
 
     def _load_browse_models(self):
         """Fetch available models from fal.ai catalog in background."""
-        self._browse_status.config(text="Loading...")
+        self._browse_status.config(text="Loading from fal.ai API...")
         self._browse_listbox.delete(0, tk.END)
 
         def _fetch():
             models = []
+            error_msg = ""
             try:
                 from model_schema_manager import ModelSchemaManager
-                if self._api_key:
+                if not self._api_key:
+                    error_msg = "No API key configured"
+                else:
                     schema_mgr = ModelSchemaManager(self._api_key)
                     models = schema_mgr.list_models(category="image-to-video", status="active")
+                    if not models:
+                        error_msg = "API returned 0 models (endpoint may not support catalog listing)"
+                        logger.warning("Browse: fal.ai catalog API returned empty result")
             except Exception as e:
-                logger.debug(f"Browse fetch failed: {e}")
-            self.after(0, self._on_browse_loaded, models)
+                error_msg = str(e)
+                logger.warning(f"Browse fetch failed: {e}")
+            self.after(0, self._on_browse_loaded, models, error_msg)
 
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _on_browse_loaded(self, models: list):
+    def _on_browse_loaded(self, models: list, error_msg: str = ""):
         """Populate browse listbox with discovered models."""
         self._browse_models = models
         self._browse_listbox.delete(0, tk.END)
@@ -1072,7 +1089,8 @@ class ModelManagerDialog(tk.Toplevel):
             existing.add(m.get("endpoint", ""))
 
         if not models:
-            self._browse_status.config(text="No models found (check API key)")
+            msg = f"No models found: {error_msg}" if error_msg else "No models found (check API key)"
+            self._browse_status.config(text=msg)
             return
 
         count = 0
@@ -1245,7 +1263,13 @@ class ModelManagerDialog(tk.Toplevel):
         self.destroy()
 
     def _on_cancel(self):
-        """Discard changes and close."""
+        """Auto-save changes and close (prevents losing work from closing without Save)."""
         self._fetch_cancel = True  # Stop any running Fetch All
+        # Auto-save to prevent data loss (custom models, hidden endpoints, enrichment)
+        self._config["custom_models"] = self._custom_models
+        self._config["hidden_models"] = self._hidden_endpoints
+        self._save_enrichment_data()
+        if self._on_save:
+            self._on_save()
         self.grab_release()
         self.destroy()

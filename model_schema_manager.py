@@ -497,7 +497,8 @@ class ModelSchemaManager:
                 timeout=30,
             )
             if response.status_code != 200:
-                logger.warning(f"Catalog API returned {response.status_code}")
+                body = response.text[:200] if response.text else "(empty)"
+                logger.warning(f"Catalog API returned {response.status_code}: {body}")
                 return []
 
             data = response.json()

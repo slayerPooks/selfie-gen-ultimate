@@ -93,6 +93,7 @@ class SelfieTab(tk.Frame):
         config: dict,
         config_getter: Callable[[], dict],
         log_callback: Callable[[str, str], None],
+        config_saver: Optional[Callable[[], None]] = None,
         **kwargs,
     ):
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
@@ -100,6 +101,7 @@ class SelfieTab(tk.Frame):
         self.config = config
         self.get_config = config_getter
         self.log = log_callback
+        self._config_saver = config_saver
         self._busy = False
         self._last_result_path = ""
         # Cancellation events (three-tier)
@@ -117,6 +119,14 @@ class SelfieTab(tk.Frame):
         )
 
         self._build_ui()
+
+    # ── Config persistence ────────────────────────────────────────
+
+    def _save_config_now(self):
+        """Update shared config dict and persist to disk immediately."""
+        self.config.update(self.get_config_updates())
+        if self._config_saver:
+            self._config_saver()
 
     def _build_ui(self):
         # Pack btn_frame FIRST so it always reserves its bottom strip,
@@ -669,8 +679,9 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
+            anchor="w",
         )
-        self.status_label.pack(side=tk.LEFT, padx=10)
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
 
         # Cancel bar — shown only when generating
         self._cancel_bar = tk.Frame(self, bg=COLORS["bg_panel"])
@@ -853,6 +864,7 @@ class SelfieTab(tk.Frame):
             text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
             fg=COLORS["text_dim"],
         )
+        self._save_config_now()
         self.log("Selfie prompt template saved", "success")
 
     def _on_reset_prompt_template(self):
@@ -870,6 +882,7 @@ class SelfieTab(tk.Frame):
             text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
             fg=COLORS["text_dim"],
         )
+        self._save_config_now()
         self.log("Selfie prompt template reset to default", "info")
 
     def _on_prompt_mode_changed(self):
@@ -904,6 +917,8 @@ class SelfieTab(tk.Frame):
         self._wildcard_text.delete("1.0", tk.END)
         self._wildcard_text.insert("1.0", text)
         self._set_wildcard_edit_mode(False)
+        self.config["selfie_wildcard_template"] = text
+        self._save_config_now()
         self.log("Wildcard template saved", "success")
 
     def _on_reset_wildcard_template(self):
@@ -911,6 +926,8 @@ class SelfieTab(tk.Frame):
         self._wildcard_text.delete("1.0", tk.END)
         self._wildcard_text.insert("1.0", self.DEFAULT_WILDCARD_TEMPLATE)
         self._set_wildcard_edit_mode(False)
+        self.config["selfie_wildcard_template"] = self.DEFAULT_WILDCARD_TEMPLATE
+        self._save_config_now()
         self.log("Wildcard template reset to default", "info")
 
     def _build_handoff_prompt(self) -> str:
@@ -1048,7 +1065,7 @@ class SelfieTab(tk.Frame):
                     self.winfo_toplevel().after(
                         0,
                         lambda i=idx, t=total_models, l=label: self.status_label.config(
-                            text=f"Model {i+1}/{t}: {l[:20]}..."
+                            text=f"{i+1}/{t}: {self._truncate_model_label(l)}"
                         ),
                     )
 
@@ -1114,8 +1131,7 @@ class SelfieTab(tk.Frame):
         if result:
             self._last_result_path = result
             similarity = self._extract_similarity_from_result_path(result)
-            selfie_label = f"Selfie (Sim: {similarity})" if similarity is not None else "Selfie (Sim: N/A)"
-            self.image_session.add_image(result, "selfie", label=selfie_label)
+            self.image_session.add_image(result, "selfie", similarity=similarity)
             message = f"Selfie generated: {os.path.basename(result)}"
             if similarity is not None:
                 message = f"Selfie generated (Similarity {similarity}): {os.path.basename(result)}"
@@ -1143,22 +1159,17 @@ class SelfieTab(tk.Frame):
         token = match.group(1)
         return "n/a" if token == "na" else f"{token}%"
 
-    def _format_selfie_label(self, model_label: str, result_path: str) -> str:
-        short_model = self._truncate_model_label(model_label)
-        similarity = self._extract_similarity_from_result_path(result_path)
-        if similarity is None:
-            return f"{short_model} (Sim: N/A)"
-        return f"{short_model} (Sim: {similarity})"
-
     def _show_single_result(self, model: dict, result: str):
         """Add a single completed result to the carousel immediately."""
         label = model.get("label", model.get("endpoint", "model"))
         similarity = self._extract_similarity_from_result_path(result)
         self._last_result_path = result
+        short_model = self._truncate_model_label(label)
         self.image_session.add_image(
             result,
             "selfie",
-            label=self._format_selfie_label(label, result),
+            label=short_model,
+            similarity=similarity,
         )
         message = f"Selfie generated [{label}]: {os.path.basename(result)}"
         if similarity is not None:

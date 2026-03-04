@@ -2,13 +2,13 @@
 
 import os
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-_VALID_SOURCE_TYPES = {"input", "selfie", "outpaint"}
+_VALID_SOURCE_TYPES = {"input", "selfie", "outpaint", "polish", "upscale"}
 
 
 @dataclass
@@ -19,11 +19,16 @@ class ImageEntry:
         path: Absolute path to the image file.
         source_type: One of "input", "selfie", "outpaint".
         label: Display label (auto-generated if empty).
+        rotation: Rotation in degrees (0, 90, 180, 270) applied on top of EXIF correction.
+        similarity: Face similarity score string, e.g. "72%" or "n/a". None for inputs.
     """
 
     path: str
-    source_type: str  # "input", "selfie", "outpaint"
+    source_type: str  # "input", "selfie", "outpaint", "polish", "upscale"
     label: str = ""
+    rotation: int = 0
+    similarity: Optional[str] = None  # "72%" or None
+    ops: dict = field(default_factory=dict)  # {"pol": 1, "ups": 2, "exp": 1}
 
     def __post_init__(self):
         # Normalize to absolute path
@@ -57,6 +62,7 @@ class ImageSession:
         self._images: List[ImageEntry] = []
         self._current_index: int = -1
         self._reference_index: int = -1
+        self._similarity_ref_index: int = -1
         self._on_change_listeners: List[Callable] = []
         self._primary_listener: Optional[Callable] = None
 
@@ -92,19 +98,24 @@ class ImageSession:
         source_type: str,
         label: str = "",
         make_active: bool = True,
+        similarity: Optional[str] = None,
+        ops: Optional[dict] = None,
     ) -> ImageEntry:
         """Add an image to the session.
 
         Args:
             path: Absolute path to the image file
-            source_type: One of "input", "selfie", "outpaint"
+            source_type: One of "input", "selfie", "outpaint", "polish", "upscale"
             label: Optional display label (auto-generated if empty)
             make_active: If True, navigate to this image immediately
+            similarity: Face similarity score string, e.g. "72%" or None
+            ops: Pipeline operations dict, e.g. {"pol": 1, "ups": 2}
 
         Returns:
             The created ImageEntry.
         """
-        entry = ImageEntry(path=path, source_type=source_type, label=label)
+        entry = ImageEntry(path=path, source_type=source_type, label=label,
+                           similarity=similarity, ops=ops or {})
         self._images.append(entry)
         new_idx = len(self._images) - 1
         if entry.source_type == "input":
@@ -182,6 +193,32 @@ class ImageSession:
                 return entry
         return None
 
+    # ── Similarity reference (any image type) ─────────────────────
+
+    @property
+    def similarity_ref_index(self) -> int:
+        """Index of the user-selected similarity reference image, or -1."""
+        return self._similarity_ref_index
+
+    @property
+    def similarity_ref_entry(self) -> Optional[ImageEntry]:
+        """The image chosen as the similarity reference (any source_type)."""
+        if 0 <= self._similarity_ref_index < len(self._images):
+            return self._images[self._similarity_ref_index]
+        return None
+
+    def set_similarity_ref(self, index: int) -> bool:
+        """Set the similarity reference to any image by index. Pass -1 to clear."""
+        if index == -1:
+            self._similarity_ref_index = -1
+            self._notify()
+            return True
+        if 0 <= index < len(self._images):
+            self._similarity_ref_index = index
+            self._notify()
+            return True
+        return False
+
     @property
     def input_images(self) -> List[Tuple[int, ImageEntry]]:
         """List of (global_index, entry) for all input images."""
@@ -227,6 +264,7 @@ class ImageSession:
         self._images.clear()
         self._current_index = -1
         self._reference_index = -1
+        self._similarity_ref_index = -1
         self._notify()
 
     def remove_current(self) -> bool:
@@ -248,6 +286,11 @@ class ImageSession:
             self._reference_index = inputs[0][0] if inputs else -1
         elif self._reference_index > removed_index:
             self._reference_index -= 1
+        # Fix similarity ref index after removal
+        if self._similarity_ref_index == removed_index:
+            self._similarity_ref_index = -1
+        elif self._similarity_ref_index > removed_index:
+            self._similarity_ref_index -= 1
         self._notify()
         return True
 
@@ -255,11 +298,18 @@ class ImageSession:
         """Serialize session state to a plain dict (for JSON persistence)."""
         return {
             "images": [
-                {"path": e.path, "source_type": e.source_type, "label": e.label}
+                {
+                    "path": e.path,
+                    "source_type": e.source_type,
+                    "label": e.label,
+                    "similarity": e.similarity,
+                    "ops": e.ops if e.ops else {},
+                }
                 for e in self._images
             ],
             "current_index": self._current_index,
             "reference_index": self._reference_index,
+            "similarity_ref_index": self._similarity_ref_index,
         }
 
     @classmethod
@@ -280,6 +330,8 @@ class ImageSession:
                 path=path,
                 source_type=img.get("source_type", "input"),
                 label=img.get("label", ""),
+                similarity=img.get("similarity"),
+                ops=img.get("ops", {}),
             )
             session._images.append(entry)
 
@@ -295,5 +347,9 @@ class ImageSession:
             # Fall back to first input entry
             inputs = session.input_images
             session._reference_index = inputs[0][0] if inputs else -1
+
+        # Restore similarity reference (any image type)
+        raw_sim_ref = data.get("similarity_ref_index", -1)
+        session._similarity_ref_index = raw_sim_ref if 0 <= raw_sim_ref < count else -1
 
         return session

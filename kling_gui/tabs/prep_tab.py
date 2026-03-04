@@ -299,7 +299,27 @@ class PrepTab(tk.Frame):
         )
         self.status_label.pack(anchor="center", pady=(4, 0))
 
-        # Result display
+        # Write to prompt button (packed BOTTOM first to guarantee space)
+        write_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        write_frame.pack(fill=tk.X, padx=10, pady=(0, 10), side=tk.BOTTOM)
+
+        self.write_btn = tk.Button(
+            write_frame,
+            text="Send to Selfie Gen \u2192 Custom JSON",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["btn_green"],
+            fg="white",
+            disabledforeground="#8FBC8F",
+            command=self._on_send_to_step2,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            pady=3,
+            state=tk.DISABLED,
+        )
+        self.write_btn.pack(anchor="center")
+
+        # Result display (expands to fill remaining space)
         tk.Label(
             self,
             text="Analysis Result:",
@@ -330,26 +350,6 @@ class PrepTab(tk.Frame):
         self.result_text.config(yscrollcommand=scroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Write to prompt button
-        write_frame = tk.Frame(self, bg=COLORS["bg_panel"])
-        write_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        self.write_btn = tk.Button(
-            write_frame,
-            text="Send to Selfie Gen \u2192 Custom JSON",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["btn_green"],
-            fg="white",
-            disabledforeground="#8FBC8F",
-            command=self._on_send_to_step2,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
-            pady=3,
-            state=tk.DISABLED,
-        )
-        self.write_btn.pack(anchor="center")
 
     def _get_selected_model_endpoint(self) -> str:
         idx = self.model_combo.current()

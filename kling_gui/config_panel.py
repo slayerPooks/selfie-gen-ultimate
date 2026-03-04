@@ -369,14 +369,14 @@ class ConfigPanel(tk.Frame):
             bg=COLORS["bg_input"], fg=COLORS["text_dim"], width=8, anchor="w",
         ).pack(side=tk.LEFT)
 
-        self.model_var = tk.StringVar()
-        self.model_combo = ttk.Combobox(
-            row1, textvariable=self.model_var, state="readonly",
-            width=36, font=(FONT_FAMILY, 10, "bold"),
-            style="Dark.TCombobox", height=COMBOBOX_DROPDOWN_HEIGHT,
+        # ⓘ info icon (larger, no text label) — hover to see model notes
+        self.model_info_icon = tk.Label(
+            row1, text="\u24D8", font=(FONT_FAMILY, 14),
+            cursor="question_arrow",
+            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
-        self.model_combo.pack(side=tk.LEFT, padx=(5, 6))
-        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
+        self.model_info_icon.pack(side=tk.RIGHT, padx=(6, 0))
+        HoverTooltip(self.model_info_icon, self._get_current_model_notes)
 
         # "Manage…" button — opens the Model Manager dialog
         self.manage_models_btn = tk.Button(
@@ -385,16 +385,16 @@ class ConfigPanel(tk.Frame):
             activebackground=COLORS["bg_main"], activeforeground=COLORS["text_light"],
             padx=8, pady=2, relief=tk.FLAT, borderwidth=0, command=self._open_model_manager,
         )
-        self.manage_models_btn.pack(side=tk.LEFT, padx=(4, 0))
+        self.manage_models_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
-        # ⓘ info icon (larger, no text label) — hover to see model notes
-        self.model_info_icon = tk.Label(
-            row1, text="\u24D8", font=(FONT_FAMILY, 14),
-            cursor="question_arrow",
-            bg=COLORS["bg_input"], fg=COLORS["text_dim"],
+        self.model_var = tk.StringVar()
+        self.model_combo = ttk.Combobox(
+            row1, textvariable=self.model_var, state="readonly",
+            font=(FONT_FAMILY, 10, "bold"),
+            style="Dark.TCombobox", height=COMBOBOX_DROPDOWN_HEIGHT,
         )
-        self.model_info_icon.pack(side=tk.LEFT, padx=(6, 0))
-        HoverTooltip(self.model_info_icon, self._get_current_model_notes)
+        self.model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 6))
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
         # Row 2: Output mode
         row2 = tk.Frame(left_col, bg=COLORS["bg_input"])

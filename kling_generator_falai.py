@@ -540,9 +540,11 @@ class FalAIKlingGenerator:
         self.last_error_message = None
 
         try:
-            # Determine actual output folder
+            # Determine actual output folder — prefer gen-videos/ subfolder
             if use_source_folder:
-                actual_output_folder = str(Path(character_image_path).parent)
+                from path_utils import get_gen_videos_folder
+                actual_output_folder = get_gen_videos_folder(character_image_path)
+                os.makedirs(actual_output_folder, exist_ok=True)
             elif output_folder is not None:
                 actual_output_folder = output_folder
             else:

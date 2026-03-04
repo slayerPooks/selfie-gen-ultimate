@@ -45,6 +45,7 @@ class CropPolisher:
         output_path: str,
         provider: str = "bfl",
         prompt: str = "",
+        strength: float = 0.8,
     ) -> Optional[str]:
         """Polish a face crop image, removing document artifacts.
 
@@ -53,6 +54,7 @@ class CropPolisher:
             output_path: Where to save the polished result.
             provider: "bfl" or "fal".
             prompt: Instruction prompt for the AI editor.
+            strength: fal.ai only — edit strength 0.0 to 1.0.
 
         Returns:
             Absolute path to polished image, or None on failure.
@@ -60,12 +62,12 @@ class CropPolisher:
         if provider == "bfl":
             ok = self._polish_bfl(image_path, output_path, prompt)
         else:
-            ok = self._polish_fal(image_path, output_path, prompt)
+            ok = self._polish_fal(image_path, output_path, prompt, strength)
         return os.path.abspath(output_path) if ok else None
 
     # ── fal.ai path ──────────────────────────────────────────────────
 
-    def _polish_fal(self, image_path: str, output_path: str, prompt: str) -> bool:
+    def _polish_fal(self, image_path: str, output_path: str, prompt: str, strength: float = 0.8) -> bool:
         from fal_utils import (
             upload_to_freeimage,
             fal_queue_submit,
@@ -79,7 +81,7 @@ class CropPolisher:
 
         # Upload source image
         self._report("Uploading crop for polishing...", "upload")
-        image_url = upload_to_freeimage(
+        image_url, _ = upload_to_freeimage(
             image_path,
             max_size=1200,
             progress_cb=self._progress_callback,
@@ -94,6 +96,7 @@ class CropPolisher:
             "prompt": prompt,
             "num_images": 1,
             "output_format": "png",
+            "strength": strength,
         }
 
         self._report("Submitting FLUX.2 Edit job...", "task")
@@ -142,7 +145,7 @@ class CropPolisher:
 
     def _polish_bfl(self, image_path: str, output_path: str, prompt: str) -> bool:
         import requests
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         if not self._bfl_api_key:
             self._report("BFL API key not set", "error")
@@ -152,6 +155,7 @@ class CropPolisher:
         self._report("Encoding image for BFL...", "upload")
         try:
             img = Image.open(image_path)
+            img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "P", "LA"):
                 img = img.convert("RGB")
             img.thumbnail((1024, 1024), Image.LANCZOS)

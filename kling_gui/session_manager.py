@@ -7,6 +7,8 @@ import logging
 from datetime import datetime
 from typing import List, Optional, NamedTuple
 
+from path_utils import _walk_up_past_gen_folders
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,14 +29,34 @@ def _sanitize_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_\-]", "_", name).strip("_")[:80] or "session"
 
 
-def _derive_session_name(image_session) -> str:
-    """Auto-derive a name from the first input image's parent folder + timestamp."""
+def _resolve_session_folder(image_session) -> str:
+    """Get the real project folder name from session images, walking up past gen-images/gen-videos."""
     ref = image_session.reference_entry
     if ref:
-        folder_name = os.path.basename(os.path.dirname(ref.path))
+        path = ref.path
     else:
-        images = image_session.images
-        folder_name = os.path.basename(os.path.dirname(images[0].path)) if images else "untitled"
+        inputs = image_session.input_images
+        if inputs:
+            path = inputs[0][1].path
+        else:
+            images = image_session.images
+            path = images[0].path if images else None
+    if not path:
+        return "untitled"
+    project_dir = _walk_up_past_gen_folders(path)
+    return os.path.basename(project_dir)
+
+
+def get_autosave_path(app_dir: str, image_session) -> str:
+    """Return deterministic autosave file path based on session's source folder."""
+    sessions_dir = _get_sessions_dir(app_dir)
+    safe = _sanitize_name(_resolve_session_folder(image_session))
+    return os.path.join(sessions_dir, f"{safe}_autosave.json")
+
+
+def _derive_session_name(image_session) -> str:
+    """Auto-derive a name from the session's source folder + timestamp."""
+    folder_name = _resolve_session_folder(image_session)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{_sanitize_name(folder_name)}_{ts}"
 

@@ -319,17 +319,22 @@ class OutpaintTab(tk.Frame):
 
     @staticmethod
     def _calculate_expand_pixels(
-        image_path: str, percentage: int,
+        image_path: str, percentage: int, max_per_side: int = 700,
     ) -> tuple:
-        """Calculate L/R/T/B pixel expansion from image dimensions and %."""
-        from PIL import Image
+        """Calculate L/R/T/B pixel expansion from image dimensions and %.
+
+        Args:
+            max_per_side: Cap per-side expansion (700 for fal.ai, 2048 for BFL).
+        """
+        from PIL import Image, ImageOps
 
         with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img)
             width, height = img.size
 
         pct = percentage / 100.0
-        lr = min(700, int(width * pct))
-        tb = min(700, int(height * pct))
+        lr = min(max_per_side, int(width * pct))
+        tb = min(max_per_side, int(height * pct))
         return lr, lr, tb, tb  # left, right, top, bottom
 
     # ── Generation ──────────────────────────────────────────────────────
@@ -366,9 +371,11 @@ class OutpaintTab(tk.Frame):
             except (tk.TclError, ValueError):
                 self.log("Invalid percentage value", "error")
                 return
+            has_bfl = bool(self.get_config().get("bfl_api_key"))
+            max_per_side = 2048 if has_bfl else 700
             try:
                 expand_left, expand_right, expand_top, expand_bottom = (
-                    self._calculate_expand_pixels(image_path, pct)
+                    self._calculate_expand_pixels(image_path, pct, max_per_side)
                 )
             except Exception as e:
                 self.log(f"Could not read image dimensions: {e}", "error")
@@ -390,12 +397,19 @@ class OutpaintTab(tk.Frame):
 
         self._set_busy(True)
 
+        # Capture reference path before spawning thread (thread-safety)
+        ref = self.image_session.reference_entry
+        ref_path = ref.path if ref and ref.exists else None
+
         def _run():
             try:
                 from outpaint_generator import OutpaintGenerator
 
                 freeimage_key = self.get_config().get("freeimage_api_key")
-                gen = OutpaintGenerator(api_key, freeimage_key=freeimage_key)
+                bfl_key = self.get_config().get("bfl_api_key")
+                gen = OutpaintGenerator(
+                    api_key, freeimage_key=freeimage_key, bfl_api_key=bfl_key,
+                )
                 gen.set_progress_callback(
                     lambda msg, lvl: self.winfo_toplevel().after(
                         0, lambda m=msg, l=lvl: self.log(m, l)
@@ -411,8 +425,20 @@ class OutpaintTab(tk.Frame):
                     prompt=prompt,
                     output_format=output_format,
                 )
+
+                # Compute face similarity against original portrait
+                similarity = None
+                if ref_path and result:
+                    try:
+                        from face_similarity import compute_face_similarity
+                        similarity = compute_face_similarity(ref_path, result, report_cb=self.log)
+                    except Exception as exc:
+                        self.winfo_toplevel().after(
+                            0, lambda e=exc: self.log(f"Sim: failed — {type(e).__name__}: {e!r}", "warning")
+                        )
+
                 self.winfo_toplevel().after(
-                    0, lambda: self._on_complete(result)
+                    0, lambda: self._on_complete(result, similarity)
                 )
             except Exception as e:
                 err = str(e)
@@ -422,12 +448,14 @@ class OutpaintTab(tk.Frame):
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _on_complete(self, result):
+    def _on_complete(self, result, similarity=None):
         self._set_busy(False)
         if result:
-            self.image_session.add_image(result, "outpaint")
+            sim_str = f"{similarity}%" if similarity is not None else None
+            self.image_session.add_image(result, "outpaint", similarity=sim_str)
+            sim_msg = f" (Similarity: {similarity}%)" if similarity is not None else ""
             self.log(
-                f"Outpaint complete: {os.path.basename(result)}", "success"
+                f"Outpaint complete{sim_msg}: {os.path.basename(result)}", "success"
             )
         else:
             self.log("Outpaint failed", "error")

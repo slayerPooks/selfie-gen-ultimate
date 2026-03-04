@@ -21,7 +21,6 @@ else:
 from .face_crop_tab import FaceCropTab
 from .prep_tab import PrepTab
 from .selfie_tab import SelfieTab
-from .outpaint_tab import OutpaintTab
 from .video_tab import VideoTab
 
-__all__ = ["FaceCropTab", "PrepTab", "SelfieTab", "OutpaintTab", "VideoTab"]
+__all__ = ["FaceCropTab", "PrepTab", "SelfieTab", "VideoTab"]

@@ -101,25 +101,22 @@ class VisionAnalyzer:
         """
         self._report(f"Reading image: {os.path.basename(image_path)}", "upload")
 
-        # Read and encode image as base64
+        # Read, apply EXIF rotation, and encode image as base64
         try:
-            with open(image_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode("utf-8")
+            from PIL import Image, ImageOps
+            from io import BytesIO
+            img = Image.open(image_path)
+            img = ImageOps.exif_transpose(img)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            image_data = base64.b64encode(buf.getvalue()).decode("utf-8")
         except OSError as e:
             self._report(f"Cannot read image: {e}", "error")
             logger.error("VisionAnalyzer read error: %s", e)
             return None
 
-        # Determine MIME type
-        ext = os.path.splitext(image_path)[1].lower().lstrip(".")
-        mime = {
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "png": "image/png",
-            "webp": "image/webp",
-            "gif": "image/gif",
-            "bmp": "image/bmp",
-        }.get(ext, "image/jpeg")
+        # Always JPEG after exif_transpose re-encode above
+        mime = "image/jpeg"
 
         data_uri = f"data:{mime};base64,{image_data}"
 

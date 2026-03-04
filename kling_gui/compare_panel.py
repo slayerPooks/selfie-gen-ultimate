@@ -6,15 +6,10 @@ import logging
 
 from .theme import COLORS, FONT_FAMILY
 from .image_state import ImageSession
+from .carousel_widget import _format_image_info, _truncate_filename, _sim_color
+from .tag_utils import derive_display_tag
 
 logger = logging.getLogger(__name__)
-
-# Type label → display tag + color
-_TYPE_LABELS = {
-    "input": ("[ORIGINAL]", COLORS["accent_blue"]),
-    "selfie": ("[GENERATED]", COLORS["success"]),
-    "outpaint": ("[EXPANDED]", COLORS["warning"]),
-}
 
 
 class ComparePanel(tk.Frame):
@@ -146,15 +141,32 @@ class ComparePanel(tk.Frame):
         )
         self.prev_btn.pack(side=tk.RIGHT)
 
-        # Info label at bottom
+        # Metadata row (resolution + filesize on left, similarity on right)
+        self.meta_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        self.meta_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 2))
+
+        self.meta_label = tk.Label(
+            self.meta_frame, text="", font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor=tk.W,
+        )
+        self.meta_label.pack(side=tk.LEFT)
+
+        self.sim_label = tk.Label(
+            self.meta_frame, text="", font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor=tk.E,
+        )
+        self.sim_label.pack(side=tk.RIGHT)
+
+        # Info label (type tag + name) — pack second = just above meta
         self.info_label = tk.Label(
             self,
             text="",
             font=(FONT_FAMILY, 8),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
+            anchor=tk.W,
         )
-        self.info_label.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 2))
+        self.info_label.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 0))
 
         # Canvas for image
         self.canvas = tk.Canvas(self, bg=COLORS["bg_main"], highlightthickness=0)
@@ -194,6 +206,8 @@ class ComparePanel(tk.Frame):
         if n == 0 or self._compare_index < 0:
             self.counter_label.config(text="")
             self.info_label.config(text="No images to compare", fg=COLORS["text_dim"])
+            self.meta_label.config(text="")
+            self.sim_label.config(text="")
             return
 
         # Clamp index
@@ -206,24 +220,44 @@ class ComparePanel(tk.Frame):
         entry = images[self._compare_index]
 
         if entry.exists:
-            self._show_image_on_canvas(entry.path)
-            tag, color = _TYPE_LABELS.get(
-                entry.source_type, (f"[{entry.source_type.upper()}]", COLORS["text_dim"])
-            )
-            detail = entry.filename
-            default_label = f"{entry.source_type}: {entry.filename}"
-            if entry.label and entry.label != default_label:
-                detail = entry.label.replace(f"{entry.source_type}: ", "", 1)
-            self.info_label.config(text=f"{tag} {detail}", fg=color)
+            self._show_image_on_canvas(entry)
+            tag, color_key = derive_display_tag(entry)
+            color = COLORS.get(color_key, COLORS["text_dim"])
+            display_name = _truncate_filename(entry.filename)
+            is_sim_ref = (self._compare_index == self.image_session.similarity_ref_index
+                          and self.image_session.similarity_ref_index >= 0)
+            ref_prefix = "\u2605 " if is_sim_ref else ""
+            self.info_label.config(text=f"{ref_prefix}{tag} {display_name}", fg=color)
+
+            # Meta line: dimensions + filesize (left, gray)
+            info = _format_image_info(entry.path)
+            self.meta_label.config(text=info.strip("()") if info else "")
+
+            # Similarity (right, colored)
+            if entry.similarity is not None:
+                sim_fg = _sim_color(entry.similarity) or COLORS["text_dim"]
+                self.sim_label.config(text=f"Sim: {entry.similarity}", fg=sim_fg)
+            else:
+                self.sim_label.config(text="")
         else:
             self.info_label.config(text="File not found", fg=COLORS["error"])
+            self.meta_label.config(text="")
+            self.sim_label.config(text="")
 
-    def _show_image_on_canvas(self, path: str):
+    def _show_image_on_canvas(self, entry):
         try:
-            from PIL import Image, ImageTk
+            from PIL import Image, ImageTk, ImageOps
 
-            img = Image.open(path)
+            img = Image.open(entry.path)
             img.load()
+
+            # Auto-correct EXIF orientation (match carousel)
+            img = ImageOps.exif_transpose(img)
+
+            # Apply user rotation
+            if entry.rotation:
+                img = img.rotate(-entry.rotation, expand=True)
+
             cw = max(1, self.canvas.winfo_width() - 4)
             ch = max(1, self.canvas.winfo_height() - 4)
 
@@ -273,12 +307,12 @@ class ComparePanel(tk.Frame):
         compare_entry = self.image_session.images[self._compare_index]
         if not compare_entry.exists:
             return
-        self._schedule_hover(entry.path, compare_entry.path)
+        self._schedule_hover(entry, compare_entry)
 
-    def _schedule_hover(self, left_path: str, right_path: str):
+    def _schedule_hover(self, left_entry, right_entry):
         self._cancel_hover()
         self._hover_job = self.after(
-            500, lambda: self._show_hover_preview(left_path, right_path)
+            500, lambda: self._show_hover_preview(left_entry, right_entry)
         )
 
     def _cancel_hover(self):
@@ -300,17 +334,20 @@ class ComparePanel(tk.Frame):
             self._hover_photo_left = None
             self._hover_photo_right = None
 
-    def _show_hover_preview(self, left_path: str, right_path: str):
+    def _show_hover_preview(self, left_entry, right_entry):
         """Show a side-by-side popup with carousel image (left) and compare image (right)."""
         self._destroy_hover()
         try:
-            from PIL import Image, ImageTk
+            from PIL import Image, ImageTk, ImageOps
 
             max_dim = 500
 
-            def load_thumb(path):
-                img = Image.open(path)
+            def load_thumb(entry):
+                img = Image.open(entry.path)
                 img.load()
+                img = ImageOps.exif_transpose(img)
+                if entry.rotation:
+                    img = img.rotate(-entry.rotation, expand=True)
                 ratio = min(max_dim / img.width, max_dim / img.height, 1.0)
                 if ratio < 1.0:
                     img = img.resize(
@@ -319,8 +356,8 @@ class ComparePanel(tk.Frame):
                     )
                 return img
 
-            left_img = load_thumb(left_path)
-            right_img = load_thumb(right_path)
+            left_img = load_thumb(left_entry)
+            right_img = load_thumb(right_entry)
 
             left_photo = ImageTk.PhotoImage(left_img)
             right_photo = ImageTk.PhotoImage(right_img)
