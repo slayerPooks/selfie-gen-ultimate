@@ -108,16 +108,16 @@ class KlingAutomationUI:
                         merged["saved_prompts"] = default_config["saved_prompts"]
                     else:
                         for slot in [str(i) for i in range(1, 11)]:
-                            if slot not in merged["saved_prompts"]:
-                                merged["saved_prompts"][slot] = None
+                            if slot not in merged["saved_prompts"] or merged["saved_prompts"][slot] is None:
+                                merged["saved_prompts"][slot] = ""
 
                     # Ensure negative_prompts has all slots (1-10)
                     if "negative_prompts" not in merged:
                         merged["negative_prompts"] = default_config["negative_prompts"]
                     else:
                         for slot in [str(i) for i in range(1, 11)]:
-                            if slot not in merged["negative_prompts"]:
-                                merged["negative_prompts"][slot] = None
+                            if slot not in merged["negative_prompts"] or merged["negative_prompts"][slot] is None:
+                                merged["negative_prompts"][slot] = ""
 
                     return merged
         except Exception:
@@ -237,68 +237,19 @@ class KlingAutomationUI:
             if self.verbose_logging:
                 print(f"\033[91mError fetching models: {e}\033[0m")
 
-        # Fallback to curated list if API fails
+        # Fallback to centralized model metadata
+        from model_metadata import MODEL_METADATA
+
+        # Convert to CLI format (endpoint_id instead of endpoint)
         return [
             {
-                "name": "Kling 2.1 Professional",
-                "endpoint_id": "fal-ai/kling-video/v2.1/pro/image-to-video",
-                "duration": 10,
-                "description": "Professional quality video generation",
-            },
-            {
-                "name": "Kling 2.5 Turbo Pro",
-                "endpoint_id": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
-                "duration": 5,
-                "description": "Fast turbo video generation",
-            },
-            {
-                "name": "Kling O1",
-                "endpoint_id": "fal-ai/kling-video/o1/image-to-video",
-                "duration": 10,
-                "description": "Kling O1 model",
-            },
-            {
-                "name": "Wan 2.5",
-                "endpoint_id": "fal-ai/wan-25-preview/image-to-video",
-                "duration": 5,
-                "description": "Best open source video model with sound",
-            },
-            {
-                "name": "Veo 3",
-                "endpoint_id": "fal-ai/veo3/image-to-video",
-                "duration": 8,
-                "description": "Google Veo 3 video generation",
-            },
-            {
-                "name": "Ovi",
-                "endpoint_id": "fal-ai/ovi/image-to-video",
-                "duration": 5,
-                "description": "Ovi video generation",
-            },
-            {
-                "name": "LTX-2",
-                "endpoint_id": "fal-ai/ltx-2/image-to-video",
-                "duration": 5,
-                "description": "LTX-2 video model",
-            },
-            {
-                "name": "Pixverse V5",
-                "endpoint_id": "fal-ai/pixverse/v5/image-to-video",
-                "duration": 4,
-                "description": "Pixverse V5 video generation",
-            },
-            {
-                "name": "Hunyuan Video",
-                "endpoint_id": "fal-ai/hunyuan-video/image-to-video",
-                "duration": 5,
-                "description": "Tencent Hunyuan video model",
-            },
-            {
-                "name": "MiniMax Video",
-                "endpoint_id": "fal-ai/minimax-video/image-to-video",
-                "duration": 6,
-                "description": "MiniMax video generation",
-            },
+                "name": m["name"],
+                "endpoint_id": m["endpoint"],
+                "duration_options": m["duration_options"],
+                "duration_default": m["duration_default"],
+                "description": m["description"],
+            }
+            for m in MODEL_METADATA
         ]
 
     def fetch_batch_pricing(self, endpoint_ids: list) -> dict:
@@ -1109,8 +1060,8 @@ class KlingAutomationUI:
                 print("\n\033[90mCancelled\033[0m")
                 time.sleep(0.5)
         elif choice == "4":
-            self.config["saved_prompts"][current_slot] = None
-            self.config["negative_prompts"][current_slot] = None
+            self.config["saved_prompts"][current_slot] = ""
+            self.config["negative_prompts"][current_slot] = ""
             self.save_config()
             print("\n\033[93mSlot {} cleared\033[0m".format(current_slot))
             time.sleep(1.5)
@@ -1231,10 +1182,20 @@ class KlingAutomationUI:
                     input("\033[92mDisplay name for this model: \033[0m").strip()
                     or endpoint
                 )
-                duration = input(
-                    "\033[92mVideo duration in seconds (default 10): \033[0m"
+                # Duration prompt with common options
+                print("\033[93mCommon durations: 5s (most models), 10s (most models), 15s (some models)\033[0m")
+                duration_input = input(
+                    "\033[92mVideo duration in seconds (5, 10, 15, default 10): \033[0m"
                 ).strip()
-                duration = int(duration) if duration.isdigit() else 10
+
+                # Parse and validate duration
+                if duration_input.isdigit():
+                    duration = int(duration_input)
+                    # Warn about uncommon durations but allow them
+                    if duration not in [2, 3, 4, 5, 6, 7, 8, 10, 15]:
+                        print(f"\033[93m⚠ Uncommon duration {duration}s - verify model supports this\033[0m")
+                else:
+                    duration = 10
 
                 self.config["current_model"] = endpoint
                 self.config["model_display_name"] = name

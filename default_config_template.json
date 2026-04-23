@@ -1,0 +1,21 @@
+{
+  "saved_prompts": {
+    "1": "Create a natural close-up video where the subject blinks softly, keeps a neutral expression, and maintains steady eye contact. Keep the camera fixed and the background stable.",
+    "2": "Animate a slow head turn from center to left, then to right, then back to center. Keep shoulders and torso still, preserve natural breathing, and avoid abrupt motion.",
+    "3": "Generate one smooth motion cycle: center to 40 degrees left, return to center, then 40 degrees right, and return to center. Keep expression neutral and lighting consistent.",
+    "4": "Create a realistic smartphone-style clip with subtle handheld drift, natural skin texture, and gentle micro-expressions. Keep movement minimal and believable.",
+    "5": "Start centered, turn gently left, transition through center to right, then return to center. Maintain continuous motion, natural pacing, and a calm facial expression.",
+    "6": "Make a clean portrait animation with slight breathing motion and a small side-to-side head movement before returning to center. Keep camera position fixed and output stable."
+  },
+  "negative_prompts": {
+    "1": "",
+    "2": "",
+    "3": "",
+    "4": "",
+    "5": "",
+    "6": ""
+  },
+  "current_prompt_slot": 3,
+  "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+  "model_display_name": "Kling 2.5 Turbo Pro"
+}

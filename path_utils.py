@@ -93,8 +93,42 @@ def get_crash_log_path() -> str:
 def is_frozen() -> bool:
     """
     Check if running as a frozen executable.
-    
+
     Returns:
         bool: True if running as exe, False if running as script
     """
     return getattr(sys, 'frozen', False)
+
+
+_GEN_FOLDER_NAMES = {"gen-images", "gen-videos"}
+
+
+def _walk_up_past_gen_folders(source_path: str) -> str:
+    """Walk up from *source_path*'s parent dir past any gen-images/gen-videos nesting."""
+    current = os.path.dirname(os.path.abspath(source_path))
+    while os.path.basename(current) in _GEN_FOLDER_NAMES:
+        current = os.path.dirname(current)
+    return current
+
+
+def get_gen_images_folder(source_path: str) -> str:
+    """Return the gen-images subfolder path next to the given source file.
+
+    Walks up past any existing gen-images/gen-videos directories to prevent
+    nesting when piping output through multiple tabs.
+
+    Pure path computation — does NOT call os.makedirs.
+    Each caller is responsible for creating it before writing.
+    """
+    return os.path.join(_walk_up_past_gen_folders(source_path), "gen-images")
+
+
+def get_gen_videos_folder(source_path: str) -> str:
+    """Return the gen-videos subfolder path next to the given source file.
+
+    Same anti-nesting logic as get_gen_images_folder() but for video output.
+
+    Pure path computation — does NOT call os.makedirs.
+    Each caller is responsible for creating it before writing.
+    """
+    return os.path.join(_walk_up_past_gen_folders(source_path), "gen-videos")

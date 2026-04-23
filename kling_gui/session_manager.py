@@ -1,13 +1,13 @@
-"""Session persistence helpers for GUI save/load/autosave."""
+"""Session persistence — save / load / list / delete session snapshots."""
 
-from __future__ import annotations
-
-import json
-import logging
 import os
+import json
 import re
+import logging
 from datetime import datetime
-from typing import List, NamedTuple, Optional
+from typing import List, Optional, NamedTuple
+
+from path_utils import _walk_up_past_gen_folders
 
 logger = logging.getLogger(__name__)
 
@@ -15,94 +15,71 @@ logger = logging.getLogger(__name__)
 class SessionRecord(NamedTuple):
     name: str
     path: str
-    timestamp: str
+    timestamp: str  # ISO format
     image_count: int
 
 
 def _get_sessions_dir(app_dir: str) -> str:
-    sessions_dir = os.path.join(app_dir, "sessions")
-    os.makedirs(sessions_dir, exist_ok=True)
-    return sessions_dir
+    d = os.path.join(app_dir, "sessions")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _sanitize_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_\-]", "_", name).strip("_")[:80] or "session"
 
 
-def _walk_up_past_gen_folders(path: str) -> str:
-    """Resolve project folder above generated output folders."""
-    try:
-        from path_utils import _walk_up_past_gen_folders as impl  # type: ignore
-
-        return impl(path)
-    except Exception:
-        current = os.path.abspath(os.path.dirname(path))
-        while True:
-            name = os.path.basename(current).lower()
-            if name not in {"gen-images", "gen-videos"}:
-                return current
-            parent = os.path.dirname(current)
-            if parent == current:
-                return current
-            current = parent
-
-
 def _resolve_session_folder(image_session) -> str:
-    ref = getattr(image_session, "reference_entry", None)
+    """Get the real project folder name from session images, walking up past gen-images/gen-videos."""
+    ref = image_session.reference_entry
     if ref:
-        path = getattr(ref, "path", None)
+        path = ref.path
     else:
-        inputs = getattr(image_session, "input_images", None) or []
+        inputs = image_session.input_images
         if inputs:
-            path = getattr(inputs[0][1], "path", None)
+            path = inputs[0][1].path
         else:
-            images = getattr(image_session, "images", None) or []
-            path = getattr(images[0], "path", None) if images else None
-
+            images = image_session.images
+            path = images[0].path if images else None
     if not path:
         return "untitled"
-
     project_dir = _walk_up_past_gen_folders(path)
-    folder_name = os.path.basename(project_dir).strip()
-    return folder_name or "untitled"
+    return os.path.basename(project_dir)
 
 
 def get_autosave_path(app_dir: str, image_session) -> str:
+    """Return deterministic autosave file path based on session's source folder."""
     sessions_dir = _get_sessions_dir(app_dir)
-    safe_name = _sanitize_name(_resolve_session_folder(image_session))
-    return os.path.join(sessions_dir, f"{safe_name}_autosave.json")
+    safe = _sanitize_name(_resolve_session_folder(image_session))
+    return os.path.join(sessions_dir, f"{safe}_autosave.json")
 
 
 def _derive_session_name(image_session) -> str:
+    """Auto-derive a name from the session's source folder + timestamp."""
     folder_name = _resolve_session_folder(image_session)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{_sanitize_name(folder_name)}_{timestamp}"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{_sanitize_name(folder_name)}_{ts}"
 
 
 def list_sessions(app_dir: str) -> List[SessionRecord]:
+    """Return all saved sessions, sorted newest-first."""
     sessions_dir = _get_sessions_dir(app_dir)
-    records: List[SessionRecord] = []
-
-    for filename in os.listdir(sessions_dir):
-        if not filename.endswith(".json"):
+    records = []
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".json"):
             continue
-        file_path = os.path.join(sessions_dir, filename)
+        fpath = os.path.join(sessions_dir, fname)
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(fpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            session_data = data.get("session", {})
-            image_count = len(session_data.get("images", [])) if isinstance(session_data, dict) else 0
-            records.append(
-                SessionRecord(
-                    name=data.get("name", filename),
-                    path=file_path,
-                    timestamp=data.get("timestamp", ""),
-                    image_count=image_count,
-                )
-            )
+            records.append(SessionRecord(
+                name=data.get("name", fname),
+                path=fpath,
+                timestamp=data.get("timestamp", ""),
+                image_count=len(data.get("session", {}).get("images", [])),
+            ))
         except Exception:
-            logger.warning("Skipping corrupt session file: %s", filename)
-
+            logger.warning("Skipping corrupt session file: %s", fname)
     records.sort(key=lambda r: r.timestamp, reverse=True)
     return records
 
@@ -114,6 +91,11 @@ def save_session(
     name: Optional[str] = None,
     overwrite_path: Optional[str] = None,
 ) -> str:
+    """Save session to JSON. Returns the saved file path.
+
+    If overwrite_path is given, overwrites that file in place.
+    Otherwise creates a new file (auto-increments on collision).
+    """
     sessions_dir = _get_sessions_dir(app_dir)
     session_name = name or _derive_session_name(image_session)
 
@@ -122,8 +104,8 @@ def save_session(
         "timestamp": datetime.now().isoformat(),
         "session": image_session.to_dict(),
         "config_snapshot": {
-            key: config.get(key)
-            for key in (
+            k: config.get(k)
+            for k in (
                 "selfie_selected_models",
                 "selfie_prompt_template",
                 "selfie_scene_templates",
@@ -133,39 +115,42 @@ def save_session(
                 "selfie_width",
                 "selfie_height",
             )
-            if config.get(key) is not None
+            if config.get(k) is not None
         },
     }
 
-    file_path = overwrite_path or ""
-    if file_path and os.path.isfile(file_path):
+    if overwrite_path and os.path.isfile(overwrite_path):
+        fpath = overwrite_path
+        # Preserve original name from existing file
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-            data["name"] = existing.get("name", session_name)
+            with open(fpath, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            data["name"] = old.get("name", session_name)
         except Exception:
             pass
     else:
         safe = _sanitize_name(session_name)
-        file_path = os.path.join(sessions_dir, f"{safe}.json")
+        fpath = os.path.join(sessions_dir, f"{safe}.json")
         counter = 2
-        while os.path.exists(file_path):
-            file_path = os.path.join(sessions_dir, f"{safe}_{counter}.json")
+        while os.path.exists(fpath):
+            fpath = os.path.join(sessions_dir, f"{safe}_{counter}.json")
             counter += 1
 
-    with open(file_path, "w", encoding="utf-8") as f:
+    with open(fpath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    logger.info("Session saved: %s", file_path)
-    return file_path
+    logger.info("Session saved: %s", fpath)
+    return fpath
 
 
 def load_session(path: str) -> dict:
+    """Load a session file, returns the raw dict."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def delete_session(path: str) -> None:
+    """Delete a session file."""
     if os.path.isfile(path):
         os.remove(path)
         logger.info("Session deleted: %s", path)

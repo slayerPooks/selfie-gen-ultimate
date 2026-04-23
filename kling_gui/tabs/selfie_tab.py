@@ -92,6 +92,8 @@ class SelfieTab(tk.Frame):
         config: dict,
         config_getter: Callable[[], dict],
         log_callback: Callable[[str, str], None],
+        on_send_to_expand: Optional[Callable[[List[str], Optional[str]], None]] = None,
+        notebook_switcher_expand: Optional[Callable[[], None]] = None,
         config_saver: Optional[Callable[[], None]] = None,
         **kwargs,
     ):
@@ -101,8 +103,11 @@ class SelfieTab(tk.Frame):
         self.get_config = config_getter
         self.log = log_callback
         self._config_saver = config_saver
+        self._on_send_to_expand_cb = on_send_to_expand
+        self._notebook_switcher_expand = notebook_switcher_expand
         self._busy = False
         self._last_result_path = ""
+        self._last_batch_result_paths: List[str] = []
         # Cancellation events (three-tier)
         self._cancel_current = threading.Event()  # skip active model, advance
         self._cancel_all = threading.Event()       # stop after current model
@@ -691,6 +696,20 @@ class SelfieTab(tk.Frame):
         )
         self.open_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
+        self.send_expand_btn = tk.Button(
+            btn_frame,
+            text="Send to 2.5 Expand",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["btn_green"],
+            fg="white",
+            command=self._on_send_to_expand,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            state=tk.DISABLED,
+        )
+        self.send_expand_btn.pack(side=tk.LEFT, padx=(6, 0))
+
         self.status_label = tk.Label(
             btn_frame,
             text="",
@@ -966,6 +985,7 @@ class SelfieTab(tk.Frame):
     def _on_generate(self):
         if self._busy:
             return
+        self._last_batch_result_paths = []
 
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
@@ -1148,6 +1168,8 @@ class SelfieTab(tk.Frame):
         self._set_busy(False)
         if result:
             self._last_result_path = result
+            if result not in self._last_batch_result_paths:
+                self._last_batch_result_paths.append(result)
             similarity = self._extract_similarity_from_result_path(result)
             self.image_session.add_image(result, "selfie", similarity=similarity)
             message = f"Selfie generated: {os.path.basename(result)}"
@@ -1182,6 +1204,8 @@ class SelfieTab(tk.Frame):
         label = model.get("label", model.get("endpoint", "model"))
         similarity = self._extract_similarity_from_result_path(result)
         self._last_result_path = result
+        if result not in self._last_batch_result_paths:
+            self._last_batch_result_paths.append(result)
         short_model = self._truncate_model_label(label)
         self.image_session.add_image(
             result,
@@ -1250,6 +1274,7 @@ class SelfieTab(tk.Frame):
             self.save_as_btn.config(state=tk.DISABLED)
             self.open_file_btn.config(state=tk.DISABLED)
             self.open_folder_btn.config(state=tk.DISABLED)
+            self.send_expand_btn.config(state=tk.DISABLED)
         else:
             self._refresh_result_actions()
         self.status_label.config(
@@ -1298,9 +1323,40 @@ class SelfieTab(tk.Frame):
         has_result = bool(
             self._last_result_path and os.path.isfile(self._last_result_path)
         )
+        has_selfies = any(
+            entry.source_type == "selfie" and entry.exists
+            for entry in self.image_session.images
+        )
         self.save_as_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
         self.open_file_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
         self.open_folder_btn.config(state=tk.NORMAL if has_result else tk.DISABLED)
+        self.send_expand_btn.config(state=tk.NORMAL if has_selfies else tk.DISABLED)
+
+    def _on_send_to_expand(self):
+        if not self._on_send_to_expand_cb:
+            self.log("Step 2.5 handoff is not configured", "warning")
+            return
+
+        selfie_paths = [
+            entry.path
+            for entry in self.image_session.images
+            if entry.source_type == "selfie" and entry.exists
+        ]
+        if not selfie_paths:
+            self.log("No selfie outputs available to send", "warning")
+            return
+
+        active_path = self.image_session.active_image_path
+        if active_path and active_path not in selfie_paths:
+            active_path = self._last_result_path if self._last_result_path in selfie_paths else None
+
+        self._on_send_to_expand_cb(selfie_paths, active_path=active_path)
+        self.log(
+            f"Sent {len(selfie_paths)} selfie image(s) to Step 2.5 Expand",
+            "info",
+        )
+        if self._notebook_switcher_expand:
+            self._notebook_switcher_expand()
 
     def _open_path_in_explorer(self, path: str):
         try:

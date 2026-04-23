@@ -15,13 +15,15 @@ env/
 *.swp
 *.swo
 
-# Project specific
+# Runtime / config (user-specific)
 kling_config.json
+kling_history.json
 chrome_profile/
 *.log
-kling_automation.log
 
-# Distribution artifacts
+# Build artifacts
+build/
+dist/
 *.zip
 
 # PyInstaller build outputs (distribution folder)
@@ -36,13 +38,15 @@ nul
 # Temporary
 *.tmp
 *.temp
-tmp_run/
+tmp_*/
+tmp_*.jpg
+tmp_*.png
+test_crop.py
 
-# Session/History files
-kling_history.json
-.history/
-ui_config.json
-ui_config_exported*.json
-
-# Serena MCP
+# Session artifacts
+handoffs/
 .serena/
+.claude/
+
+# Output
+gen-images/

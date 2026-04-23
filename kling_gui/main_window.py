@@ -18,10 +18,14 @@ from datetime import datetime
 # Import path utilities
 from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir
 
-from .drop_zone import DropZone, create_dnd_root, HAS_DND
+from .drop_zone import create_dnd_root, HAS_DND
 from .log_display import LogDisplay
 from .config_panel import ConfigPanel
 from .queue_manager import QueueManager, QueueItem
+from .image_state import ImageSession
+from .carousel_widget import ImageCarousel
+from .compare_panel import ComparePanel
+from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
 
 # Try to import the generator
 try:
@@ -39,12 +43,16 @@ COLORS = {
     "bg_main": "#2D2D30",
     "bg_panel": "#3C3C41",
     "bg_input": "#464649",
+    "bg_drop": "#464649",
+    "bg_hover": "#505055",
     "text_light": "#DCDCDC",
     "text_dim": "#B4B4B4",
     "accent_blue": "#6496FF",
     "success": "#64FF64",
     "error": "#FF6464",
     "warning": "#FFA500",
+    "border": "#5A5A5E",
+    "drop_valid": "#329632",
     "btn_green": "#329632",
     "btn_red": "#B43232",
 }
@@ -54,13 +62,13 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", "
 
 
 UI_CONFIG_DEFAULTS = {
-    "window": {"width": 1100, "height": 1200, "min_width": 800, "min_height": 900},
+    "window": {"width": 1100, "height": 950, "min_width": 800, "min_height": 700},
     "config_panel": {
         "prompt_preview_height": 6,
         "prompt_preview_font_size": 9,
         "negative_prompt_height": 1,
     },
-    "drop_zone": {"height": 180},
+    "drop_zone": {"height": 560},
     "queue_panel": {"width": 300},
     "history_panel": {"height": 220, "visible_rows": 8},
     "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
@@ -186,6 +194,233 @@ class FolderPreviewDialog(tk.Toplevel):
         self.destroy()
 
 
+class SessionManagerDialog(tk.Toplevel):
+    """Dialog for browsing, loading, and managing saved sessions."""
+
+    def __init__(self, parent, app_dir, image_session, config, save_config_fn, log_fn):
+        super().__init__(parent)
+        self.title("Session Manager")
+        self.configure(bg=COLORS["bg_main"])
+        self.transient(parent)
+        self.resizable(True, True)
+
+        # Store references
+        self._app_dir = app_dir
+        self._image_session = image_session
+        self._config = config
+        self._save_config_fn = save_config_fn
+        self._log_fn = log_fn
+        self._selected_path = None
+        self._loaded_session_data = None
+
+        self._build_ui()
+        self._refresh_list()
+
+        # Center and grab
+        self.geometry("680x520")
+        self.update_idletasks()
+        # Ensure parent geometry is current before reading dimensions
+        parent.update_idletasks()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        # Fallback if parent hasn't been mapped yet (returns 1)
+        if pw < 10:
+            pw = parent.winfo_reqwidth() or 680
+        if ph < 10:
+            ph = parent.winfo_reqheight() or 520
+        x = parent.winfo_rootx() + (pw - 680) // 2
+        y = parent.winfo_rooty() + (ph - 520) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+        self.focus_set()
+
+    def _build_ui(self):
+        # Header
+        header = tk.Label(
+            self, text="Saved Sessions", font=("Segoe UI", 12, "bold"),
+            bg=COLORS["bg_main"], fg=COLORS["text_light"],
+        )
+        header.pack(fill=tk.X, padx=16, pady=(12, 6))
+
+        # Listbox with scrollbar
+        list_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._listbox = tk.Listbox(
+            list_frame, bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"], selectforeground="white",
+            font=("Consolas", 10), yscrollcommand=scrollbar.set,
+            activestyle="none",
+        )
+        self._listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self._listbox.yview)
+        self._listbox.bind("<<ListboxSelect>>", self._on_select)
+        self._listbox.bind("<Double-Button-1>", lambda e: self._on_load())
+
+        # Detail label
+        self._detail_label = tk.Label(
+            self, text="Select a session to view details",
+            font=("Segoe UI", 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._detail_label.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        # Auto-save section
+        autosave_frame = tk.Frame(self, bg=COLORS["bg_panel"], padx=10, pady=6)
+        autosave_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        tk.Label(
+            autosave_frame, text="Auto-Save:", font=("Segoe UI", 9, "bold"),
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._autosave_var = tk.BooleanVar(value=self._config.get("session_autosave_enabled", True))
+        autosave_cb = tk.Checkbutton(
+            autosave_frame, text="Enabled", variable=self._autosave_var,
+            bg=COLORS["bg_panel"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"], activebackground=COLORS["bg_panel"],
+            command=self._on_autosave_changed,
+        )
+        autosave_cb.pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Label(
+            autosave_frame, text="Interval:", font=("Segoe UI", 9),
+            bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
+        ).pack(side=tk.LEFT, padx=(0, 4))
+
+        self._interval_var = tk.StringVar(value=self._config.get("session_autosave_interval", "after_api_action"))
+        interval_menu = ttk.Combobox(
+            autosave_frame, textvariable=self._interval_var,
+            values=["5min", "10min", "15min", "after_api_action"],
+            state="readonly", width=16,
+        )
+        interval_menu.pack(side=tk.LEFT)
+        interval_menu.bind("<<ComboboxSelected>>", lambda e: self._on_autosave_changed())
+
+        # Button bar
+        btn_frame = tk.Frame(self, bg=COLORS["bg_main"])
+        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+        for text, color, cmd in [
+            ("Delete", COLORS["btn_red"], self._on_delete),
+            ("Overwrite Save", COLORS["warning"], self._on_overwrite),
+            ("Save New", COLORS["btn_green"], self._on_save_new),
+        ]:
+            tk.Button(
+                btn_frame, text=text, font=("Segoe UI", 9, "bold"),
+                bg=color, fg="white", relief="flat", padx=10, pady=4,
+                command=cmd,
+            ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            btn_frame, text="Close", font=("Segoe UI", 9),
+            bg=COLORS["bg_input"], fg=COLORS["text_light"], relief="flat",
+            padx=10, pady=4, command=self.destroy,
+        ).pack(side=tk.RIGHT)
+
+        tk.Button(
+            btn_frame, text="Load", font=("Segoe UI", 9, "bold"),
+            bg=COLORS["accent_blue"], fg="white", relief="flat",
+            padx=10, pady=4, command=self._on_load,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+
+    def _refresh_list(self):
+        from .session_manager import list_sessions
+        self._sessions = list_sessions(self._app_dir)
+        self._listbox.delete(0, tk.END)
+        for rec in self._sessions:
+            ts = rec.timestamp[:16].replace("T", " ") if rec.timestamp else "?"
+            self._listbox.insert(tk.END, f"  {rec.name:<40s}  {ts}  {rec.image_count} imgs")
+
+    def _on_select(self, event=None):
+        sel = self._listbox.curselection()
+        if not sel or sel[0] >= len(self._sessions):
+            self._selected_path = None
+            self._detail_label.config(text="Select a session to view details")
+            return
+        rec = self._sessions[sel[0]]
+        self._selected_path = rec.path
+        ts = rec.timestamp[:19].replace("T", " ") if rec.timestamp else "unknown"
+        self._detail_label.config(
+            text=f"Selected: {rec.name} — saved {ts} — {rec.image_count} images"
+        )
+
+    def _on_load(self):
+        if not self._selected_path:
+            return
+        from .session_manager import load_session
+        try:
+            data = load_session(self._selected_path)
+            self._loaded_session_data = data
+            self._log_fn(f"Session loaded: {data.get('name', '?')}", "success")
+            self.destroy()
+        except Exception as e:
+            self._log_fn(f"Failed to load session: {e}", "error")
+
+    def _on_delete(self):
+        if not self._selected_path:
+            return
+        from .session_manager import delete_session
+        from tkinter import messagebox
+        if not messagebox.askyesno("Delete Session", "Delete this saved session?", parent=self):
+            return
+        try:
+            delete_session(self._selected_path)
+            self._log_fn("Session deleted", "info")
+            self._selected_path = None
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Delete failed: {e}", "error")
+
+    def _on_overwrite(self):
+        """Save current state to the selected session file."""
+        if not self._selected_path:
+            return
+        if not self._image_session.count:
+            self._log_fn("No images in session to save", "warning")
+            return
+        from .session_manager import save_session
+        try:
+            save_session(
+                self._app_dir, self._image_session, self._config,
+                overwrite_path=self._selected_path,
+            )
+            self._log_fn("Session overwritten", "success")
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Overwrite failed: {e}", "error")
+
+    def _on_save_new(self):
+        """Save current session state as a new session file."""
+        if not self._image_session.count:
+            self._log_fn("No images in session to save", "warning")
+            return
+        from datetime import datetime as _dt
+        default_name = f"session_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+        name = simpledialog.askstring(
+            "Save Session", "Session name:", initialvalue=default_name, parent=self,
+        )
+        if not name:
+            return
+        from .session_manager import save_session
+        try:
+            save_session(
+                self._app_dir, self._image_session, self._config, name=name,
+            )
+            self._log_fn(f"Session saved: {name}", "success")
+            self._refresh_list()
+        except Exception as e:
+            self._log_fn(f"Save failed: {e}", "error")
+
+    def _on_autosave_changed(self):
+        self._config["session_autosave_enabled"] = self._autosave_var.get()
+        self._config["session_autosave_interval"] = self._interval_var.get()
+        self._save_config_fn()
+
+
 class KlingGUIWindow:
     """Main GUI window for Kling video generation."""
 
@@ -221,11 +456,25 @@ class KlingGUIWindow:
         self.history: List[dict] = self._load_history()
         self.generator: Optional["FalAIKlingGenerator"] = None
         self.queue_manager: Optional[QueueManager] = None
+        self.image_session = ImageSession()
+
+        # Tell Windows this is its own app (not just "python.exe") so the
+        # taskbar shows our custom icon instead of the generic Python icon.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "kling-ui.ai-media-toolkit.1"
+            )
+        except Exception:
+            pass  # Non-Windows or missing API — harmless
 
         # Create root window with DnD support if available
         self.root = create_dnd_root()
-        self.root.title("FAL.AI Video Generator - GUI Mode")
+        self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
+
+        # Set app icon (window title bar + taskbar)
+        self._set_app_icon()
 
         # Restore window geometry or use defaults
         window_config = self.ui_config.get("window", {})
@@ -235,11 +484,21 @@ class KlingGUIWindow:
             min_width = int(window_config.get("min_width", 800))
             min_height = int(window_config.get("min_height", 900))
         except (TypeError, ValueError):
-            window_width, window_height, min_width, min_height = 1100, 1200, 800, 900
+            window_width, window_height, min_width, min_height = 1100, 950, 800, 700
 
         saved_geometry = self.config.get("window_geometry", "")
         if saved_geometry:
             try:
+                # Cap saved height to 90% of screen so window never overflows monitor
+                screen_h = self.root.winfo_screenheight()
+                max_h = int(screen_h * 0.90)
+                geom_size = saved_geometry.split("+")[0]
+                if "x" in geom_size:
+                    w_str, h_str = geom_size.split("x", 1)
+                    capped_h = min(int(h_str), max_h)
+                    saved_geometry = saved_geometry.replace(
+                        f"{w_str}x{h_str}", f"{w_str}x{capped_h}", 1
+                    )
                 self.root.geometry(saved_geometry)
             except Exception:
                 self.root.geometry(f"{window_width}x{window_height}")
@@ -250,9 +509,10 @@ class KlingGUIWindow:
         # Set up the UI
         self._setup_ui()
 
-        # Restore sash positions after UI is built (delayed to ensure widgets are ready)
-        self.root.after(100, self._restore_sash_positions)
-        self.root.after(150, self._apply_ui_config)
+        # Apply ui_config first (minsize, config_panel), then restore sash positions
+        # after widgets are fully rendered. _restore_sash_positions must run last.
+        self.root.after(50, self._apply_ui_config)
+        self.root.after(250, self._restore_sash_positions)
 
         # Enable debug hotkeys/inspector if configured
         self._setup_debug_hotkeys()
@@ -262,6 +522,23 @@ class KlingGUIWindow:
 
         # Protocol for window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _set_app_icon(self):
+        """Load and set the app icon from bundled resources or alongside the exe."""
+        try:
+            from path_utils import get_resource_dir, get_app_dir
+            import tkinter as tk
+
+            icon_name = "kling_ui.ico"
+
+            # Check bundled resources first (PyInstaller _MEIPASS), then app dir
+            for search_dir in [get_resource_dir(), get_app_dir()]:
+                icon_path = os.path.join(search_dir, icon_name)
+                if os.path.isfile(icon_path):
+                    self.root.iconbitmap(icon_path)
+                    return
+        except Exception:
+            pass  # Icon is cosmetic - never crash the app over it
 
     def _setup_logging(self) -> logging.Logger:
         """Configure rotating file logging."""
@@ -297,8 +574,8 @@ class KlingGUIWindow:
             "log_backups": 3,
             "duplicate_detection": True,
             "current_prompt_slot": 1,
-            "saved_prompts": {"1": "", "2": "", "3": ""},
-            "negative_prompts": {"1": "", "2": "", "3": ""},
+            "saved_prompts": {str(i): "" for i in range(1, 11)},
+            "negative_prompts": {str(i): "" for i in range(1, 11)},
             "model_capabilities": {},
             "current_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
             "model_display_name": "Kling 2.5 Turbo Pro",
@@ -306,26 +583,86 @@ class KlingGUIWindow:
             "loop_videos": True,  # Loop videos ON by default
             "allow_reprocess": True,
             "reprocess_mode": "increment",
+            "custom_models": [],
+            "hidden_models": [],
+            "freeimage_api_key": "",
+            "bfl_api_key": "",
+            "openrouter_vision_system_prompt": "",
+            "selfie_output_mode": "source",
+            "selfie_output_folder": "",
+            "selfie_selected_models": {
+                "bfl/flux-kontext-pro": False,
+                "bfl/flux-kontext-max": False,
+                "bfl/flux-2-pro": False,
+                "fal-ai/flux-pulid": True,
+                "fal-ai/pulid": False,
+                "fal-ai/instant-character": False,
+                "fal-ai/z-image/turbo/image-to-image": False,
+                "fal-ai/nano-banana-pro/edit": False,
+                "fal-ai/qwen-image-edit": False,
+                "fal-ai/bytedance/seedream/v4.5/edit": False,
+                "fal-ai/bytedance/seedream/v5/edit": False,
+                "fal-ai/bytedance/seedream/v5/lite/edit": False,
+            },
             # Folder processing settings
             "folder_filter_pattern": "",
             "folder_match_mode": "partial",  # "partial" or "exact"
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
-            "sash_dropzone": 180,  # Height of drop zone pane
-            "sash_queue": 300,  # Width of queue pane
-            "sash_log": 380,  # Height of log pane (before history)
+            "sash_dropzone": 560,  # Height of drop zone pane
+            "sash_queue": 420,  # Width of queue pane
+            "sash_log": 180,  # Height of log pane (before history)
         }
 
+        # Layer 1: apply bundled defaults template (prompts, model, etc.)
+        try:
+            from path_utils import get_resource_dir
+            template_path = os.path.join(get_resource_dir(), "default_config_template.json")
+            if os.path.exists(template_path):
+                with open(template_path, "r", encoding="utf-8") as f:
+                    template = json.load(f)
+                    default_config.update(template)
+        except Exception:
+            pass  # Template is cosmetic - never crash on missing defaults
+
+        # Layer 2: apply user's saved config (overrides everything)
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    # Merge with defaults
                     default_config.update(loaded)
         except Exception as e:
             print(f"Warning: Could not load config: {e}")
 
+        # Layer 3: sanitize prompt slot dicts — ensure all 10 slots exist as
+        # strings, not None.  Shallow .update() above replaces the entire nested
+        # dict, so slots that were missing in the user file (or set to null by
+        # an older CLI) would otherwise surface as None and silently vanish.
+        for key in ("saved_prompts", "negative_prompts", "prompt_titles"):
+            bucket = default_config.get(key)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                default_config[key] = bucket
+            for slot in (str(i) for i in range(1, 11)):
+                if slot not in bucket or bucket[slot] is None:
+                    bucket[slot] = ""
+
+        # Layer 4: migrate known broken endpoint paths
+        self._migrate_endpoints(default_config)
+
         return default_config
+
+    @staticmethod
+    def _migrate_endpoints(config: dict) -> None:
+        """Auto-correct known broken fal.ai endpoint paths in saved config."""
+        _ENDPOINT_MIGRATIONS = {
+            "fal-ai/kling-video/v2.5/turbo-pro/image-to-video": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+            "fal-ai/kling-video/v2.5/turbo-standard/image-to-video": "fal-ai/kling-video/v2.5-turbo/standard/image-to-video",
+        }
+        current = config.get("current_model", "")
+        if current in _ENDPOINT_MIGRATIONS:
+            config["current_model"] = _ENDPOINT_MIGRATIONS[current]
+            print(f"Migrated endpoint: {current} -> {config['current_model']}")
 
     def _merge_ui_config(self, base: dict, updates: dict) -> dict:
         """Deep-merge UI config dictionaries."""
@@ -385,7 +722,22 @@ class KlingGUIWindow:
             fieldbackground=COLORS["bg_input"],
             background=COLORS["bg_panel"],
             foreground=COLORS["text_light"],
+            arrowcolor=COLORS["text_light"],
+            selectbackground=COLORS["accent_blue"],
+            selectforeground="white",
         )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", COLORS["bg_input"])],
+            foreground=[("readonly", COLORS["text_light"])],
+            selectbackground=[("readonly", COLORS["accent_blue"])],
+            selectforeground=[("readonly", "white")],
+        )
+        # Style the dropdown listbox (popdown) for all Combobox widgets
+        self.root.option_add("*TCombobox*Listbox.background", COLORS["bg_input"])
+        self.root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", COLORS["accent_blue"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "white")
 
         # Dark theme for Treeview (PROCESSED VIDEOS section)
         style.configure(
@@ -411,20 +763,38 @@ class KlingGUIWindow:
         style.configure("TPanedwindow", background=COLORS["bg_main"])
         style.configure("Sash", sashthickness=6, sashrelief=tk.FLAT)
 
+        # Dark theme for Notebook tabs
+        style.configure(
+            "TNotebook",
+            background=COLORS["bg_main"],
+            borderwidth=0,
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=COLORS["bg_input"],
+            foreground=COLORS["text_dim"],
+            padding=[10, 4],
+            font=("Segoe UI", 9),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", COLORS["bg_panel"])],
+            foreground=[("selected", COLORS["text_light"])],
+        )
+
         # Header
         self._setup_header()
+
+        # Control buttons MUST be packed before main_frame so the pack manager
+        # reserves their space at the bottom first. If packed after an expand=True
+        # frame, they get pushed off-screen when the window is small.
+        self._setup_controls()
 
         # Main content area
         main_frame = tk.Frame(self.root, bg=COLORS["bg_main"])
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        # Config panel at top (not resizable)
-        self.config_panel = ConfigPanel(
-            main_frame, config=self.config, on_config_changed=self._on_config_changed
-        )
-        self.config_panel.pack(fill=tk.X, pady=(0, 5))
-
-        # Main vertical PanedWindow: Drop Zone | Bottom Section
+        # Main vertical PanedWindow: top_section | bottom_section
         self.main_paned = tk.PanedWindow(
             main_frame,
             orient=tk.VERTICAL,
@@ -435,17 +805,130 @@ class KlingGUIWindow:
         )
         self.main_paned.pack(fill=tk.BOTH, expand=True)
 
-        # Drop zone pane (top)
-        drop_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
-        self.drop_zone = DropZone(
-            drop_frame,
-            on_files_dropped=self._on_files_dropped,
-            on_folder_dropped=self._on_folder_dropped,
-        )
-        self.drop_zone.pack(fill=tk.BOTH, expand=True)
-        self.main_paned.add(drop_frame, minsize=100)
+        # ── Top section: horizontal split (left: notebook | right: prompt) ──
+        top_frame = tk.Frame(self.main_paned, bg=COLORS["bg_main"])
+        self.main_paned.add(top_frame, minsize=280)
 
-        # Bottom section: Horizontal PanedWindow (Queue | Log+History)
+        self.top_h_paned = tk.PanedWindow(
+            top_frame,
+            orient=tk.HORIZONTAL,
+            bg=COLORS["bg_input"],
+            sashwidth=6,
+            sashrelief=tk.RAISED,
+            sashpad=1,
+        )
+        self.top_h_paned.pack(fill=tk.BOTH, expand=True)
+
+        # Left pane: Notebook with 6 tabs
+        left_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_main"])
+
+        # Create Notebook FIRST (pipeline tabs do not depend on ConfigPanel)
+        self.notebook = ttk.Notebook(left_pane)
+
+        # Tab 0: Face Crop
+        self.face_crop_tab = FaceCropTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            notebook_switcher_prep=lambda: self.notebook.select(1),
+            notebook_switcher_selfie=lambda: self.notebook.select(2),
+            config_saver=self._save_config,
+        )
+        self.notebook.add(self.face_crop_tab, text="0. Face Crop / AI Polish")
+
+        # Tab 1: AI Analysis
+        self.prep_tab = PrepTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            prompt_writer=self._write_to_active_prompt,
+            config_saver=self._save_config,
+        )
+        self.notebook.add(self.prep_tab, text="1. AI Analysis")
+
+        # Tab 2: Generate Selfie
+        self.selfie_tab = SelfieTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            on_send_to_expand=self._on_selfie_send_to_expand,
+            notebook_switcher_expand=lambda: self.notebook.select(3),
+            config_saver=self._save_config,
+        )
+        self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
+
+        # Tab 2.5: Expand
+        self.expand_tab = ExpandTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            on_send_to_video=self._on_files_dropped,
+            notebook_switcher_video=lambda: self.notebook.select(4),
+            config_saver=self._save_config,
+        )
+        self.notebook.add(self.expand_tab, text="2.5 Expand")
+
+        # Wire Step 1 → Step 2 prompt connection (set after both tabs exist)
+        self.prep_tab.set_selfie_prompt_writer(self.selfie_tab.set_prompt)
+        self.prep_tab.set_notebook_switcher_selfie(lambda: self.notebook.select(2))
+        self.prep_tab.set_selfie_config_getter(
+            lambda: {
+                "composer_gender": self.selfie_tab.gender_var.get(),
+                "composer_camera_style": self.selfie_tab.style_var.get(),
+            }
+        )
+
+        # Tab 3: Video — skeleton first, panels attached after creation
+        self.video_tab = VideoTab(
+            self.notebook,
+            image_session=self.image_session,
+            log_callback=self._log,
+            on_files_dropped=self._on_files_dropped,
+        )
+        self.notebook.add(self.video_tab, text="3. Selfie Video Gen")
+
+        # ConfigPanel as proper child of VideoTab (fixes cross-parent packing)
+        self.config_panel = ConfigPanel(
+            self.video_tab,
+            config=self.config,
+            on_config_changed=self._on_config_changed,
+            build_prompt=False,
+            on_images_dropped=self._on_images_to_carousel,
+        )
+
+        self.video_tab.attach_config_panel(self.config_panel)
+
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.top_h_paned.add(left_pane, minsize=480)
+
+        # Right pane: context-sensitive (tools on Tab 0, prompts on Tab 3, hidden on Tab 1-2)
+        self._right_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_panel"])
+
+        # Content A: Tab 0 tools panel (Polish + Outpaint + Upscale + Send)
+        self._right_tools_frame = tk.Frame(self._right_pane, bg=COLORS["bg_panel"])
+        self.face_crop_tab.build_tools_panel(self._right_tools_frame)
+
+        # Content B: Prompt panel (Video tab)
+        self._right_prompt_frame = tk.Frame(self._right_pane, bg=COLORS["bg_panel"])
+        self.config_panel.build_prompt_panel(self._right_prompt_frame)
+
+        # Show tools by default (Tab 0 is selected on launch)
+        self._right_tools_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.top_h_paned.add(self._right_pane, minsize=260)
+
+        # Tab change handler for context-sensitive right pane
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # ── Bottom section: Horizontal PanedWindow (Carousel | Log+History) ──
         self.bottom_paned = tk.PanedWindow(
             self.main_paned,
             orient=tk.HORIZONTAL,
@@ -454,12 +937,27 @@ class KlingGUIWindow:
             sashrelief=tk.RAISED,
             sashpad=1,
         )
-        self.main_paned.add(self.bottom_paned, minsize=200)
+        self.main_paned.add(self.bottom_paned, minsize=250)
 
-        # Queue panel (left pane)
-        self.queue_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+        # Carousel panel (replaces queue in bottom-left)
+        carousel_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+        self.carousel = ImageCarousel(
+            carousel_frame,
+            image_session=self.image_session,
+            log_callback=self._log,
+        )
+        self.carousel.pack(fill=tk.BOTH, expand=True)
+        self.carousel.set_on_compare(self._toggle_compare)
+        self.bottom_paned.add(carousel_frame, minsize=300)
+
+        # Compare panel state (created on demand by _toggle_compare)
+        self._compare_frame: Optional[tk.Frame] = None
+        self._compare_panel: Optional[ComparePanel] = None
+
+        # Queue panel — lives inside VideoTab (below the drop zone)
+        self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
-        self.bottom_paned.add(self.queue_frame, minsize=150)
+        self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
 
         # Right side: Vertical PanedWindow (Log | History)
         self.right_paned = tk.PanedWindow(
@@ -483,8 +981,248 @@ class KlingGUIWindow:
         self._setup_history_panel_content(self.history_frame)
         self.right_paned.add(self.history_frame, minsize=100)
 
-        # Control buttons at bottom
-        self._setup_controls()
+        self._start_autosave_timer()
+
+    def _write_to_active_prompt(self, text: str):
+        """Write text to the active prompt slot (used by PrepTab vision analysis)."""
+        if hasattr(self, "config_panel") and self.config_panel:
+            self.config_panel.set_active_prompt_text(text)
+
+    def _on_selfie_send_to_expand(self, paths: List[str], active_path: Optional[str] = None):
+        """Handle Step 2 -> Step 2.5 handoff."""
+        if not hasattr(self, "expand_tab") or self.expand_tab is None:
+            self._log("Step 2.5 tab unavailable", "warning")
+            return
+        self.expand_tab.receive_from_step2(paths, active_path=active_path)
+        try:
+            self.notebook.select(3)
+        except Exception:
+            pass
+
+    # ── Context-sensitive right pane ────────────────────────────────
+
+    def _on_tab_changed(self, event=None):
+        """Swap right pane content based on the active tab."""
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return
+
+        if idx == 0:  # Tab 0: show tools panel
+            self._show_right_pane(self._right_tools_frame)
+        elif idx == 4:  # Tab 3 (Video): show prompt slots
+            self._show_right_pane(self._right_prompt_frame)
+        else:  # Tab 1, 2, 2.5: hide right pane entirely — tabs get full width
+            self._hide_right_pane()
+
+    def _show_right_pane(self, content_frame):
+        """Show the right pane with the specified content."""
+        self._right_tools_frame.pack_forget()
+        self._right_prompt_frame.pack_forget()
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        pane_names = [str(p) for p in self.top_h_paned.panes()]
+        if str(self._right_pane) not in pane_names:
+            self.top_h_paned.add(self._right_pane, minsize=260)
+            saved = self.config.get("sash_prompt_split", 640)
+            self.root.after(50, lambda: self._safe_sash_place(self.top_h_paned, 0, saved, 0))
+
+    def _hide_right_pane(self):
+        """Hide the right pane entirely — left tabs get full width."""
+        pane_names = [str(p) for p in self.top_h_paned.panes()]
+        if str(self._right_pane) in pane_names:
+            try:
+                self.config["sash_prompt_split"] = self.top_h_paned.sash_coord(0)[0]
+            except Exception:
+                pass
+            self.top_h_paned.forget(self._right_pane)
+
+    def _safe_sash_place(self, paned, index, x, y):
+        """Place a sash position, silently ignoring errors."""
+        try:
+            paned.sash_place(index, x, y)
+        except Exception:
+            pass
+
+    # ── Floating Drop Zone ──────────────────────────────────────────
+
+    def _toggle_drop_zone(self):
+        """Toggle the floating drop zone window."""
+        if hasattr(self, "_drop_zone_window") and self._drop_zone_window is not None:
+            try:
+                self._drop_zone_window.destroy()
+            except Exception:
+                pass
+            self._drop_zone_window = None
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Drop Images Here")
+        win.geometry("360x260")
+        win.configure(bg=COLORS["bg_panel"])
+        win.attributes("-topmost", True)
+        win.resizable(True, True)
+
+        bg = COLORS["bg_drop"]
+        hover_bg = COLORS.get("bg_hover", "#505055")
+
+        # Drop area with highlight border
+        drop_frame = tk.Frame(
+            win,
+            bg=bg,
+            highlightbackground=COLORS["border"],
+            highlightthickness=2,
+        )
+        drop_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Centered content container
+        content = tk.Frame(drop_frame, bg=bg)
+        content.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Icon
+        icon_label = tk.Label(
+            content,
+            text="\U0001F4E5",
+            font=("Segoe UI Emoji", 36),
+            bg=bg,
+            fg=COLORS["accent_blue"],
+        )
+        icon_label.pack(pady=(0, 6))
+
+        # Main text
+        main_label = tk.Label(
+            content,
+            text="DRAG & DROP IMAGES",
+            font=("Segoe UI", 13, "bold"),
+            bg=bg,
+            fg=COLORS["text_light"],
+        )
+        main_label.pack(pady=2)
+
+        # Sub-instruction
+        sub_label = tk.Label(
+            content,
+            text="Left click to select  |  Right click to drag",
+            font=("Segoe UI", 9),
+            bg=bg,
+            fg=COLORS["text_dim"],
+        )
+        sub_label.pack(pady=(0, 8))
+
+        # Status label for drop feedback
+        status_label = tk.Label(
+            drop_frame,
+            text="",
+            font=("Segoe UI", 9, "bold"),
+            bg=bg,
+            fg=COLORS["text_light"],
+        )
+        status_label.pack(side=tk.BOTTOM, pady=8)
+        self._drop_zone_status = status_label
+
+        # All interactive widgets
+        widgets = [drop_frame, content, icon_label, main_label, sub_label, status_label]
+
+        # Hover effects
+        def _set_bg(color):
+            for w in widgets:
+                w.config(bg=color)
+
+        def _on_enter(event):
+            _set_bg(hover_bg)
+            drop_frame.config(highlightbackground=COLORS["accent_blue"])
+
+        def _on_leave(event):
+            # Only reset if truly left the drop_frame
+            rx = event.x_root - drop_frame.winfo_rootx()
+            ry = event.y_root - drop_frame.winfo_rooty()
+            if 0 <= rx <= drop_frame.winfo_width() and 0 <= ry <= drop_frame.winfo_height():
+                return
+            _set_bg(bg)
+            drop_frame.config(highlightbackground=COLORS["border"])
+
+        # Make draggable via right-click
+        def _start_drag(event):
+            win._drag_x = event.x
+            win._drag_y = event.y
+
+        def _do_drag(event):
+            x = win.winfo_x() + event.x - win._drag_x
+            y = win.winfo_y() + event.y - win._drag_y
+            win.geometry(f"+{x}+{y}")
+
+        for w in widgets:
+            w.bind("<Button-1>", lambda e: self._browse_and_add_images())
+            w.bind("<ButtonPress-3>", _start_drag)
+            w.bind("<B3-Motion>", _do_drag)
+            w.bind("<Enter>", _on_enter)
+            w.bind("<Leave>", _on_leave)
+            w.config(cursor="hand2")
+
+        # Try to bind DnD if available
+        if HAS_DND:
+            try:
+                for w in [drop_frame, icon_label, main_label, sub_label, content]:
+                    w.drop_target_register("DND_Files")
+                    w.dnd_bind("<<DropEnter>>", lambda e: (
+                        _set_bg(COLORS.get("drop_valid", "#329632")),
+                        status_label.config(text="DROP TO ADD"),
+                    ))
+                    w.dnd_bind("<<DropLeave>>", lambda e: (
+                        _set_bg(bg),
+                        status_label.config(text=""),
+                    ))
+                    w.dnd_bind("<<Drop>>", self._on_drop_zone_drop)
+            except Exception:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", self._toggle_drop_zone)
+        self._drop_zone_window = win
+
+    def _on_drop_zone_drop(self, event):
+        """Handle files dropped onto the floating drop zone."""
+        data = event.data
+        if not data:
+            return
+        # Parse dropped file paths (may be space-separated or brace-quoted)
+        files = []
+        if "{" in data:
+            import re
+            files = re.findall(r"\{([^}]+)\}", data)
+        else:
+            files = data.split()
+
+        added = 0
+        for f in files:
+            f = f.strip()
+            if os.path.isfile(f):
+                ext = os.path.splitext(f)[1].lower()
+                if ext in VALID_EXTENSIONS:
+                    self.image_session.add_image(f, "input")
+                    self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+                    added += 1
+
+        # Show status on floating drop zone
+        if hasattr(self, "_drop_zone_status") and self._drop_zone_status:
+            status = self._drop_zone_status
+            if added:
+                status.config(text=f"Added {added} file(s)", fg=COLORS.get("success", "#50C878"))
+            else:
+                status.config(text="No valid images found", fg=COLORS.get("warning", "#FFA500"))
+            self.root.after(2000, lambda s=status: s.config(text="") if s.winfo_exists() else None)
+
+    def _browse_and_add_images(self):
+        """Open file dialog and add selected images to carousel."""
+        files = filedialog.askopenfilenames(
+            title="Select Images to Add",
+            filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tiff *.tif"),
+                ("All files", "*.*"),
+            ],
+        )
+        if files:
+            for f in files:
+                self.image_session.add_image(f, "input")
+                self._log(f"Added to carousel: {os.path.basename(f)}", "info")
 
     def _apply_ui_config(self):
         """Apply UI layout configuration to existing widgets."""
@@ -505,96 +1243,18 @@ class KlingGUIWindow:
         except Exception:
             pass
 
-        try:
-            current_geom = self.root.geometry()
-            x_pos = None
-            y_pos = None
-            if "+" in current_geom:
-                parts = current_geom.split("+")
-                if len(parts) >= 3:
-                    x_pos = parts[1]
-                    y_pos = parts[2]
-            if x_pos is not None and y_pos is not None:
-                self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
-            else:
-                self.root.geometry(f"{width}x{height}")
-        except Exception:
-            pass
-
         if hasattr(self, "config_panel") and hasattr(self.config_panel, "apply_ui_config"):
             self.config_panel.apply_ui_config(self.ui_config)
 
-        try:
-            drop_height = int(self.ui_config.get("drop_zone", {}).get("height", 180))
-            queue_width = int(self.ui_config.get("queue_panel", {}).get("width", 300))
-            history_height = int(
-                self.ui_config.get("history_panel", {}).get("height", 220)
-            )
-        except (TypeError, ValueError):
-            drop_height, queue_width, history_height = 180, 300, 220
-
-        sash_positions = self.ui_config.get("sash_positions", {})
-        log_sash_y = None
-        try:
-            if "dropzone" in sash_positions:
-                drop_value = sash_positions.get("dropzone")
-                if isinstance(drop_value, (list, tuple)) and len(drop_value) >= 2:
-                    drop_height = int(drop_value[1])
-                else:
-                    drop_height = int(drop_value)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            if "queue" in sash_positions:
-                queue_value = sash_positions.get("queue")
-                if isinstance(queue_value, (list, tuple)) and len(queue_value) >= 1:
-                    queue_width = int(queue_value[0])
-                else:
-                    queue_width = int(queue_value)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            if "log" in sash_positions:
-                log_value = sash_positions.get("log")
-                if isinstance(log_value, (list, tuple)) and len(log_value) >= 2:
-                    log_sash_y = int(log_value[1])
-        except (TypeError, ValueError):
-            pass
-
+        # Only configure history tree row count here.
+        # Sash positions are handled exclusively by _restore_sash_positions()
+        # which runs after this method to avoid conflicts.
         try:
             visible_rows = int(
                 self.ui_config.get("history_panel", {}).get("visible_rows", 8)
             )
         except (TypeError, ValueError):
             visible_rows = 8
-
-        self.root.update_idletasks()
-
-        if hasattr(self, "main_paned"):
-            try:
-                self.main_paned.sash_place(0, 0, drop_height)
-            except Exception:
-                pass
-
-        if hasattr(self, "bottom_paned"):
-            try:
-                self.bottom_paned.sash_place(0, queue_width, 0)
-            except Exception:
-                pass
-
-        if hasattr(self, "right_paned"):
-            try:
-                total_height = self.right_paned.winfo_height()
-                if total_height > 0:
-                    if log_sash_y is not None:
-                        self.right_paned.sash_place(0, 0, log_sash_y)
-                    else:
-                        log_height = max(50, total_height - history_height)
-                        self.right_paned.sash_place(0, 0, log_height)
-            except Exception:
-                pass
 
         if hasattr(self, "history_tree"):
             try:
@@ -1047,45 +1707,163 @@ class KlingGUIWindow:
         self._log("UI reloaded from ui_config.json", "success")
 
     def _setup_header(self):
-        """Set up the header bar."""
+        """Set up the header bar (title only — status indicators are in the control bar)."""
         header = tk.Frame(self.root, bg=COLORS["bg_panel"], height=40)
-        header.pack(fill=tk.X, padx=10, pady=10)
+        header.pack(fill=tk.X, padx=10, pady=(8, 4))
         header.pack_propagate(False)
 
         title = tk.Label(
             header,
-            text="🎬 FAL.AI VIDEO GENERATOR - GUI MODE",
+            text="Ultimate-Selfie-Gen",
             font=("Segoe UI", 12, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        title.pack(side=tk.LEFT, padx=10, pady=8)
+        title.pack(side=tk.LEFT, padx=10, pady=6)
 
-        # Balance link
-        balance_link = tk.Label(
+        # Session management buttons
+        sessions_btn = tk.Button(
             header,
-            text="💰 Check Balance",
-            font=("Segoe UI", 9, "underline"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["accent_blue"],
+            text="Sessions",
+            font=("Segoe UI", 9),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_panel"],
+            activeforeground=COLORS["text_light"],
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_open_sessions,
+        )
+        sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        load_session_btn = tk.Button(
+            header,
+            text="Load Session",
+            font=("Segoe UI", 9),
+            bg=COLORS["accent_blue"],
+            fg="white",
+            activebackground="#5080DD",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_open_sessions,
+        )
+        load_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        save_session_btn = tk.Button(
+            header,
+            text="Save Session",
+            font=("Segoe UI", 9),
+            bg=COLORS["btn_green"],
+            fg="white",
+            activebackground="#287828",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            command=self._on_save_session,
+        )
+        save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        # "Add Image" button — browse and add to carousel
+        add_image_btn = tk.Button(
+            header,
+            text="Add Image",
+            font=("Segoe UI", 9, "bold"),
+            bg=COLORS["btn_green"],
+            fg="white",
+            activebackground="#287828",
+            activeforeground="white",
+            relief="flat",
+            padx=8, pady=2,
+            cursor="hand2",
+            command=self._browse_and_add_images,
+        )
+        add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        # Floating drop zone toggle
+        self._drop_zone_window = None
+        drop_zone_btn = tk.Button(
+            header,
+            text="\u25CE",  # ◎ target icon
+            font=("Segoe UI", 11),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_panel"],
+            activeforeground=COLORS["text_light"],
+            relief="flat",
+            padx=4, pady=0,
+            cursor="hand2",
+            command=self._toggle_drop_zone,
+        )
+        drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 3), pady=4)
+
+    # -- API key badge helpers ------------------------------------------------
+
+    def _create_api_badge(self, parent, config_key: str, label: str, prompt_text: str):
+        """Create a single API key badge with colored border, stored in _api_badges."""
+        value = self.config.get(config_key, "")
+        is_set = bool(value and value.strip())
+        border_color = COLORS["success"] if is_set else COLORS["error"]
+
+        frame = tk.Frame(parent, bg=border_color, padx=2, pady=2)
+        frame.pack(side=tk.LEFT, padx=(0, 6))
+
+        indicator = tk.Label(
+            frame,
+            text=f"{label}: Set" if is_set else f"{label}: Not Set",
+            font=("Segoe UI", 8, "bold"),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            padx=5, pady=2,
             cursor="hand2",
         )
-        balance_link.pack(side=tk.RIGHT, padx=10, pady=8)
-        balance_link.bind(
-            "<Button-1>", lambda e: webbrowser.open("https://fal.ai/dashboard")
+        indicator.pack()
+        indicator.bind(
+            "<Button-1>",
+            lambda e, k=config_key, lb=label, pt=prompt_text: self._prompt_key(k, lb, pt),
         )
 
-        # DnD status
-        dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
-        dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
-        dnd_label = tk.Label(
-            header,
-            text=dnd_status,
-            font=("Segoe UI", 8),
-            bg=COLORS["bg_panel"],
-            fg=dnd_color,
+        self._api_badges[config_key] = {"frame": frame, "label_widget": indicator, "label": label}
+
+    def _prompt_key(self, config_key: str, label: str, prompt_text: str):
+        """Generic dialog to set/update any API key."""
+        current = self.config.get(config_key, "")
+        new_key = simpledialog.askstring(
+            f"{label} API Key",
+            prompt_text,
+            initialvalue=current,
+            parent=self.root,
         )
-        dnd_label.pack(side=tk.RIGHT, padx=10, pady=8)
+        if new_key is None:
+            return  # User cancelled
+        new_key = new_key.strip()
+
+        self.config[config_key] = new_key
+        self._save_config()
+        self._update_api_badge(config_key)
+
+        # fal.ai key changes need generator re-init
+        if config_key == "falai_api_key":
+            self._init_generator()
+
+        if new_key:
+            self._log(f"{label} key updated and saved.", "success")
+        else:
+            self._log(f"{label} key cleared.", "warning")
+
+    def _update_api_badge(self, config_key: str):
+        """Refresh border color and text for one API key badge."""
+        badge = self._api_badges.get(config_key)
+        if not badge:
+            return
+        value = self.config.get(config_key, "")
+        is_set = bool(value and value.strip())
+        border_color = COLORS["success"] if is_set else COLORS["error"]
+        badge["frame"].config(bg=border_color)
+        lbl = badge["label"]
+        badge["label_widget"].config(
+            text=f"{lbl}: Set" if is_set else f"{lbl}: Not Set",
+        )
 
     def _setup_queue_panel_content(self, queue_frame):
         """Set up the queue panel content inside the given frame."""
@@ -1141,15 +1919,48 @@ class KlingGUIWindow:
         btn_frame = tk.Frame(header, bg=COLORS["bg_panel"])
         btn_frame.pack(side=tk.RIGHT)
 
-        ttk.Button(btn_frame, text="Open File", command=self._open_selected_file).pack(
-            side=tk.LEFT, padx=2
-        )
-        ttk.Button(
-            btn_frame, text="Open Folder", command=self._open_selected_folder
+        tk.Button(
+            btn_frame,
+            text="Open File",
+            command=self._open_selected_file,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
         ).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Refresh", command=self._refresh_history_view).pack(
-            side=tk.LEFT, padx=2
-        )
+        tk.Button(
+            btn_frame,
+            text="Open Folder",
+            command=self._open_selected_folder,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            btn_frame,
+            text="Refresh",
+            command=self._refresh_history_view,
+            font=("Segoe UI", 8),
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            activeforeground=COLORS["text_light"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=2)
 
         columns = ("time", "source", "output", "status")
         self.history_tree = ttk.Treeview(
@@ -1196,46 +2007,65 @@ class KlingGUIWindow:
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
-        # Right side: Control buttons
-        self.close_btn = tk.Button(
-            control_frame,
-            text="❌ Close",
-            font=("Segoe UI", 10),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_close,
+        # Left side: Unified API key badges — click to set each key
+        self._api_badges = {}
+        keys_config = [
+            ("falai_api_key", "Fal.ai",
+             "Enter your fal.ai API key:\n(https://fal.ai/dashboard/keys)"),
+            ("bfl_api_key", "BFL",
+             "Enter your BFL API key:\n(https://api.bfl.ai/)"),
+            ("openrouter_api_key", "OpenRouter",
+             "Enter your OpenRouter API key:\n(https://openrouter.ai/keys)"),
+            ("freeimage_api_key", "Freeimage",
+             "Enter Freeimage API key\n(leave blank to clear key):"),
+        ]
+        for config_key, label, prompt_text in keys_config:
+            self._create_api_badge(control_frame, config_key, label, prompt_text)
+
+        dnd_status = "✓ Drag-Drop Enabled" if HAS_DND else "⚠ Drag-Drop Unavailable"
+        dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
+        tk.Label(
+            control_frame, text=dnd_status,
+            font=("Segoe UI", 8), bg=COLORS["bg_main"], fg=dnd_color,
+        ).pack(side=tk.LEFT)
+
+        # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
+        _btn_kwargs = dict(
+            font=("Segoe UI", 10), padx=14, pady=4,
+            relief=tk.FLAT, borderwidth=0,
+            activeforeground="white",
         )
-        self.close_btn.pack(side=tk.RIGHT, padx=5)
+        self.close_btn = tk.Button(
+            control_frame, text="Close",
+            bg=COLORS["btn_red"], fg="white",
+            activebackground=COLORS["btn_red"],
+            command=self._on_close, **_btn_kwargs,
+        )
+        self.close_btn.pack(side=tk.RIGHT, padx=4)
 
         self.clear_btn = tk.Button(
-            control_frame,
-            text="🗑️ Clear",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._clear_queue,
+            control_frame, text="Clear",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._clear_queue, **_btn_kwargs,
         )
-        self.clear_btn.pack(side=tk.RIGHT, padx=5)
+        self.clear_btn.pack(side=tk.RIGHT, padx=4)
 
         self.retry_btn = tk.Button(
-            control_frame,
-            text="🔄 Retry Failed",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._retry_failed,
+            control_frame, text="Retry Failed",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._retry_failed, **_btn_kwargs,
         )
-        self.retry_btn.pack(side=tk.RIGHT, padx=5)
+        self.retry_btn.pack(side=tk.RIGHT, padx=4)
 
         self.pause_btn = tk.Button(
-            control_frame,
-            text="⏸️ Pause",
-            font=("Segoe UI", 10),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._toggle_pause,
+            control_frame, text="Pause",
+            bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            activebackground=COLORS["bg_main"],
+            command=self._toggle_pause, **_btn_kwargs,
         )
-        self.pause_btn.pack(side=tk.RIGHT, padx=5)
+        self.pause_btn.pack(side=tk.RIGHT, padx=4)
 
     def _init_generator(self):
         """Initialize the video generator and queue manager."""
@@ -1257,6 +2087,7 @@ class KlingGUIWindow:
                 model_endpoint=self.config.get("current_model"),
                 model_display_name=self.config.get("model_display_name"),
                 prompt_slot=self.config.get("current_prompt_slot", 1),
+                freeimage_key=self.config.get("freeimage_api_key", ""),
             )
 
             self.queue_manager = QueueManager(
@@ -1403,6 +2234,54 @@ class KlingGUIWindow:
                 return
         self._log("No folder to open for selection", "warning")
 
+    def _toggle_compare(self):
+        """Open or close the Compare panel beside the carousel."""
+        if self._compare_panel is not None:
+            # Close compare mode
+            try:
+                self.bottom_paned.forget(self._compare_frame)
+            except tk.TclError:
+                pass
+            if self._compare_panel is not None:
+                self._compare_panel.destroy()
+            self._compare_panel = None
+            self._compare_frame = None
+        else:
+            # Open compare mode
+            self._compare_frame = tk.Frame(self.bottom_paned, bg=COLORS["bg_panel"])
+            self._compare_panel = ComparePanel(
+                self._compare_frame,
+                image_session=self.image_session,
+                log_callback=self._log,
+                on_close=self._toggle_compare,
+            )
+            self._compare_panel.pack(fill=tk.BOTH, expand=True)
+            # Insert between carousel_frame and right_paned
+            self.bottom_paned.add(
+                self._compare_frame, minsize=200, before=self.right_paned
+            )
+            # Set sash positions to give compare panel generous width
+            def _set_compare_sash():
+                try:
+                    total_w = self.bottom_paned.winfo_width()
+                    carousel_w = 350
+                    compare_w = 350
+                    right_w = total_w - carousel_w - compare_w
+                    if right_w < 200:
+                        right_w = 200
+                        compare_w = total_w - carousel_w - right_w
+                    self.bottom_paned.sash_place(0, carousel_w, 0)
+                    self.bottom_paned.sash_place(1, carousel_w + compare_w, 0)
+                except Exception:
+                    pass
+            self.root.after(50, _set_compare_sash)
+
+    def _on_images_to_carousel(self, files: List[str]):
+        """Handle images dropped/browsed in the prompt panel mini drop zone."""
+        for f in files:
+            self.image_session.add_image(f, "input")
+            self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+
     def _on_files_dropped(self, files: List[str]):
         """Handle files dropped onto the drop zone."""
         if not self.queue_manager:
@@ -1548,6 +2427,16 @@ class KlingGUIWindow:
     ):
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
+        # Collect and merge any tab-specific config
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
+            tab_widget = getattr(self, tab, None)
+            if tab_widget and hasattr(tab_widget, "get_config_updates"):
+                try:
+                    self.config.update(tab_widget.get_config_updates())
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "Failed to get config from %s: %s", tab, exc
+                    )
         self._save_config()
 
         # Update generator with new model if it exists and NOT currently processing
@@ -1571,6 +2460,9 @@ class KlingGUIWindow:
                 )
                 self.generator.update_prompt_slot(
                     int(self.config.get("current_prompt_slot", 1))
+                )
+                self.generator.update_freeimage_key(
+                    str(self.config.get("freeimage_api_key", ""))
                 )
 
         # Log the specific change if description provided
@@ -1614,6 +2506,9 @@ class KlingGUIWindow:
             self.generator.update_prompt_slot(
                 int(self.config.get("current_prompt_slot", 1))
             )
+            self.generator.update_freeimage_key(
+                str(self.config.get("freeimage_api_key", ""))
+            )
 
     def _toggle_pause(self):
         """Toggle pause/resume."""
@@ -1622,10 +2517,10 @@ class KlingGUIWindow:
 
         if self.queue_manager.is_paused:
             self.queue_manager.resume_processing()
-            self.pause_btn.config(text="⏸️ Pause")
+            self.pause_btn.config(text="Pause")
         else:
             self.queue_manager.pause_processing()
-            self.pause_btn.config(text="▶️ Resume")
+            self.pause_btn.config(text="Resume")
 
     def _retry_failed(self):
         """Retry all failed items."""
@@ -1681,14 +2576,28 @@ class KlingGUIWindow:
     def _restore_sash_positions(self):
         """Restore saved sash positions for all PanedWindows."""
         try:
-            # Get saved positions from config (with new defaults)
-            dropzone_pos = self.config.get("sash_dropzone", 180)
-            queue_pos = self.config.get("sash_queue", 300)
-            log_pos = self.config.get("sash_log", 380)
+            # Ensure all widgets are rendered before placing sashes
+            self.root.update_idletasks()
 
-            # Restore main paned (drop zone height)
+            # Get saved positions from config (with new defaults)
+            top_section_pos = self.config.get("sash_dropzone", 450)
+            # Migrate old too-small default to the correct open height
+            if top_section_pos < 500:
+                top_section_pos = 560
+            prompt_split = self.config.get("sash_prompt_split", 640)
+            queue_pos = self.config.get("sash_queue", 350)
+            log_pos = self.config.get("sash_log", 380)
+            # Migrate old small log height to a reasonable default
+            if log_pos < 200:
+                log_pos = 380
+
+            # Restore main paned (top section height)
             if hasattr(self, "main_paned"):
-                self.main_paned.sash_place(0, 0, dropzone_pos)
+                self.main_paned.sash_place(0, 0, top_section_pos)
+
+            # Restore horizontal split (options+drop | prompt)
+            if hasattr(self, "top_h_paned"):
+                self.top_h_paned.sash_place(0, prompt_split, 0)
 
             # Restore bottom paned (queue width)
             if hasattr(self, "bottom_paned"):
@@ -1719,13 +2628,22 @@ class KlingGUIWindow:
                 except Exception:
                     pass
 
+            if hasattr(self, "top_h_paned"):
+                try:
+                    sash_pos = self.top_h_paned.sash_coord(0)
+                    if sash_pos:
+                        self.config["sash_prompt_split"] = sash_pos[0]  # X position
+                except Exception:
+                    pass
+
             if hasattr(self, "bottom_paned"):
                 try:
-                    sash_pos = self.bottom_paned.sash_coord(0)
-                    if sash_pos:
-                        self.config["sash_queue"] = sash_pos[
-                            0
-                        ]  # X position for horizontal paned
+                    # Only save queue sash when compare panel is closed
+                    # (with compare open, sash 0 is carousel/compare, not carousel/right)
+                    if self._compare_panel is None:
+                        sash_pos = self.bottom_paned.sash_coord(0)
+                        if sash_pos:
+                            self.config["sash_queue"] = sash_pos[0]
                 except Exception:
                     pass
 
@@ -1742,16 +2660,162 @@ class KlingGUIWindow:
         except Exception as e:
             pass  # Don't fail on layout save errors
 
+    # ── Session save/load ────────────────────────────────────────────────────
+
+    def _on_save_session(self):
+        """Save current session."""
+        if not self.image_session.count:
+            self._log("No images in session to save", "warning")
+            return
+        from .session_manager import save_session
+        try:
+            path = save_session(get_app_dir(), self.image_session, self.config)
+            self._log(f"Session saved: {os.path.basename(path)}", "success")
+        except Exception as e:
+            self._log(f"Save failed: {e}", "error")
+
+    def _on_open_sessions(self):
+        """Open the session manager dialog."""
+        dialog = SessionManagerDialog(
+            self.root, get_app_dir(), self.image_session,
+            self.config, self._save_config, self._log,
+        )
+        self.root.wait_window(dialog)
+        if dialog._loaded_session_data:
+            self._on_session_loaded(dialog._loaded_session_data)
+
+    def _on_session_loaded(self, data: dict):
+        """Restore session from loaded data."""
+        session_data = data.get("session", {})
+        images = session_data.get("images", [])
+        if not images:
+            self._log("Session has no images", "warning")
+            return
+        # Suppress auto-calc during restore to avoid scoring every image on load
+        self.carousel.suppress_auto_calc(True)
+        # Clear and re-populate the LIVE session (preserves tab references)
+        self.image_session.clear()
+        loaded_count = 0
+        for img in images:
+            path = img.get("path", "")
+            if not os.path.isfile(path):
+                self._log(f"Skipped missing: {os.path.basename(path)}", "warning")
+                continue
+            self.image_session.add_image(
+                path,
+                img.get("source_type", "input"),
+                label=img.get("label", ""),
+                similarity=img.get("similarity"),
+                similarity_score=img.get("similarity_score"),
+                similarity_pass=img.get("similarity_pass"),
+                similarity_override=bool(img.get("similarity_override", False)),
+                similarity_override_note=img.get("similarity_override_note", ""),
+                similarity_override_ts=img.get("similarity_override_ts"),
+                ops=img.get("ops", {}),
+            )
+            loaded_count += 1
+        # Restore indices
+        target_idx = session_data.get("current_index", -1)
+        if 0 <= target_idx < self.image_session.count:
+            self.image_session.navigate_to(target_idx)
+        ref_idx = session_data.get("reference_index", -1)
+        if 0 <= ref_idx < self.image_session.count:
+            self.image_session._reference_index = ref_idx
+        # Restore similarity ref
+        sim_ref_idx = session_data.get("similarity_ref_index", -1)
+        if 0 <= sim_ref_idx < self.image_session.count:
+            self.image_session._similarity_ref_index = sim_ref_idx
+        self.image_session._notify()
+        self.carousel.suppress_auto_calc(False)
+        if hasattr(self, "selfie_tab") and self.selfie_tab:
+            try:
+                self.selfie_tab._refresh_result_actions()
+            except Exception:
+                pass
+        if hasattr(self, "expand_tab") and self.expand_tab:
+            try:
+                self.expand_tab.refresh_candidates(select_all_default=True)
+            except Exception:
+                pass
+        self._log(f"Session restored: {loaded_count} images loaded", "success")
+
+    # ── Auto-save timer ───────────────────────────────────────────────────────
+
+    def _start_autosave_timer(self):
+        """Start the auto-save timer if configured."""
+        if not self.config.get("session_autosave_enabled", True):
+            return
+        interval = self.config.get("session_autosave_interval", "after_api_action")
+        if interval == "after_api_action":
+            return  # No timer — triggered by API completion callbacks
+        ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
+        ms = ms_map.get(interval, 300000)
+        self.root.after(ms, self._autosave_tick)
+
+    def _autosave_tick(self):
+        """Perform auto-save if session has images, then reschedule."""
+        if self.image_session.count > 0:
+            self._maybe_autosave()
+        self._start_autosave_timer()  # Reschedule
+
+    def _maybe_autosave(self):
+        """Auto-save to a deterministic per-folder file, always overwriting."""
+        if not self.config.get("session_autosave_enabled", True):
+            return
+        if self.image_session.count == 0:
+            return
+        from .session_manager import save_session, get_autosave_path
+
+        target_path = get_autosave_path(get_app_dir(), self.image_session)
+        autosave_name = os.path.splitext(os.path.basename(target_path))[0]
+        overwrite = target_path if os.path.isfile(target_path) else None
+
+        try:
+            save_session(
+                get_app_dir(), self.image_session, self.config,
+                name=autosave_name,
+                overwrite_path=overwrite,
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.warning("Auto-save failed: %s", e)
+
     def _on_close(self):
         """Handle window close."""
-        if self.queue_manager and self.queue_manager.is_running:
+        # Check both queue and tab worker threads
+        busy_tabs = []
+        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
+            tab_widget = getattr(self, tab_name, None)
+            if tab_widget and getattr(tab_widget, "_busy", False):
+                busy_tabs.append(tab_name.replace("_tab", "").title())
+
+        is_processing = (
+            (self.queue_manager and self.queue_manager.is_running)
+            or bool(busy_tabs)
+        )
+
+        if is_processing:
+            detail = ""
+            if busy_tabs:
+                detail = f" ({', '.join(busy_tabs)} running)"
             if not messagebox.askyesno(
                 "Confirm Close",
-                "Processing is in progress. Are you sure you want to close?",
+                f"Processing is in progress{detail}. "
+                "Are you sure you want to close?",
             ):
                 return
 
-            self.queue_manager.stop_processing()
+            if self.queue_manager and self.queue_manager.is_running:
+                self.queue_manager.stop_processing()
+
+        # Collect tab configs before saving
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
+            tab_widget = getattr(self, tab, None)
+            if tab_widget and hasattr(tab_widget, "get_config_updates"):
+                try:
+                    self.config.update(tab_widget.get_config_updates())
+                except Exception:
+                    pass
 
         # Save layout (geometry + sash positions) before closing
         self._save_layout()

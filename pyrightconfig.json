@@ -1,0 +1,12 @@
+{
+  "include": ["."],
+  "extraPaths": ["."],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportPossiblyUnbound": false,
+  "reportArgumentType": false,
+  "reportCallIssue": false,
+  "reportGeneralTypeIssues": false,
+  "reportAttributeAccessIssue": false
+}
