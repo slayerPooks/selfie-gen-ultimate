@@ -581,6 +581,7 @@ class KlingGUIWindow:
             "model_display_name": "Kling 2.5 Turbo Pro",
             "video_duration": 10,
             "loop_videos": True,  # Loop videos ON by default
+            "oldcam_videos": True,  # Oldcam Finish ON by default
             "allow_reprocess": True,
             "reprocess_mode": "increment",
             "custom_models": [],

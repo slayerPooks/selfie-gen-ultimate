@@ -6,39 +6,47 @@ set "GUI_SCRIPT=%BATCH_DIR%gui_launcher.py"
 set "VENV_DIR=%BATCH_DIR%venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "REQUIREMENTS=%BATCH_DIR%requirements.txt"
+set "OLDCAM_REQUIREMENTS=%BATCH_DIR%oldcam-v7\requirements.txt"
 
-if exist "%VENV_PYTHON%" goto :launch
-
-echo.
-echo  Creating virtual environment...
-echo.
-python -m venv "%VENV_DIR%"
-if !errorlevel! neq 0 (
+if not exist "%VENV_PYTHON%" (
     echo.
-    echo  ERROR: Failed to create venv. Is Python installed and on PATH?
+    echo  Creating virtual environment...
     echo.
-    pause
-    exit /b 1
+    python -m venv "%VENV_DIR%"
+    if !errorlevel! neq 0 (
+        echo.
+        echo  ERROR: Failed to create venv. Is Python installed and on PATH?
+        echo.
+        pause
+        exit /b 1
+    )
+    echo  venv created.
+    echo.
 )
-echo  venv created.
-echo.
 
-echo  Installing dependencies from requirements.txt...
+echo.
+echo  Syncing dependencies from requirements.txt...
 echo.
 "%VENV_PYTHON%" -m pip install --upgrade pip >nul 2>&1
 "%VENV_PYTHON%" -m pip install --only-binary :all: -r "%REQUIREMENTS%"
 if !errorlevel! neq 0 (
     echo.
-    echo  Retrying without binary constraint...
+    echo  Retrying base dependencies without binary constraint...
     "%VENV_PYTHON%" -m pip install -r "%REQUIREMENTS%"
 )
 
-echo.
-echo  Installing optional face analysis dependencies...
-"%VENV_PYTHON%" -m pip install retina-face >nul 2>&1
+if exist "%OLDCAM_REQUIREMENTS%" (
+    echo.
+    echo  Syncing Oldcam dependencies...
+    "%VENV_PYTHON%" -m pip install --only-binary :all: -r "%OLDCAM_REQUIREMENTS%"
+    if !errorlevel! neq 0 (
+        echo  Retrying Oldcam dependencies without binary constraint...
+        "%VENV_PYTHON%" -m pip install -r "%OLDCAM_REQUIREMENTS%"
+    )
+)
 
 echo.
-echo  Setup complete!
+echo  Dependency sync complete.
 echo.
 
 :launch

@@ -6,6 +6,8 @@ import threading
 import os
 import logging
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Tuple
 from pathlib import Path
@@ -348,6 +350,8 @@ class QueueManager:
         self.is_running = False
         self.worker_thread: Optional[threading.Thread] = None
         self._stop_flag = False
+        self._oldcam_deps_checked = False
+        self._oldcam_deps_ready = False
 
     def log_verbose(self, message: str, level: str = "info"):
         """Log a message only if verbose mode is enabled."""
@@ -700,9 +704,16 @@ class QueueManager:
                     self.log(f"Completed: {item.filename}", "success")
                     self.log(f"Saved to: {result}", "info")
 
+                    final_video = result
                     # Check if loop video is enabled
                     if config.get("loop_videos", False):
-                        self._loop_video(result, item)
+                        looped_video = self._loop_video(result, item)
+                        if looped_video:
+                            final_video = looped_video
+
+                    # Check if oldcam video is enabled
+                    if config.get("oldcam_videos", True):
+                        self._oldcam_video(final_video, item)
                 else:
                     item.status = "failed"
                     item.error_message = "Generation failed"
@@ -854,13 +865,108 @@ class QueueManager:
                 self.log(
                     f"Looped video saved: {os.path.basename(looped_path)}", "success"
                 )
+                return looped_path
             else:
                 self.log(f"Failed to create looped video", "warning")
+                return None
 
         except ImportError:
             self.log("Video looper module not available", "warning")
+            return None
         except Exception as e:
             self.log(f"Error creating looped video: {e}", "warning")
+            return None
+
+    def _ensure_oldcam_dependencies(self, root_dir: Path) -> bool:
+        """Ensure Oldcam requirements are available in the current interpreter."""
+        if self._oldcam_deps_checked:
+            return self._oldcam_deps_ready
+
+        self._oldcam_deps_checked = True
+
+        try:
+            import cv2  # noqa: F401
+            import numpy  # noqa: F401
+            self._oldcam_deps_ready = True
+            return True
+        except ImportError:
+            self.log("Oldcam dependencies missing. Installing...", "warning")
+
+        requirements_path = root_dir / "oldcam-v7" / "requirements.txt"
+        if not requirements_path.exists():
+            self.log(f"Oldcam requirements missing: {requirements_path}", "warning")
+            return False
+
+        install_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)]
+        try:
+            completed = subprocess.run(
+                install_cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+        except Exception as e:
+            self.log(f"Error installing Oldcam dependencies: {e}", "warning")
+            return False
+
+        if completed.returncode != 0:
+            self.log(f"Oldcam dependency install failed (code {completed.returncode})", "warning")
+            err = (completed.stderr or "").strip()
+            if err:
+                self.log(err.splitlines()[-1], "warning")
+            return False
+
+        try:
+            import cv2  # noqa: F401
+            import numpy  # noqa: F401
+            self._oldcam_deps_ready = True
+            self.log("Oldcam dependencies installed", "success")
+            return True
+        except ImportError as e:
+            self.log(f"Oldcam dependencies still unavailable after install: {e}", "warning")
+            return False
+
+    def _oldcam_video(self, video_path: str, item: QueueItem):
+        """
+        Process the video with Oldcam V7.
+
+        Args:
+            video_path: Path to the generated or looped video
+            item: Queue item being processed
+        """
+        del item  # Reserved for future per-item status hooks
+        try:
+            root_dir = Path(__file__).parent.parent.resolve()
+            launcher_path = root_dir / "oldcam-v7" / "launcher.py"
+            if not launcher_path.exists():
+                self.log("Oldcam launcher not found", "warning")
+                return
+
+            if not self._ensure_oldcam_dependencies(root_dir):
+                self.log("Skipping Oldcam Finish due to missing dependencies", "warning")
+                return
+
+            self.log("Applying Oldcam Finish...", "info")
+            run_cmd = [sys.executable, "-u", str(launcher_path), video_path]
+            completed = subprocess.run(
+                run_cmd,
+                cwd=str(root_dir / "oldcam-v7"),
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            if completed.returncode == 0:
+                self.log("Oldcam Finish applied successfully", "success")
+                return
+
+            self.log(f"Oldcam Finish failed (code {completed.returncode})", "warning")
+            err = (completed.stderr or completed.stdout or "").strip()
+            if err:
+                self.log(err.splitlines()[-1], "warning")
+        except Exception as e:
+            self.log(f"Error applying Oldcam Finish: {e}", "warning")
 
     def _get_current_prompt(self, config: dict) -> str:
         """Get the current prompt from config."""

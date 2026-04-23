@@ -447,7 +447,7 @@ class ConfigPanel(tk.Frame):
 
         lbl_w = 10  # consistent label width in chars
 
-        # Options: Loop Video
+        # Options: Loop Video + Oldcam Finish
         rA = tk.Frame(left_col, bg=COLORS["bg_input"])
         rA.pack(fill=tk.X, pady=(0, 4))
         tk.Label(rA, text="Options:", font=(FONT_FAMILY, 10),
@@ -466,6 +466,14 @@ class ConfigPanel(tk.Frame):
             bg=COLORS["bg_input"], fg=COLORS["text_dim"],
         )
         self.loop_info_label.pack(side=tk.LEFT, padx=4)
+        self.oldcam_video_var = tk.BooleanVar(value=True)
+        self.oldcam_checkbox = tk.Checkbutton(
+            rA, text="Oldcam Finish", variable=self.oldcam_video_var,
+            font=(FONT_FAMILY, 10), bg=COLORS["bg_input"], fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_main"], activebackground=COLORS["bg_input"],
+            activeforeground=COLORS["text_light"], command=self._on_oldcam_changed,
+        )
+        self.oldcam_checkbox.pack(side=tk.LEFT, padx=(8, 0))
 
         # Allow reprocessing
         rB = tk.Frame(left_col, bg=COLORS["bg_input"])
@@ -971,6 +979,7 @@ class ConfigPanel(tk.Frame):
         # Loop video option
         self.loop_video_var.set(self.config.get("loop_videos", False))
         self._check_ffmpeg_status()
+        self.oldcam_video_var.set(self.config.get("oldcam_videos", True))
 
         # Reprocess options
         self.reprocess_var.set(self.config.get("allow_reprocess", False))
@@ -1250,6 +1259,12 @@ class ConfigPanel(tk.Frame):
         self.config["loop_videos"] = self.loop_video_var.get()
         status = "enabled" if self.loop_video_var.get() else "disabled"
         self._notify_change(f"Loop video {status}")
+
+    def _on_oldcam_changed(self):
+        """Handle oldcam video checkbox change."""
+        self.config["oldcam_videos"] = self.oldcam_video_var.get()
+        status = "enabled" if self.oldcam_video_var.get() else "disabled"
+        self._notify_change(f"Oldcam Finish {status}")
 
     def _on_reprocess_changed(self):
         """Handle reprocess checkbox change."""
@@ -1557,6 +1572,7 @@ class ConfigPanel(tk.Frame):
             "slot_var",
             "prompt_title_var",
             "loop_video_var",
+            "oldcam_video_var",
             "reprocess_var",
             "reprocess_mode_var",
             "verbose_gui_var",
