@@ -24,6 +24,7 @@ except Exception:
 class SelfieTab(tk.Frame):
     """Tab 2: Generate selfie from identity reference."""
 
+    DEFAULT_MODEL_ENDPOINT = "openai/gpt-image-2/edit"
     DEFAULT_PROMPT_TEMPLATE = (
         "Transform this passport photo into a natural selfie: A {json.gender} with "
         "{json.hair}, {json.skin}, {json.eyes}, and a {json.face_shape}, wearing "
@@ -53,9 +54,7 @@ class SelfieTab(tk.Frame):
         "cafe with soft window light}. "
         "Warm practical lighting. Amateur photography aesthetic, unfiltered iPhone 7 quality."
     )
-    DISABLED_BY_DEFAULT_ENDPOINTS = {
-        "fal-ai/bytedance/seedream/v5/edit",
-    }
+    DISABLED_BY_DEFAULT_ENDPOINTS = set()
 
     # Known fields for auto-migrating old {field} syntax → {json.field}
     _KNOWN_JSON_FIELDS = {
@@ -109,6 +108,10 @@ class SelfieTab(tk.Frame):
         self._cancel_all = threading.Event()       # stop after current model
         self._abort_flow = threading.Event()       # immediate full termination
         self._model_options = self._load_model_options()
+        self._supported_model_endpoints = {
+            model.get("endpoint", "") for model in self._model_options if model.get("endpoint")
+        }
+        self._migrate_selected_models_config()
         self._model_vars: Dict[str, tk.BooleanVar] = {}
         self._handoff_identity_data: Optional[Dict[str, str]] = None
         self._handoff_resolved = False
@@ -119,6 +122,21 @@ class SelfieTab(tk.Frame):
         )
 
         self._build_ui()
+
+    def _migrate_selected_models_config(self) -> None:
+        """Limit saved model map to supported endpoints and force new defaults."""
+        saved_models = self.config.get("selfie_selected_models", {})
+        if not isinstance(saved_models, dict):
+            saved_models = {}
+
+        migrated = {}
+        for endpoint in self._supported_model_endpoints:
+            if endpoint == self.DEFAULT_MODEL_ENDPOINT:
+                migrated[endpoint] = True
+            else:
+                migrated[endpoint] = bool(saved_models.get(endpoint, False))
+
+        self.config["selfie_selected_models"] = migrated
 
     # ── Config persistence ────────────────────────────────────────
 
@@ -519,7 +537,7 @@ class SelfieTab(tk.Frame):
             endpoint = model.get("endpoint", "")
             label = model.get("label", endpoint)
             default_checked = (
-                endpoint == "fal-ai/flux-pulid"
+                endpoint == self.DEFAULT_MODEL_ENDPOINT
                 and endpoint not in self.DISABLED_BY_DEFAULT_ENDPOINTS
             )
             checked = bool(saved_models.get(endpoint, default_checked))
@@ -1351,10 +1369,15 @@ class SelfieTab(tk.Frame):
         except Exception:
             return [
                 {
-                    "endpoint": "fal-ai/flux-pulid",
-                    "label": "PuLID Flux",
-                    "api_url": "https://fal.ai/models/fal-ai/flux-pulid/api",
-                }
+                    "endpoint": "openai/gpt-image-2/edit",
+                    "label": "GPT Image 2 Edit",
+                    "api_url": "https://fal.ai/models/openai/gpt-image-2/edit/api",
+                },
+                {
+                    "endpoint": "fal-ai/nano-banana-2/edit",
+                    "label": "Nano Banana 2 Edit",
+                    "api_url": "https://fal.ai/models/fal-ai/nano-banana-2/edit/api",
+                },
             ]
 
     def _get_selected_models(self) -> List[dict]:
