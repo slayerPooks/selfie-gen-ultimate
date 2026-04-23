@@ -42,6 +42,14 @@ if exist "%OLDCAM_REQUIREMENTS%" (
     if !errorlevel! neq 0 (
         echo  Retrying Oldcam dependencies without binary constraint...
         "%VENV_PYTHON%" -m pip install -r "%OLDCAM_REQUIREMENTS%"
+        if !errorlevel! neq 0 (
+            echo.
+            echo  WARNING: Oldcam dependencies failed to install after retry.
+            echo  WARNING: Oldcam Finish may not work correctly.
+            echo.
+        ) else (
+            echo  Oldcam dependencies installed on retry.
+        )
     )
 )
 
