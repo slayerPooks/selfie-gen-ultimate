@@ -296,6 +296,9 @@ class ConfigPanel(tk.Frame):
         # Configure dark theme for ttk Combobox widgets
         self._setup_combobox_style()
 
+        # Configure dark theme for ttk Combobox widgets
+        self._setup_combobox_style()
+
         self._setup_ui()
         self._load_config()
 

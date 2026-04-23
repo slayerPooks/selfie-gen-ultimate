@@ -26,6 +26,10 @@ build/
 dist/
 *.zip
 
+# PyInstaller build outputs (distribution folder)
+distribution/build/
+distribution/dist/
+
 # OS
 .DS_Store
 Thumbs.db
