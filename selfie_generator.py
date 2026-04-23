@@ -149,7 +149,7 @@ class SelfieGenerator:
         source_image_path: str,
         generated_image_path: str,
     ) -> Optional[int]:
-        """Compute face similarity using InsightFace (ArcFace).
+        """Compute face similarity using the shared app similarity adapter.
 
         Delegates to the standalone ``face_similarity`` module.
         """

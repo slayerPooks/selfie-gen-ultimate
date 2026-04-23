@@ -556,27 +556,30 @@ class ImageCarousel(tk.Frame):
                 return
             try:
                 self._sim_busy = True
-                from face_similarity import compute_face_similarity
-                sim_val = compute_face_similarity(
+                from face_similarity import compute_face_similarity_details
+
+                details = compute_face_similarity_details(
                     ref_path, target_path, report_cb=self._sim_log,
                 )
-                result = f"{sim_val}%" if sim_val is not None else None
             except Exception as exc:
                 self._sim_log(f"FAIL {type(exc).__name__}: {exc!r}", "warning")
-                result = None
+                details = None
             finally:
                 self._sim_busy = False
                 self._sim_lock.release()
-            self.after(0, lambda: self._apply_sim(entry, result))
+            self.after(0, lambda: self._apply_sim(entry, details))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _apply_sim(self, entry, similarity):
+    def _apply_sim(self, entry, details):
         """Apply a computed similarity score to an entry and refresh display."""
-        entry.similarity = similarity
+        score = None
+        if details and not details.get("error"):
+            score = details.get("score")
+        entry.update_similarity(score)
         self.image_session._notify()
-        if similarity:
-            self._sim_log(f"result: {similarity}", "info")
+        if score is not None:
+            self._sim_log(f"result: {score}%", "info")
 
     def _calc_all_similarity(self):
         """Compute similarity for all non-ref images (context menu)."""
@@ -596,20 +599,19 @@ class ImageCarousel(tk.Frame):
                 return
             try:
                 self._sim_busy = True
-                from face_similarity import compute_face_similarity
+                from face_similarity import compute_face_similarity_details
                 for target in targets:
                     try:
-                        sim_val = compute_face_similarity(
+                        details = compute_face_similarity_details(
                             ref_path, target.path, report_cb=self._sim_log,
                         )
-                        result = f"{sim_val}%" if sim_val is not None else None
                     except Exception as exc:
                         self._sim_log(
                             f"FAIL {os.path.basename(target.path)}: {exc!r}",
                             "warning",
                         )
-                        result = None
-                    self.after(0, lambda e=target, r=result: self._apply_sim(e, r))
+                        details = None
+                    self.after(0, lambda e=target, d=details: self._apply_sim(e, d))
             finally:
                 self._sim_busy = False
                 self._sim_lock.release()

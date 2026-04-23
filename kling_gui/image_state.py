@@ -3,12 +3,30 @@
 import os
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Callable, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 _VALID_SOURCE_TYPES = {"input", "selfie", "outpaint", "polish", "upscale"}
+SIMILARITY_PASS_THRESHOLD = 80
+
+
+def parse_similarity_score(similarity: Optional[str]) -> Optional[int]:
+    """Parse a similarity label (e.g. ``"72%"``) into an integer score."""
+    if similarity is None:
+        return None
+    raw = str(similarity).strip().lower()
+    if not raw or raw in {"n/a", "na", "none"}:
+        return None
+    if raw.endswith("%"):
+        raw = raw[:-1].strip()
+    try:
+        value = int(round(float(raw)))
+    except Exception:
+        return None
+    return max(0, min(100, value))
 
 
 @dataclass
@@ -28,6 +46,11 @@ class ImageEntry:
     label: str = ""
     rotation: int = 0
     similarity: Optional[str] = None  # "72%" or None
+    similarity_score: Optional[int] = None
+    similarity_pass: Optional[bool] = None
+    similarity_override: bool = False
+    similarity_override_note: str = ""
+    similarity_override_ts: Optional[str] = None
     ops: dict = field(default_factory=dict)  # {"pol": 1, "ups": 2, "exp": 1}
 
     def __post_init__(self):
@@ -39,6 +62,24 @@ class ImageEntry:
                 "Unknown source_type %r, defaulting to 'input'", self.source_type
             )
             self.source_type = "input"
+        score = self.similarity_score
+        if score is None:
+            score = parse_similarity_score(self.similarity)
+        if score is not None:
+            score = max(0, min(100, int(score)))
+            self.similarity_score = score
+            self.similarity = f"{score}%"
+            self.similarity_pass = score >= SIMILARITY_PASS_THRESHOLD
+            if self.similarity_pass:
+                self.similarity_override = False
+                self.similarity_override_note = ""
+                self.similarity_override_ts = None
+        else:
+            self.similarity_score = None
+            if self.similarity and str(self.similarity).strip().lower() in {"na", "n/a"}:
+                self.similarity = "n/a"
+            if self.similarity_pass is None:
+                self.similarity_pass = None
         if not self.label:
             self.label = f"{self.source_type}: {os.path.basename(self.path)}"
 
@@ -49,6 +90,46 @@ class ImageEntry:
     @property
     def exists(self) -> bool:
         return os.path.isfile(self.path)
+
+    def update_similarity(
+        self,
+        score: Optional[int],
+        threshold: int = SIMILARITY_PASS_THRESHOLD,
+    ) -> None:
+        """Update similarity-derived metadata in one place."""
+        if score is None:
+            self.similarity = None
+            self.similarity_score = None
+            self.similarity_pass = None
+            self.similarity_override = False
+            self.similarity_override_note = ""
+            self.similarity_override_ts = None
+            return
+        bounded = max(0, min(100, int(score)))
+        self.similarity_score = bounded
+        self.similarity = f"{bounded}%"
+        self.similarity_pass = bounded >= threshold
+        if self.similarity_pass:
+            self.similarity_override = False
+            self.similarity_override_note = ""
+            self.similarity_override_ts = None
+
+    def set_similarity_override(self, enabled: bool, note: str = "") -> None:
+        """Persist a user override decision for sub-threshold similarity."""
+        if enabled and self.similarity_pass is not True:
+            self.similarity_override = True
+            self.similarity_override_note = note.strip()
+            self.similarity_override_ts = datetime.now().isoformat(timespec="seconds")
+            return
+        self.similarity_override = False
+        self.similarity_override_note = ""
+        self.similarity_override_ts = None
+
+    def is_expand_allowed(self, threshold: int = SIMILARITY_PASS_THRESHOLD) -> bool:
+        """Return whether this image is eligible for gated expansion."""
+        if self.similarity_score is not None and self.similarity_score >= threshold:
+            return True
+        return bool(self.similarity_override)
 
 
 class ImageSession:
@@ -99,6 +180,11 @@ class ImageSession:
         label: str = "",
         make_active: bool = True,
         similarity: Optional[str] = None,
+        similarity_score: Optional[int] = None,
+        similarity_pass: Optional[bool] = None,
+        similarity_override: bool = False,
+        similarity_override_note: str = "",
+        similarity_override_ts: Optional[str] = None,
         ops: Optional[dict] = None,
     ) -> ImageEntry:
         """Add an image to the session.
@@ -114,8 +200,18 @@ class ImageSession:
         Returns:
             The created ImageEntry.
         """
-        entry = ImageEntry(path=path, source_type=source_type, label=label,
-                           similarity=similarity, ops=ops or {})
+        entry = ImageEntry(
+            path=path,
+            source_type=source_type,
+            label=label,
+            similarity=similarity,
+            similarity_score=similarity_score,
+            similarity_pass=similarity_pass,
+            similarity_override=similarity_override,
+            similarity_override_note=similarity_override_note,
+            similarity_override_ts=similarity_override_ts,
+            ops=ops or {},
+        )
         self._images.append(entry)
         new_idx = len(self._images) - 1
         if entry.source_type == "input":
@@ -303,6 +399,11 @@ class ImageSession:
                     "source_type": e.source_type,
                     "label": e.label,
                     "similarity": e.similarity,
+                    "similarity_score": e.similarity_score,
+                    "similarity_pass": e.similarity_pass,
+                    "similarity_override": e.similarity_override,
+                    "similarity_override_note": e.similarity_override_note,
+                    "similarity_override_ts": e.similarity_override_ts,
                     "ops": e.ops if e.ops else {},
                 }
                 for e in self._images
@@ -331,6 +432,11 @@ class ImageSession:
                 source_type=img.get("source_type", "input"),
                 label=img.get("label", ""),
                 similarity=img.get("similarity"),
+                similarity_score=img.get("similarity_score"),
+                similarity_pass=img.get("similarity_pass"),
+                similarity_override=bool(img.get("similarity_override", False)),
+                similarity_override_note=img.get("similarity_override_note", ""),
+                similarity_override_ts=img.get("similarity_override_ts"),
                 ops=img.get("ops", {}),
             )
             session._images.append(entry)

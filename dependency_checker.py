@@ -64,18 +64,25 @@ PYTHON_DEPENDENCIES = [
         description="Automatic ChromeDriver management"
     ),
     Dependency(
-        name="InsightFace",
-        import_name="insightface",
-        pip_name="insightface",
+        name="DeepFace",
+        import_name="deepface",
+        pip_name="deepface",
         required=False,
-        description="Face detection, alignment & ArcFace embeddings (face similarity)"
+        description="Face embedding and verification backend (ArcFace)"
     ),
     Dependency(
-        name="ONNX Runtime",
-        import_name="onnxruntime",
-        pip_name="onnxruntime",
+        name="TF-Keras",
+        import_name="tf_keras",
+        pip_name="tf-keras",
         required=False,
-        description="ML inference backend for InsightFace"
+        description="TensorFlow compatibility backend required by DeepFace"
+    ),
+    Dependency(
+        name="RetinaFace",
+        import_name="retinaface",
+        pip_name="retina-face",
+        required=False,
+        description="Face detector used by crop tab and similarity engine"
     ),
     Dependency(
         name="OpenCV",

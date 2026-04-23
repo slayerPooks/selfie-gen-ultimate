@@ -25,7 +25,7 @@ from .queue_manager import QueueManager, QueueItem
 from .image_state import ImageSession
 from .carousel_widget import ImageCarousel
 from .compare_panel import ComparePanel
-from .tabs import FaceCropTab, PrepTab, SelfieTab, VideoTab
+from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
 
 # Try to import the generator
 try:
@@ -819,10 +819,10 @@ class KlingGUIWindow:
         )
         self.top_h_paned.pack(fill=tk.BOTH, expand=True)
 
-        # Left pane: Notebook with 5 tabs
+        # Left pane: Notebook with 6 tabs
         left_pane = tk.Frame(self.top_h_paned, bg=COLORS["bg_main"])
 
-        # Create Notebook FIRST (tabs 0-3 don't depend on ConfigPanel)
+        # Create Notebook FIRST (pipeline tabs do not depend on ConfigPanel)
         self.notebook = ttk.Notebook(left_pane)
 
         # Tab 0: Face Crop
@@ -857,9 +857,24 @@ class KlingGUIWindow:
             config=self.config,
             config_getter=lambda: self.config,
             log_callback=self._log,
+            on_send_to_expand=self._on_selfie_send_to_expand,
+            notebook_switcher_expand=lambda: self.notebook.select(3),
             config_saver=self._save_config,
         )
         self.notebook.add(self.selfie_tab, text="2. Generate Selfie")
+
+        # Tab 2.5: Expand
+        self.expand_tab = ExpandTab(
+            self.notebook,
+            image_session=self.image_session,
+            config=self.config,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            on_send_to_video=self._on_files_dropped,
+            notebook_switcher_video=lambda: self.notebook.select(4),
+            config_saver=self._save_config,
+        )
+        self.notebook.add(self.expand_tab, text="2.5 Expand")
 
         # Wire Step 1 → Step 2 prompt connection (set after both tabs exist)
         self.prep_tab.set_selfie_prompt_writer(self.selfie_tab.set_prompt)
@@ -973,6 +988,17 @@ class KlingGUIWindow:
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
 
+    def _on_selfie_send_to_expand(self, paths: List[str], active_path: Optional[str] = None):
+        """Handle Step 2 -> Step 2.5 handoff."""
+        if not hasattr(self, "expand_tab") or self.expand_tab is None:
+            self._log("Step 2.5 tab unavailable", "warning")
+            return
+        self.expand_tab.receive_from_step2(paths, active_path=active_path)
+        try:
+            self.notebook.select(3)
+        except Exception:
+            pass
+
     # ── Context-sensitive right pane ────────────────────────────────
 
     def _on_tab_changed(self, event=None):
@@ -984,9 +1010,9 @@ class KlingGUIWindow:
 
         if idx == 0:  # Tab 0: show tools panel
             self._show_right_pane(self._right_tools_frame)
-        elif idx == 3:  # Tab 3 (Video): show prompt slots
+        elif idx == 4:  # Tab 3 (Video): show prompt slots
             self._show_right_pane(self._right_prompt_frame)
-        else:  # Tab 1, 2: hide right pane entirely — tabs get full width
+        else:  # Tab 1, 2, 2.5: hide right pane entirely — tabs get full width
             self._hide_right_pane()
 
     def _show_right_pane(self, content_frame):
@@ -2402,7 +2428,7 @@ class KlingGUIWindow:
         """Handle configuration changes from the config panel."""
         self.config.update(new_config)
         # Collect and merge any tab-specific config
-        for tab in ["face_crop_tab", "prep_tab", "selfie_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:
@@ -2680,6 +2706,12 @@ class KlingGUIWindow:
                 img.get("source_type", "input"),
                 label=img.get("label", ""),
                 similarity=img.get("similarity"),
+                similarity_score=img.get("similarity_score"),
+                similarity_pass=img.get("similarity_pass"),
+                similarity_override=bool(img.get("similarity_override", False)),
+                similarity_override_note=img.get("similarity_override_note", ""),
+                similarity_override_ts=img.get("similarity_override_ts"),
+                ops=img.get("ops", {}),
             )
             loaded_count += 1
         # Restore indices
@@ -2695,6 +2727,16 @@ class KlingGUIWindow:
             self.image_session._similarity_ref_index = sim_ref_idx
         self.image_session._notify()
         self.carousel.suppress_auto_calc(False)
+        if hasattr(self, "selfie_tab") and self.selfie_tab:
+            try:
+                self.selfie_tab._refresh_result_actions()
+            except Exception:
+                pass
+        if hasattr(self, "expand_tab") and self.expand_tab:
+            try:
+                self.expand_tab.refresh_candidates(select_all_default=True)
+            except Exception:
+                pass
         self._log(f"Session restored: {loaded_count} images loaded", "success")
 
     # ── Auto-save timer ───────────────────────────────────────────────────────
@@ -2742,7 +2784,7 @@ class KlingGUIWindow:
         """Handle window close."""
         # Check both queue and tab worker threads
         busy_tabs = []
-        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab"]:
+        for tab_name in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
             tab_widget = getattr(self, tab_name, None)
             if tab_widget and getattr(tab_widget, "_busy", False):
                 busy_tabs.append(tab_name.replace("_tab", "").title())
@@ -2767,7 +2809,7 @@ class KlingGUIWindow:
                 self.queue_manager.stop_processing()
 
         # Collect tab configs before saving
-        for tab in ["face_crop_tab", "prep_tab", "selfie_tab"]:
+        for tab in ["face_crop_tab", "prep_tab", "selfie_tab", "expand_tab"]:
             tab_widget = getattr(self, tab, None)
             if tab_widget and hasattr(tab_widget, "get_config_updates"):
                 try:
