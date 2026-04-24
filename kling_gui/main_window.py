@@ -588,6 +588,7 @@ class KlingGUIWindow:
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
         self._macos_patched_button_ids = set()
+        self._macos_bound_button_ids = set()
         self._macos_button_fix_job = None
 
         # Set app icon (window title bar + taskbar)
@@ -1203,6 +1204,23 @@ class KlingGUIWindow:
         self._macos_button_fix_job = None
         self._apply_macos_button_fixes(force=True)
 
+    def _on_macos_button_press(self, event):
+        """Invoke tk.Button command on primary press for reliable macOS clicks."""
+        widget = getattr(event, "widget", None)
+        if not isinstance(widget, tk.Button):
+            return None
+        try:
+            state = str(widget.cget("state")).lower()
+        except Exception:
+            state = "normal"
+        if state in {"disabled"}:
+            return "break"
+        try:
+            widget.invoke()
+        except Exception:
+            return "break"
+        return "break"
+
     def _apply_macos_button_fixes(self, force: bool = False):
         """Normalize tk.Button readability and hit areas on macOS."""
         if not IS_MACOS:
@@ -1262,6 +1280,12 @@ class KlingGUIWindow:
                         self._macos_patched_button_ids.add(button_id)
                     except tk.TclError:
                         pass
+                    if button_id not in self._macos_bound_button_ids:
+                        try:
+                            child.bind("<ButtonPress-1>", self._on_macos_button_press, add="+")
+                            self._macos_bound_button_ids.add(button_id)
+                        except tk.TclError:
+                            pass
 
                 _walk(child)
 
