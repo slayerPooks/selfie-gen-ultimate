@@ -47,6 +47,16 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session._reference_index = -1
             self.assertEqual(session.canonical_similarity_ref_entry.path, first)
 
+    def test_prefers_current_reference_before_crop_scan(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            crop_old = self._touch(tmpdir, "old_crop.jpg")
+            ref_new = self._touch(tmpdir, "current_input.png")
+            session = ImageSession()
+            session.add_image(crop_old, "input")
+            session.add_image(ref_new, "input")
+            self.assertEqual(session.reference_entry.path, ref_new)
+            self.assertEqual(session.canonical_similarity_ref_entry.path, ref_new)
+
 
 class Expand25CandidateCompositionTests(unittest.TestCase):
     def _entry(self, folder: str, name: str, source_type: str):

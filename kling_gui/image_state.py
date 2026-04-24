@@ -308,28 +308,28 @@ class ImageSession:
         """Stable similarity reference for gated workflows.
 
         Priority:
-        1) First existing input containing "_crop" in filename
-        2) First existing input containing "front" in filename
-        3) Stored input reference index
+        1) Stored input reference index (current session reference)
+        2) Most-recent existing input containing "_crop" in filename
+        3) Most-recent existing input containing "front" in filename
         4) First existing input entry
         """
         inputs = [entry for _idx, entry in self.input_images if entry.exists]
         if not inputs:
             return None
 
-        for entry in inputs:
+        ref = self.reference_entry
+        if ref and ref.exists:
+            return ref
+
+        for entry in reversed(inputs):
             name = entry.filename.lower()
             if "_crop" in name:
                 return entry
 
-        for entry in inputs:
+        for entry in reversed(inputs):
             name = entry.filename.lower()
             if "front" in name:
                 return entry
-
-        ref = self.reference_entry
-        if ref and ref.exists:
-            return ref
 
         return inputs[0]
 
