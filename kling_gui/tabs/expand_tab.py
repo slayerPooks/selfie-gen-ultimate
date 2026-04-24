@@ -568,7 +568,7 @@ class ExpandTab(tk.Frame):
         return left, right, top, bottom
 
     def _get_similarity_reference(self) -> Optional[str]:
-        ref = self.image_session.canonical_similarity_ref_entry
+        ref = self.image_session.extracted_similarity_ref_entry
         if ref and ref.exists:
             return ref.path
         return None
@@ -647,11 +647,12 @@ class ExpandTab(tk.Frame):
         ref_path = self._get_similarity_reference()
         if ref_path:
             self.log(
-                f"Step 2.5 similarity reference: {os.path.basename(ref_path)}",
+                f"Step 2.5 similarity reference: {ref_path}",
                 "info",
             )
         else:
-            self.log("Step 2.5 similarity reference: none (scoring disabled)", "warning")
+            self.log("Step 2.5 similarity reference missing: no extracted/front/input image", "error")
+            return
         mode = self._expand_mode_var.get()
         try:
             if mode == "percentage":
@@ -746,12 +747,21 @@ class ExpandTab(tk.Frame):
                 score = None
                 passed = None
                 if result and ref_path:
+                    self.log(
+                        f"Step 2.5 compare pair: ref={ref_path} target={result}",
+                        "debug",
+                    )
                     details = compute_face_similarity_details(
                         ref_path, result, report_cb=self.log
                     )
                     if not details.get("error"):
                         score = details.get("score")
                         passed = details.get("pass")
+                    else:
+                        self.log(
+                            f"Step 2.5 similarity unavailable for {os.path.basename(result)}: {details.get('error')}",
+                            "warning",
+                        )
 
                 completed += 1
                 self.winfo_toplevel().after(
@@ -768,7 +778,7 @@ class ExpandTab(tk.Frame):
     def _on_single_expand_complete(self, source_entry, result_path, score, passed, ops):
         if not result_path:
             return
-        similarity = f"{score}%" if score is not None else None
+        similarity = f"{score}%" if score is not None else "n/a"
         basename = os.path.basename(result_path)
         self.image_session.add_image(
             result_path,

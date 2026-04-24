@@ -13,7 +13,7 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             handle.write(b"x")
         return path
 
-    def test_prefers_crop_then_front_then_reference_then_first_input(self):
+    def test_prefers_newest_crop_then_newest_front_then_first_input(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             plain = self._touch(tmpdir, "plain_input.png")
             front = self._touch(tmpdir, "front_image.png")
@@ -26,13 +26,13 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session.add_image(crop, "input")
             session.add_image(selfie, "selfie")
 
-            self.assertEqual(session.canonical_similarity_ref_entry.path, crop)
+            self.assertEqual(session.extracted_similarity_ref_entry.path, crop)
 
             os.remove(crop)
-            self.assertEqual(session.canonical_similarity_ref_entry.path, front)
+            self.assertEqual(session.extracted_similarity_ref_entry.path, front)
 
             os.remove(front)
-            self.assertEqual(session.canonical_similarity_ref_entry.path, plain)
+            self.assertEqual(session.extracted_similarity_ref_entry.path, plain)
 
     def test_falls_back_to_first_existing_input(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -41,21 +41,25 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session = ImageSession()
             session.add_image(first, "input")
             session.add_image(second, "input")
-            # Current session behavior sets reference_index to latest input.
-            self.assertEqual(session.canonical_similarity_ref_entry.path, second)
-            # If stored reference is invalid, resolver falls back to first input.
-            session._reference_index = -1
-            self.assertEqual(session.canonical_similarity_ref_entry.path, first)
+            self.assertEqual(session.extracted_similarity_ref_entry.path, first)
 
-    def test_prefers_current_reference_before_crop_scan(self):
+    def test_ignores_similarity_ref_and_generic_reference(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            plain = self._touch(tmpdir, "plain.png")
             crop_old = self._touch(tmpdir, "old_crop.jpg")
-            ref_new = self._touch(tmpdir, "current_input.png")
+            front_new = self._touch(tmpdir, "front_new.png")
+            selfie = self._touch(tmpdir, "selfie_sim88_001.png")
             session = ImageSession()
+            session.add_image(plain, "input")
             session.add_image(crop_old, "input")
-            session.add_image(ref_new, "input")
-            self.assertEqual(session.reference_entry.path, ref_new)
-            self.assertEqual(session.canonical_similarity_ref_entry.path, ref_new)
+            session.add_image(front_new, "input")
+            session.add_image(selfie, "selfie")
+            session.set_similarity_ref(session.count - 1)  # selfie (non-input)
+            session._reference_index = 0  # generic input ref pointing at plain
+            # Step 2.5 extracted ref must ignore star/generic ref and pick newest crop/front.
+            self.assertEqual(session.extracted_similarity_ref_entry.path, crop_old)
+            os.remove(crop_old)
+            self.assertEqual(session.extracted_similarity_ref_entry.path, front_new)
 
 
 class Expand25CandidateCompositionTests(unittest.TestCase):
@@ -77,6 +81,33 @@ class Expand25CandidateCompositionTests(unittest.TestCase):
             selfie = self._entry(tmpdir, "selfie_sim85_001.png", "selfie")
             entries = ExpandTab.compose_candidate_entries([selfie], selfie)
             self.assertEqual([e.path for e in entries], [selfie.path])
+
+
+class Expand25SimilarityLabelTests(unittest.TestCase):
+    def test_expand_complete_uses_na_when_score_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = os.path.join(tmpdir, "expanded.png")
+            with open(result_path, "wb") as handle:
+                handle.write(b"x")
+
+            tab = ExpandTab.__new__(ExpandTab)
+            tab.image_session = ImageSession()
+            tab._expanded_paths = []
+            tab._refresh_expanded_list = lambda: None
+            tab.log = lambda *_args, **_kwargs: None
+
+            tab._on_single_expand_complete(
+                source_entry=None,
+                result_path=result_path,
+                score=None,
+                passed=None,
+                ops={},
+            )
+
+            entry = tab.image_session.active_entry
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.similarity, "n/a")
+            self.assertIsNone(entry.similarity_score)
 
 
 if __name__ == "__main__":

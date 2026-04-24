@@ -333,6 +333,31 @@ class ImageSession:
 
         return inputs[0]
 
+    @property
+    def extracted_similarity_ref_entry(self) -> Optional[ImageEntry]:
+        """Reference used by Step 2.5 gating.
+
+        Priority:
+        1) Newest existing input containing "_crop"
+        2) Newest existing input containing "front"
+        3) First existing input
+        """
+        inputs = [entry for _idx, entry in self.input_images if entry.exists]
+        if not inputs:
+            return None
+
+        for entry in reversed(inputs):
+            name = entry.filename.lower()
+            if "_crop" in name:
+                return entry
+
+        for entry in reversed(inputs):
+            name = entry.filename.lower()
+            if "front" in name:
+                return entry
+
+        return inputs[0]
+
     def set_similarity_ref(self, index: int) -> bool:
         """Set the similarity reference to any image by index. Pass -1 to clear."""
         if index == -1:

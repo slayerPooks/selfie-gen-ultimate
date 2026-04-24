@@ -46,14 +46,17 @@ def _sim_color(similarity_str) -> Optional[str]:
         val = int(str(similarity_str).rstrip("%"))
     except ValueError:
         return None
+    if val >= 100:
+        return "#0B5D1E"  # very dark green
     if val >= 90:
-        return "#64FF64"   # bright green
-    elif val >= 80:
-        return "#C8FF00"   # yellow-green
-    elif val >= 70:
-        return "#FFA500"   # orange
-    else:
-        return "#FF6464"   # red
+        return "#0F7A2B"  # dark green
+    if val >= 80:
+        return "#6EA80D"  # yellow-green
+    if val >= 70:
+        return "#B35B00"  # orange/dark orange-red
+    if val >= 60:
+        return "#A93A14"  # transition red-orange
+    return "#8B0000"  # deep red
 
 
 logger = logging.getLogger(__name__)
@@ -294,7 +297,9 @@ class ImageCarousel(tk.Frame):
         self.meta_label.pack(side=tk.LEFT)
 
         self.sim_label = tk.Label(
-            self.meta_frame, text="", font=(FONT_FAMILY, 8, "bold"),
+            self.meta_frame,
+            text="",
+            font=(FONT_FAMILY, 12, "bold"),
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor=tk.E,
         )
         self.sim_label.pack(side=tk.RIGHT)
@@ -412,7 +417,7 @@ class ImageCarousel(tk.Frame):
 
             # Similarity (right, colored)
             if entry.similarity is not None:
-                sim_fg = _sim_color(entry.similarity) or COLORS["text_dim"]
+                sim_fg = _sim_color(entry.similarity) or "#E6E6E6"
                 self.sim_label.config(text=f"Sim: {entry.similarity}", fg=sim_fg)
             else:
                 self.sim_label.config(text="")

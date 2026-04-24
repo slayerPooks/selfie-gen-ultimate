@@ -4,6 +4,7 @@ import math
 import os
 import threading
 import urllib.request
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, Optional, Union
 
@@ -14,6 +15,8 @@ from PIL import Image
 # Configure DeepFace backend before import.
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 from deepface import DeepFace
+
+logger = logging.getLogger(__name__)
 
 
 class FaceEngine:
@@ -220,6 +223,9 @@ class FaceEngine:
                 img_path=img2_path,
                 detector_backend=self.detector_backend,
                 enforce_detection=True,
+            )
+            logger.debug(
+                "Similarity compare faces: source=%d target=%d", len(faces1 or []), len(faces2 or [])
             )
 
             face1 = self._select_prominent_face(faces1, "image 1")
