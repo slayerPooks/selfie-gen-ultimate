@@ -878,12 +878,15 @@ class KlingGUIWindow:
             foreground=COLORS["text_light"],
             fieldbackground=COLORS["bg_panel"],
             borderwidth=0,
+            font=("Segoe UI", 8),
+            rowheight=18,
         )
         style.configure(
             "Treeview.Heading",
             background=COLORS["bg_input"],
             foreground=COLORS["text_light"],
             borderwidth=1,
+            font=("Segoe UI", 8, "bold"),
         )
         style.map(
             "Treeview",
@@ -905,8 +908,8 @@ class KlingGUIWindow:
             "TNotebook.Tab",
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
-            padding=[10, 4],
-            font=("Segoe UI", 9),
+            padding=[8, 3],
+            font=("Segoe UI", 8),
         )
         style.map(
             "TNotebook.Tab",
@@ -1852,7 +1855,7 @@ class KlingGUIWindow:
         title = tk.Label(
             header,
             text="Ultimate-Selfie-Gen",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -1862,7 +1865,7 @@ class KlingGUIWindow:
         sessions_btn = tk.Button(
             header,
             text="Sessions",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1876,7 +1879,7 @@ class KlingGUIWindow:
         load_session_btn = tk.Button(
             header,
             text="Load Session",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["accent_blue"],
             fg="white",
             activebackground="#5080DD",
@@ -1890,7 +1893,7 @@ class KlingGUIWindow:
         save_session_btn = tk.Button(
             header,
             text="Save Session",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1905,7 +1908,7 @@ class KlingGUIWindow:
         add_image_btn = tk.Button(
             header,
             text="Add Image",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1922,7 +1925,7 @@ class KlingGUIWindow:
         drop_zone_btn = tk.Button(
             header,
             text="\u25CE",  # ◎ target icon
-            font=("Segoe UI", 11),
+            font=("Segoe UI", 9),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1948,7 +1951,7 @@ class KlingGUIWindow:
         indicator = tk.Label(
             frame,
             text=f"{label}: Set" if is_set else f"{label}: Not Set",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 7, "bold"),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             padx=5, pady=2,
@@ -2168,7 +2171,7 @@ class KlingGUIWindow:
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
         _btn_kwargs = dict(
-            font=("Segoe UI", 10), padx=14, pady=4,
+            font=("Segoe UI", 9), padx=12, pady=3,
             relief=tk.FLAT, borderwidth=0,
             activeforeground="white",
         )
