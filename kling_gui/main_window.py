@@ -587,6 +587,8 @@ class KlingGUIWindow:
         self.root = create_dnd_root()
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
+        self._macos_patched_button_ids = set()
+        self._macos_button_fix_job = None
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -1139,15 +1141,69 @@ class KlingGUIWindow:
         self._start_autosave_timer()
 
         if IS_MACOS:
-            self._apply_macos_button_fixes()
-            self.root.after(250, self._apply_macos_button_fixes)
+            self._schedule_macos_button_fix_pulses()
+            self.root.bind_all("<Map>", self._on_macos_widget_mapped, add="+")
 
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
 
-    def _apply_macos_button_fixes(self):
+    @staticmethod
+    def _is_macos_system_or_light_color(value: str) -> bool:
+        """Return True when Tk resolved a button color to light/system defaults."""
+        color = str(value).strip().lower()
+        if not color:
+            return True
+        if color in {
+            "white",
+            "#fff",
+            "#ffffff",
+            "systembuttonface",
+            "systemwindowbackgroundcolor",
+            "systemwindow",
+        }:
+            return True
+        return color.startswith("system")
+
+    @staticmethod
+    def _safe_int(value, fallback: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _schedule_macos_button_fix_pulses(self):
+        """Apply button normalization repeatedly during startup."""
+        if not IS_MACOS:
+            return
+        # First pass fast; follow-up passes catch late-created widgets.
+        self.root.after(0, lambda: self._apply_macos_button_fixes(force=False))
+        for delay in (140, 320, 700, 1300):
+            self.root.after(delay, lambda: self._apply_macos_button_fixes(force=True))
+
+    def _on_macos_widget_mapped(self, event):
+        """Re-apply button normalization when new widgets are mapped."""
+        if not IS_MACOS:
+            return
+        widget = getattr(event, "widget", None)
+        if widget is None:
+            return
+        if not isinstance(widget, (tk.Button, tk.Toplevel, tk.Frame, tk.LabelFrame)):
+            return
+        if self._macos_button_fix_job is not None:
+            try:
+                self.root.after_cancel(self._macos_button_fix_job)
+            except Exception:
+                pass
+        self._macos_button_fix_job = self.root.after(60, self._run_deferred_macos_button_fix)
+
+    def _run_deferred_macos_button_fix(self):
+        """Debounced map-event callback for macOS button normalization."""
+        self._macos_button_fix_job = None
+        self._apply_macos_button_fixes(force=True)
+
+    def _apply_macos_button_fixes(self, force: bool = False):
         """Normalize tk.Button readability and hit areas on macOS."""
         if not IS_MACOS:
             return
@@ -1155,6 +1211,10 @@ class KlingGUIWindow:
         def _walk(widget):
             for child in widget.winfo_children():
                 if isinstance(child, tk.Button):
+                    button_id = id(child)
+                    if not force and button_id in self._macos_patched_button_ids:
+                        _walk(child)
+                        continue
                     try:
                         bg = str(child.cget("bg")).lower()
                     except Exception:
@@ -1167,25 +1227,39 @@ class KlingGUIWindow:
                         active_bg = str(child.cget("activebackground")).lower()
                     except Exception:
                         active_bg = ""
+                    try:
+                        padx = self._safe_int(child.cget("padx"), 6)
+                    except Exception:
+                        padx = 6
+                    try:
+                        pady = self._safe_int(child.cget("pady"), 2)
+                    except Exception:
+                        pady = 2
 
                     patch = {
                         "activeforeground": COLORS["text_dark"],
-                        "disabledforeground": "#8A8A8A",
+                        "disabledforeground": "#666666",
                         "highlightthickness": 0,
                         "bd": 1,
                         "relief": tk.RAISED,
+                        "overrelief": tk.RAISED,
                         "cursor": "hand2",
                     }
 
-                    if fg in ("white", "#fff", "#ffffff", COLORS["text_light"].lower()):
+                    if fg in ("white", "#fff", "#ffffff", COLORS["text_light"].lower()) or self._is_macos_system_or_light_color(fg):
                         patch["fg"] = COLORS["text_dark"]
-                    if bg in ("", "white", "#fff", "#ffffff", "systembuttonface"):
+                    if self._is_macos_system_or_light_color(bg):
                         patch["bg"] = COLORS["bg_input"]
-                    if active_bg in ("", "white", "#fff", "#ffffff", "systembuttonface"):
+                    if self._is_macos_system_or_light_color(active_bg):
                         patch["activebackground"] = COLORS["bg_hover"]
+                    if padx < 8:
+                        patch["padx"] = 8
+                    if pady < 3:
+                        patch["pady"] = 3
 
                     try:
                         child.configure(**patch)
+                        self._macos_patched_button_ids.add(button_id)
                     except tk.TclError:
                         pass
 
@@ -1208,6 +1282,8 @@ class KlingGUIWindow:
 
     def _on_tab_changed(self, event=None):
         """Swap right pane content based on the active tab."""
+        if IS_MACOS:
+            self._apply_macos_button_fixes(force=True)
         try:
             idx = self.notebook.index(self.notebook.select())
         except Exception:
