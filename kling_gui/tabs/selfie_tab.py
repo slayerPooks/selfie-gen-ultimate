@@ -391,8 +391,11 @@ class SelfieTab(tk.Frame):
         )
         settings_frame.pack(fill=tk.X, padx=8, pady=4)
 
-        grid = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
-        grid.pack(fill=tk.X, padx=4, pady=4)
+        settings_split = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        settings_split.pack(fill=tk.X, padx=4, pady=4)
+
+        grid = tk.Frame(settings_split, bg=COLORS["bg_panel"])
+        grid.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Face Resemblance (ID Weight)
         tk.Label(
@@ -491,24 +494,26 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).grid(row=1, column=2, columnspan=2, sticky="w", padx=(12, 0))
 
-        # Model selection
+        # Model selection (moved to right side of Generation Settings)
         models_frame = tk.LabelFrame(
-            content_frame,
+            settings_split,
             text="Step 2 Models",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        models_frame.pack(fill=tk.X, padx=8, pady=4)
+        models_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=(12, 0))
+        models_frame.configure(width=360)
+        models_frame.pack_propagate(False)
 
         models_list_container = tk.Frame(models_frame, bg=COLORS["bg_panel"])
-        models_list_container.pack(fill=tk.X, padx=4, pady=3)
+        models_list_container.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
         models_canvas = tk.Canvas(
             models_list_container,
             bg=COLORS["bg_panel"],
             highlightthickness=0,
             borderwidth=0,
-            height=140,
+            height=66,
         )
         models_scroll = ttk.Scrollbar(
             models_list_container,
@@ -521,7 +526,6 @@ class SelfieTab(tk.Frame):
 
         models_grid_frame = tk.Frame(models_canvas, bg=COLORS["bg_panel"])
         models_grid_frame.grid_columnconfigure(0, weight=1)
-        models_grid_frame.grid_columnconfigure(1, weight=1)
         models_window_id = models_canvas.create_window(
             (0, 0),
             window=models_grid_frame,
@@ -559,11 +563,11 @@ class SelfieTab(tk.Frame):
                 font=(FONT_FAMILY, 8),
                 anchor="w",
             ).grid(
-                row=idx // 2,
-                column=idx % 2,
+                row=idx,
+                column=0,
                 sticky="w",
-                padx=(8, 20),
-                pady=0,
+                padx=(8, 8),
+                pady=1,
             )
 
         # Save location settings
