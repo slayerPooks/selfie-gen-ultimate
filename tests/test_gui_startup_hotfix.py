@@ -39,7 +39,9 @@ class GuiStartupHotfixTests(unittest.TestCase):
                 raise RuntimeError("tensorflow runtime broken")
             return real_import(name, globals, locals, fromlist, level)
 
-        with mock.patch("builtins.__import__", side_effect=fake_import):
+        with mock.patch.object(module, "HAS_FACE_DEPS", True), \
+            mock.patch.object(module, "FACE_DEPS_ERROR", ""), \
+            mock.patch("builtins.__import__", side_effect=fake_import):
             retinaface_cls, retinaface_error = module._load_retinaface()
 
         self.assertIsNone(retinaface_cls)

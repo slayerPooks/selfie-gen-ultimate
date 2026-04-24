@@ -16,7 +16,7 @@ class DependencyHealthCheckTests(unittest.TestCase):
         modules = {
             "tensorflow": tf_module,
             "tf_keras": tf_keras_module,
-            "retinaface.RetinaFace": retinaface_module,
+            "retinaface": types.SimpleNamespace(RetinaFace=retinaface_module),
             "cv2": cv2_module,
             "numpy": numpy_module,
         }
@@ -40,7 +40,7 @@ class DependencyHealthCheckTests(unittest.TestCase):
             "tensorflow": tf_module,
             "tensorflow.compat.v2": types.SimpleNamespace(),
             "tf_keras": types.SimpleNamespace(__version__="2.16.0"),
-            "retinaface.RetinaFace": types.SimpleNamespace(),
+            "retinaface": types.SimpleNamespace(RetinaFace=object()),
             "cv2": types.SimpleNamespace(),
             "numpy": types.SimpleNamespace(),
         }

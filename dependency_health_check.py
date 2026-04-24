@@ -44,7 +44,8 @@ def check_runtime_dependencies(importer: ImportFn = importlib.import_module) -> 
         failures.append(f"tf_keras import failed: {type(exc).__name__}: {exc}")
 
     try:
-        importer("retinaface.RetinaFace")
+        retinaface_module = importer("retinaface")
+        getattr(retinaface_module, "RetinaFace")
     except Exception as exc:
         failures.append(f"retinaface import failed: {type(exc).__name__}: {exc}")
 
