@@ -256,6 +256,20 @@ class ImageCarousel(tk.Frame):
         )
         self._ref_btn.pack(side=tk.LEFT)
 
+        # Preserve compact carousel controls on macOS while keeping click hardening.
+        for control in (
+            add_btn,
+            self.remove_btn,
+            self.compare_btn,
+            self.prev_btn,
+            self.next_btn,
+            self._ref_btn,
+        ):
+            try:
+                setattr(control, "_macos_compact_click", True)
+            except Exception:
+                pass
+
         self._auto_chk = tk.Checkbutton(
             sim_row,
             text="Auto",

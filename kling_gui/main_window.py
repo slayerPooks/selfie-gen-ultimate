@@ -1299,6 +1299,7 @@ class KlingGUIWindow:
                         pady = self._safe_int(child.cget("pady"), 2)
                     except Exception:
                         pady = 2
+                    is_compact = bool(getattr(child, "_macos_compact_click", False))
 
                     patch = {
                         "fg": COLORS["text_dark"],
@@ -1317,10 +1318,12 @@ class KlingGUIWindow:
                         patch["bg"] = COLORS["bg_input"]
                     if self._is_macos_system_or_light_color(active_bg):
                         patch["activebackground"] = COLORS["bg_hover"]
-                    if padx < 8:
-                        patch["padx"] = 8
-                    if pady < 3:
-                        patch["pady"] = 3
+                    min_padx = 4 if is_compact else 8
+                    min_pady = 1 if is_compact else 3
+                    if padx < min_padx:
+                        patch["padx"] = min_padx
+                    if pady < min_pady:
+                        patch["pady"] = min_pady
                     if isinstance(child, (tk.Checkbutton, tk.Radiobutton)):
                         patch["selectcolor"] = COLORS["bg_input"]
 
