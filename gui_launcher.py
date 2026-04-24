@@ -38,22 +38,24 @@ try:
 except Exception:
     PATH_UTILS_AVAILABLE = False
 
-# Import the GUI window
-HAS_GUI = False
-import_error = "Unknown initialization error"
-import_traceback = ""
+CLI_ERROR_MODE = os.getenv("KLING_GUI_CLI_ERRORS", "").strip() == "1"
 
-try:
-    from kling_gui.main_window import KlingGUIWindow
-    HAS_GUI = True
-except Exception as e:
-    HAS_GUI = False
-    import_error = f"{type(e).__name__}: {str(e)}"
-    import_traceback = traceback.format_exc()
+
+def _load_gui_window():
+    """Import GUI entry lazily so module import is testable and robust."""
+    try:
+        from kling_gui.main_window import KlingGUIWindow
+
+        return KlingGUIWindow, "", ""
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}", traceback.format_exc()
 
 
 def show_critical_error(title, message):
     """Fallback error reporting using tkinter, with silent fail if tkinter missing."""
+    if CLI_ERROR_MODE:
+        sys.stderr.write(f"{title}: {message}\n")
+        return
     try:
         import tkinter as tk
         from tkinter import messagebox
@@ -69,12 +71,15 @@ def show_critical_error(title, message):
 
 def main():
     """Launch the Tkinter GUI directly."""
-    if not HAS_GUI:
+    KlingGUIWindow, import_error, import_traceback = _load_gui_window()
+    if KlingGUIWindow is None:
         # Fallback error handling if GUI can't be imported
         error_msg = (
             f"Failed to initialize Kling GUI:\n\n{import_error}\n\n"
             f"Please ensure all dependencies are installed:\n"
-            f"pip install requests pillow rich tkinterdnd2 selenium webdriver-manager\n\n"
+            f"pip install requests pillow rich tkinterdnd2 selenium webdriver-manager "
+            f"opencv-python-headless numpy tensorflow==2.16.2 "
+            f"tensorflow-intel==2.16.2 tf-keras==2.16.0 retina-face==0.0.17 deepface==0.0.92\n\n"
             f"If you're running the standalone exe, this may indicate a build issue.\n"
             f"All dependencies should be bundled internally."
         )
@@ -95,14 +100,15 @@ def main():
                 f.write("Kling UI Initialization Failure\n")
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Error: {import_error}\n\n")
-                if import_traceback:
-                    f.write("Traceback:\n")
-                    f.write(import_traceback)
+                f.write("Traceback:\n")
+                f.write(import_traceback)
             error_msg += f"\n\nDetails saved to:\n{crash_log}"
         except Exception:
             pass
-            
-        show_critical_error("Import Error", error_msg)
+        if CLI_ERROR_MODE:
+            sys.stderr.write(f"Import Error: {error_msg}\n")
+        else:
+            show_critical_error("Import Error", error_msg)
         sys.exit(1)
     
     try:
@@ -131,12 +137,14 @@ def main():
         except Exception:
             pass
         
-        # Show error dialog
-        show_critical_error(
-            "Kling UI Error",
+        runtime_msg = (
             f"An unexpected error occurred:\n\n{str(e)}\n\n"
             f"Crash log saved to:\n{crash_log}"
         )
+        if CLI_ERROR_MODE:
+            sys.stderr.write(f"Kling UI Error: {runtime_msg}\n")
+        else:
+            show_critical_error("Kling UI Error", runtime_msg)
         sys.exit(1)
 
 

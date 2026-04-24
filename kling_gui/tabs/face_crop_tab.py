@@ -12,15 +12,22 @@ from ..theme import COLORS, FONT_FAMILY
 from ..image_state import ImageSession
 from path_utils import get_gen_images_folder
 
-# Optional heavy dependencies — tab degrades gracefully if missing
+# Optional heavy dependencies — tab degrades gracefully if missing/broken
+cv2 = None
+np = None
+HAS_FACE_DEPS = False
+FACE_DEPS_ERROR = ""
+_RETINAFACE_CLASS = None
+_RETINAFACE_ERROR = ""
 try:
-    import cv2
-    import numpy as np
-    from retinaface import RetinaFace
+    import cv2 as _cv2
+    import numpy as _np
 
+    cv2 = _cv2
+    np = _np
     HAS_FACE_DEPS = True
-except ImportError:
-    HAS_FACE_DEPS = False
+except Exception as exc:
+    FACE_DEPS_ERROR = f"{type(exc).__name__}: {exc}"
 
 # PIL for canvas thumbnails
 try:
@@ -58,6 +65,27 @@ _DEFAULT_POLISH_PROMPT = (
     "or clothing in any way. Keep the original photo quality, lighting, and realism "
     "exactly the same. Do not beautify or change the identity."
 )
+
+
+def _load_retinaface():
+    """Import RetinaFace lazily so broken TF stack cannot break GUI startup."""
+    global _RETINAFACE_CLASS
+    global _RETINAFACE_ERROR
+    if _RETINAFACE_CLASS is not None:
+        return _RETINAFACE_CLASS, ""
+
+    if not HAS_FACE_DEPS:
+        return None, FACE_DEPS_ERROR or "opencv/numpy not available"
+
+    try:
+        from retinaface import RetinaFace as _RetinaFace
+
+        _RETINAFACE_CLASS = _RetinaFace
+        _RETINAFACE_ERROR = ""
+        return _RETINAFACE_CLASS, ""
+    except Exception as exc:
+        _RETINAFACE_ERROR = f"{type(exc).__name__}: {exc}"
+        return None, _RETINAFACE_ERROR
 
 
 class FaceCropTab(tk.Frame):
@@ -195,7 +223,11 @@ class FaceCropTab(tk.Frame):
         if not HAS_FACE_DEPS:
             warn = tk.Label(
                 self,
-                text="Missing dependencies: pip install opencv-python-headless numpy retinaface",
+                text=(
+                    "Face Crop deps missing. Auto-repair via run_gui.bat, or install manually: "
+                    "pip install opencv-python-headless numpy tensorflow==2.16.2 "
+                    "tensorflow-intel==2.16.2 tf-keras==2.16.0 retina-face==0.0.17"
+                ),
                 bg=COLORS["bg_panel"],
                 fg=COLORS["warning"],
                 font=(FONT_FAMILY, 10, "bold"),
@@ -1089,7 +1121,19 @@ class FaceCropTab(tk.Frame):
             return
         if not HAS_FACE_DEPS:
             self._status_label.config(
-                text="Dependencies missing", fg=COLORS["error"]
+                text="Face Crop deps missing (see warning)", fg=COLORS["error"]
+            )
+            return
+        retinaface_cls, retinaface_error = _load_retinaface()
+        if retinaface_cls is None:
+            self._status_label.config(
+                text=f"RetinaFace unavailable: {retinaface_error}",
+                fg=COLORS["error"],
+            )
+            self.log(
+                "Face Crop: RetinaFace/TensorFlow import failed. "
+                "Run run_gui.bat for automatic dependency repair.",
+                "error",
             )
             return
 
@@ -1098,9 +1142,13 @@ class FaceCropTab(tk.Frame):
         self._status_label.config(text="Running RetinaFace...", fg=COLORS["progress"])
         self.log("Face Crop: running RetinaFace detection...", "info")
 
-        threading.Thread(target=self._detect_worker, daemon=True).start()
+        threading.Thread(
+            target=self._detect_worker,
+            args=(retinaface_cls,),
+            daemon=True,
+        ).start()
 
-    def _detect_worker(self):
+    def _detect_worker(self, retinaface_cls):
         try:
             source = self._source_path
             if not source:
@@ -1112,7 +1160,7 @@ class FaceCropTab(tk.Frame):
                 self._after_detect(None, None, "Could not read image with OpenCV")
                 return
 
-            faces = RetinaFace.detect_faces(source)
+            faces = retinaface_cls.detect_faces(source)
             if not faces or len(faces) == 0:
                 self._after_detect(img, None, "No face detected")
                 return
