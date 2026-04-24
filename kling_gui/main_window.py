@@ -588,6 +588,7 @@ class KlingGUIWindow:
         self.root = create_dnd_root()
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
+        self._macos_click_bindtag = "MacClickFix"
         self._macos_patched_button_ids = set()
         self._macos_bound_button_ids = set()
         self._macos_button_fix_job = None
@@ -1144,6 +1145,7 @@ class KlingGUIWindow:
         self._start_autosave_timer()
 
         if IS_MACOS:
+            self._configure_macos_click_bindtag()
             self._schedule_macos_button_fix_pulses()
             self.root.bind_all("<Map>", self._on_macos_widget_mapped, add="+")
 
@@ -1205,6 +1207,17 @@ class KlingGUIWindow:
         """Debounced map-event callback for macOS button normalization."""
         self._macos_button_fix_job = None
         self._apply_macos_button_fixes(force=True)
+
+    def _configure_macos_click_bindtag(self):
+        """Configure a dedicated class bindtag for macOS clickable controls."""
+        if not IS_MACOS:
+            return
+        self.root.bind_class(self._macos_click_bindtag, "<ButtonPress-1>", self._on_macos_button_press, add=False)
+        self.root.bind_class(
+            self._macos_click_bindtag, "<ButtonRelease-1>", self._on_macos_button_release, add=False
+        )
+        # Some Tk/mac builds dispatch <Button-1> more consistently than split press/release.
+        self.root.bind_class(self._macos_click_bindtag, "<Button-1>", self._on_macos_button_release, add=False)
 
     @staticmethod
     def _is_macos_clickable_control(widget) -> bool:
@@ -1314,6 +1327,13 @@ class KlingGUIWindow:
                     try:
                         self._apply_widget_patch(child, patch)
                         self._macos_patched_button_ids.add(button_id)
+                    except tk.TclError:
+                        pass
+                    # Ensure mac click handler bindtag runs before Tk's default class handlers.
+                    try:
+                        current_tags = child.bindtags()
+                        if self._macos_click_bindtag not in current_tags:
+                            child.bindtags((self._macos_click_bindtag,) + current_tags)
                     except tk.TclError:
                         pass
                     if button_id not in self._macos_bound_button_ids:
