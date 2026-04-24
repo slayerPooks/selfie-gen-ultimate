@@ -38,15 +38,15 @@ class LogDisplay(tk.Frame):
         header = tk.Label(
             self,
             text="PROCESSING LOG",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"]
         )
-        header.pack(fill=tk.X, padx=5, pady=(5, 2))
+        header.pack(fill=tk.X, padx=5, pady=(4, 1))
 
         # Create text widget with scrollbar
         self.text_frame = tk.Frame(self, bg=COLORS["bg_main"])
-        self.text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
 
         self.scrollbar = ttk.Scrollbar(self.text_frame)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -56,11 +56,11 @@ class LogDisplay(tk.Frame):
             wrap=tk.WORD,
             bg=COLORS["bg_main"],
             fg=COLORS["text_light"],
-            font=("Consolas", 9),
+            font=("Consolas", 8),
             state=tk.DISABLED,
             yscrollcommand=self.scrollbar.set,
-            padx=5,
-            pady=5,
+            padx=4,
+            pady=4,
             borderwidth=0,
             highlightthickness=0
         )

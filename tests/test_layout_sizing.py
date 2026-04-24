@@ -1,0 +1,80 @@
+import unittest
+
+from kling_gui.main_window import sanitize_saved_geometry, sanitize_sash_layout, sanitize_window_layout
+
+
+class LayoutSizingTests(unittest.TestCase):
+    def test_window_config_clamps_oversized_values(self):
+        window, geometry, changed = sanitize_window_layout(
+            window_config={"width": 2200, "height": 1800, "min_width": 1900, "min_height": 1500},
+            saved_geometry="",
+            screen_width=1512,
+            screen_height=982,
+        )
+        self.assertTrue(changed)
+        self.assertLessEqual(window["width"], int(1512 * 0.95))
+        self.assertLessEqual(window["height"], int(982 * 0.90))
+        self.assertLessEqual(window["min_width"], int(1512 * 0.82))
+        self.assertLessEqual(window["min_height"], int(982 * 0.78))
+        self.assertEqual(geometry, "")
+
+    def test_saved_geometry_too_tall_gets_capped(self):
+        geometry = sanitize_saved_geometry(
+            saved_geometry="2100x1800+12+12",
+            min_width=760,
+            min_height=620,
+            max_width=1400,
+            max_height=880,
+        )
+        self.assertEqual(geometry, "1400x880+12+12")
+
+    def test_pathological_sash_values_clamp_to_bounds(self):
+        sash, changed = sanitize_sash_layout(
+            sash_dropzone=9999,
+            sash_prompt_split=10,
+            sash_queue=5,
+            sash_log=8888,
+            root_width=1100,
+            root_height=900,
+        )
+        self.assertTrue(changed)
+        self.assertGreaterEqual(sash["sash_dropzone"], 320)
+        self.assertLessEqual(sash["sash_dropzone"], int(900 * 0.75))
+        self.assertGreaterEqual(sash["sash_prompt_split"], 420)
+        self.assertLessEqual(sash["sash_prompt_split"], 1100 - 260)
+        self.assertGreaterEqual(sash["sash_queue"], 250)
+        self.assertLessEqual(sash["sash_queue"], int(1100 * 0.55))
+        self.assertGreaterEqual(sash["sash_log"], 110)
+        self.assertLessEqual(sash["sash_log"], int(900 * 0.42))
+
+    def test_sane_values_remain_unchanged(self):
+        window, geometry, changed_window = sanitize_window_layout(
+            window_config={"width": 1100, "height": 900, "min_width": 760, "min_height": 620},
+            saved_geometry="1100x880+300+20",
+            screen_width=1600,
+            screen_height=1000,
+        )
+        self.assertFalse(changed_window)
+        self.assertEqual(window["width"], 1100)
+        self.assertEqual(window["height"], 900)
+        self.assertEqual(window["min_width"], 760)
+        self.assertEqual(window["min_height"], 620)
+        self.assertEqual(geometry, "1100x880+300+20")
+
+        sash, changed_sash = sanitize_sash_layout(
+            sash_dropzone=500,
+            sash_prompt_split=620,
+            sash_queue=320,
+            sash_log=150,
+            root_width=1100,
+            root_height=900,
+        )
+        self.assertFalse(changed_sash)
+        self.assertEqual(sash["sash_dropzone"], 500)
+        self.assertEqual(sash["sash_prompt_split"], 620)
+        self.assertEqual(sash["sash_queue"], 320)
+        self.assertEqual(sash["sash_log"], 150)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -391,8 +391,11 @@ class SelfieTab(tk.Frame):
         )
         settings_frame.pack(fill=tk.X, padx=8, pady=4)
 
-        grid = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
-        grid.pack(fill=tk.X, padx=4, pady=4)
+        settings_split = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        settings_split.pack(fill=tk.X, padx=4, pady=4)
+
+        grid = tk.Frame(settings_split, bg=COLORS["bg_panel"])
+        grid.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Face Resemblance (ID Weight)
         tk.Label(
@@ -491,24 +494,65 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).grid(row=1, column=2, columnspan=2, sticky="w", padx=(12, 0))
 
-        # Model selection
+        save_mode = self.config.get("selfie_output_mode", "")
+        if save_mode not in ("source", "custom"):
+            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
+        self.output_mode_var = tk.StringVar(value=save_mode)
+        self.output_path_var = tk.StringVar(
+            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
+        )
+        tk.Label(
+            grid,
+            text="Save:",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        tk.Radiobutton(
+            grid,
+            text="Next To Source",
+            variable=self.output_mode_var,
+            value="source",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 8),
+        ).grid(row=2, column=1, sticky="w", padx=5, pady=(4, 0))
+        tk.Radiobutton(
+            grid,
+            text="Custom Folder",
+            variable=self.output_mode_var,
+            value="custom",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 8),
+        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=(12, 0), pady=(4, 0))
+
+        # Model selection (moved to right side of Generation Settings)
         models_frame = tk.LabelFrame(
-            content_frame,
+            settings_split,
             text="Step 2 Models",
             font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
-        models_frame.pack(fill=tk.X, padx=8, pady=4)
+        models_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=(12, 0))
+        models_frame.configure(width=360)
+        models_frame.pack_propagate(False)
 
         models_list_container = tk.Frame(models_frame, bg=COLORS["bg_panel"])
-        models_list_container.pack(fill=tk.X, padx=4, pady=3)
+        models_list_container.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
         models_canvas = tk.Canvas(
             models_list_container,
             bg=COLORS["bg_panel"],
             highlightthickness=0,
             borderwidth=0,
-            height=140,
+            height=66,
         )
         models_scroll = ttk.Scrollbar(
             models_list_container,
@@ -521,7 +565,6 @@ class SelfieTab(tk.Frame):
 
         models_grid_frame = tk.Frame(models_canvas, bg=COLORS["bg_panel"])
         models_grid_frame.grid_columnconfigure(0, weight=1)
-        models_grid_frame.grid_columnconfigure(1, weight=1)
         models_window_id = models_canvas.create_window(
             (0, 0),
             window=models_grid_frame,
@@ -529,10 +572,22 @@ class SelfieTab(tk.Frame):
         )
 
         def _on_models_grid_configure(_event):
-            models_canvas.configure(scrollregion=models_canvas.bbox("all"))
+            bbox = models_canvas.bbox("all")
+            models_canvas.configure(scrollregion=bbox)
+            if not bbox:
+                return
+            content_height = bbox[3] - bbox[1]
+            viewport_height = models_canvas.winfo_height()
+            if content_height <= viewport_height + 2:
+                if models_scroll.winfo_ismapped():
+                    models_scroll.pack_forget()
+            else:
+                if not models_scroll.winfo_ismapped():
+                    models_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_models_canvas_configure(event):
             models_canvas.itemconfigure(models_window_id, width=event.width)
+            _on_models_grid_configure(None)
 
         models_grid_frame.bind("<Configure>", _on_models_grid_configure)
         models_canvas.bind("<Configure>", _on_models_canvas_configure)
@@ -559,62 +614,16 @@ class SelfieTab(tk.Frame):
                 font=(FONT_FAMILY, 8),
                 anchor="w",
             ).grid(
-                row=idx // 2,
-                column=idx % 2,
+                row=idx,
+                column=0,
                 sticky="w",
-                padx=(8, 20),
-                pady=0,
+                padx=(8, 8),
+                pady=1,
             )
 
-        # Save location settings
-        save_frame = tk.LabelFrame(
-            content_frame,
-            text="Save Location",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        )
-        save_frame.pack(fill=tk.X, padx=8, pady=4)
-
-        save_mode = self.config.get("selfie_output_mode", "")
-        if save_mode not in ("source", "custom"):
-            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
-        self.output_mode_var = tk.StringVar(value=save_mode)
-        self.output_path_var = tk.StringVar(
-            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
-        )
-
-        mode_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        mode_row.pack(fill=tk.X, padx=4, pady=(3, 1))
-        tk.Radiobutton(
-            mode_row,
-            text="Save Next To Source Image",
-            variable=self.output_mode_var,
-            value="source",
-            command=self._on_output_mode_changed,
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_input"],
-            activebackground=COLORS["bg_panel"],
-            font=(FONT_FAMILY, 9),
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Radiobutton(
-            mode_row,
-            text="Save In Custom Folder",
-            variable=self.output_mode_var,
-            value="custom",
-            command=self._on_output_mode_changed,
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_input"],
-            activebackground=COLORS["bg_panel"],
-            font=(FONT_FAMILY, 9),
-        ).pack(side=tk.LEFT)
-
-        path_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        path_row.pack(fill=tk.X, padx=4, pady=(0, 3))
+        self.output_path_row = tk.Frame(content_frame, bg=COLORS["bg_panel"])
         self.output_entry = tk.Entry(
-            path_row,
+            self.output_path_row,
             textvariable=self.output_path_var,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -624,7 +633,7 @@ class SelfieTab(tk.Frame):
         )
         self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         self.browse_btn = tk.Button(
-            path_row,
+            self.output_path_row,
             text="Browse",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"],
@@ -990,6 +999,7 @@ class SelfieTab(tk.Frame):
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
         bfl_api_key = config.get("bfl_api_key", "")
+        poll_timeout_seconds = config.get("selfie_poll_timeout_seconds", 300)
 
         image_path = self.image_session.active_image_path
         if not image_path:
@@ -1135,6 +1145,7 @@ class SelfieTab(tk.Frame):
                         seed=seed,
                         model_endpoint=endpoint,
                         model_label=label,
+                        poll_timeout_seconds=poll_timeout_seconds,
                     )
                     if result:
                         results.append((model, result))
@@ -1293,6 +1304,13 @@ class SelfieTab(tk.Frame):
 
     def _update_output_entry_state(self):
         use_custom = self.output_mode_var.get() == "custom"
+        if hasattr(self, "output_path_row"):
+            if use_custom:
+                if not self.output_path_row.winfo_ismapped():
+                    self.output_path_row.pack(fill=tk.X, padx=8, pady=(2, 4))
+            else:
+                if self.output_path_row.winfo_ismapped():
+                    self.output_path_row.pack_forget()
         self.output_entry.config(state=tk.NORMAL if use_custom else tk.DISABLED)
         self.browse_btn.config(state=tk.NORMAL if use_custom else tk.DISABLED)
 

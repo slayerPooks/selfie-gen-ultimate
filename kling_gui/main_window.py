@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import logging
+import re
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -73,6 +74,109 @@ UI_CONFIG_DEFAULTS = {
     "history_panel": {"height": 220, "visible_rows": 8},
     "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
 }
+
+
+_GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+)?([+-]\d+)?$")
+
+
+def _clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
+    """Clamp any int-like value to [minimum, maximum] with fallback."""
+    if maximum < minimum:
+        maximum = minimum
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, min(parsed, maximum))
+
+
+def sanitize_saved_geometry(saved_geometry: str, min_width: int, min_height: int, max_width: int, max_height: int) -> str:
+    """Sanitize Tk geometry string to safe size bounds, preserving position when present."""
+    if not isinstance(saved_geometry, str) or not saved_geometry.strip():
+        return ""
+    match = _GEOMETRY_RE.match(saved_geometry.strip())
+    if not match:
+        return ""
+
+    width = _clamp_int(match.group(1), min_width, max_width, min_width)
+    height = _clamp_int(match.group(2), min_height, max_height, min_height)
+    x_part = match.group(3) or ""
+    y_part = match.group(4) or ""
+    return f"{width}x{height}{x_part}{y_part}"
+
+
+def sanitize_window_layout(window_config: dict, saved_geometry: str, screen_width: int, screen_height: int) -> tuple[dict, str, bool]:
+    """Clamp window sizing config and geometry to monitor-safe ranges."""
+    safe_screen_w = max(1024, int(screen_width))
+    safe_screen_h = max(720, int(screen_height))
+
+    max_width = max(920, int(safe_screen_w * 0.95))
+    max_height = max(620, int(safe_screen_h * 0.90))
+    min_width_cap = max(760, int(safe_screen_w * 0.82))
+    min_height_cap = max(560, int(safe_screen_h * 0.78))
+
+    width = _clamp_int(window_config.get("width"), 840, max_width, 1100)
+    height = _clamp_int(window_config.get("height"), 620, max_height, 900)
+    min_width = _clamp_int(window_config.get("min_width"), 700, min_width_cap, 760)
+    min_height = _clamp_int(window_config.get("min_height"), 520, min_height_cap, 620)
+
+    width = max(width, min_width)
+    height = max(height, min_height)
+
+    sanitized_geometry = sanitize_saved_geometry(saved_geometry, min_width, min_height, max_width, max_height)
+    sanitized_window = {
+        "width": width,
+        "height": height,
+        "min_width": min_width,
+        "min_height": min_height,
+    }
+
+    changed = (
+        window_config.get("width") != width
+        or window_config.get("height") != height
+        or window_config.get("min_width") != min_width
+        or window_config.get("min_height") != min_height
+        or (saved_geometry or "") != sanitized_geometry
+    )
+    return sanitized_window, sanitized_geometry, changed
+
+
+def sanitize_sash_layout(
+    sash_dropzone, sash_prompt_split, sash_queue, sash_log, root_width: int, root_height: int
+) -> tuple[dict, bool]:
+    """Clamp sash positions to compact, usable bounds for current window size."""
+    safe_w = max(900, int(root_width))
+    safe_h = max(620, int(root_height))
+
+    drop_min = 320
+    drop_max = max(drop_min, int(safe_h * 0.75))
+    drop_default = int(safe_h * 0.58)
+
+    prompt_min = 420
+    prompt_max = max(prompt_min, safe_w - 260)
+    prompt_default = int(safe_w * 0.62)
+
+    queue_min = 250
+    queue_max = max(queue_min, int(safe_w * 0.55))
+    queue_default = int(safe_w * 0.32)
+
+    log_min = 110
+    log_max = max(log_min, int(safe_h * 0.42))
+    log_default = int(safe_h * 0.22)
+
+    sanitized = {
+        "sash_dropzone": _clamp_int(sash_dropzone, drop_min, drop_max, drop_default),
+        "sash_prompt_split": _clamp_int(sash_prompt_split, prompt_min, prompt_max, prompt_default),
+        "sash_queue": _clamp_int(sash_queue, queue_min, queue_max, queue_default),
+        "sash_log": _clamp_int(sash_log, log_min, log_max, log_default),
+    }
+    changed = (
+        sash_dropzone != sanitized["sash_dropzone"]
+        or sash_prompt_split != sanitized["sash_prompt_split"]
+        or sash_queue != sanitized["sash_queue"]
+        or sash_log != sanitized["sash_log"]
+    )
+    return sanitized, changed
 
 
 class FolderPreviewDialog(tk.Toplevel):
@@ -443,6 +547,7 @@ class KlingGUIWindow:
         self.config = self._load_config()
         self.ui_config_path = os.path.join(get_app_dir(), "ui_config.json")
         self.ui_config = self._load_ui_config()
+        self._layout_corrections_pending = False
         self.edit_mode = False
         self.dimension_labels = {}
         # History file in same directory as config
@@ -478,30 +583,38 @@ class KlingGUIWindow:
 
         # Restore window geometry or use defaults
         window_config = self.ui_config.get("window", {})
-        try:
-            window_width = int(window_config.get("width", 1100))
-            window_height = int(window_config.get("height", 1200))
-            min_width = int(window_config.get("min_width", 800))
-            min_height = int(window_config.get("min_height", 900))
-        except (TypeError, ValueError):
-            window_width, window_height, min_width, min_height = 1100, 950, 800, 700
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        sanitized_window, sanitized_geometry, window_changed = sanitize_window_layout(
+            window_config=window_config,
+            saved_geometry=self.config.get("window_geometry", ""),
+            screen_width=screen_w,
+            screen_height=screen_h,
+        )
+        self.ui_config["window"] = sanitized_window
+        self.config["window_geometry"] = sanitized_geometry
+        if window_changed:
+            self._layout_corrections_pending = True
 
-        saved_geometry = self.config.get("window_geometry", "")
-        if saved_geometry:
-            try:
-                # Cap saved height to 90% of screen so window never overflows monitor
-                screen_h = self.root.winfo_screenheight()
-                max_h = int(screen_h * 0.90)
-                geom_size = saved_geometry.split("+")[0]
-                if "x" in geom_size:
-                    w_str, h_str = geom_size.split("x", 1)
-                    capped_h = min(int(h_str), max_h)
-                    saved_geometry = saved_geometry.replace(
-                        f"{w_str}x{h_str}", f"{w_str}x{capped_h}", 1
-                    )
-                self.root.geometry(saved_geometry)
-            except Exception:
-                self.root.geometry(f"{window_width}x{window_height}")
+        # Pre-sanitize sash values against initial window size before widgets render.
+        pre_sash, pre_sash_changed = sanitize_sash_layout(
+            sash_dropzone=self.config.get("sash_dropzone", 500),
+            sash_prompt_split=self.config.get("sash_prompt_split", 620),
+            sash_queue=self.config.get("sash_queue", 320),
+            sash_log=self.config.get("sash_log", 150),
+            root_width=sanitized_window["width"],
+            root_height=sanitized_window["height"],
+        )
+        self.config.update(pre_sash)
+        if pre_sash_changed:
+            self._layout_corrections_pending = True
+
+        window_width = sanitized_window["width"]
+        window_height = sanitized_window["height"]
+        min_width = sanitized_window["min_width"]
+        min_height = sanitized_window["min_height"]
+        if sanitized_geometry:
+            self.root.geometry(sanitized_geometry)
         else:
             self.root.geometry(f"{window_width}x{window_height}")
         self.root.minsize(min_width, min_height)
@@ -513,6 +626,7 @@ class KlingGUIWindow:
         # after widgets are fully rendered. _restore_sash_positions must run last.
         self.root.after(50, self._apply_ui_config)
         self.root.after(250, self._restore_sash_positions)
+        self.root.after(450, self._persist_layout_corrections_if_needed)
 
         # Enable debug hotkeys/inspector if configured
         self._setup_debug_hotkeys()
@@ -591,6 +705,7 @@ class KlingGUIWindow:
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
+            "selfie_poll_timeout_seconds": 300,
             "selfie_selected_models": {
                 "bfl/flux-kontext-pro": False,
                 "bfl/flux-kontext-max": False,
@@ -610,9 +725,9 @@ class KlingGUIWindow:
             "folder_match_mode": "partial",  # "partial" or "exact"
             # Window layout persistence
             "window_geometry": "",  # Empty = use default
-            "sash_dropzone": 560,  # Height of drop zone pane
-            "sash_queue": 420,  # Width of queue pane
-            "sash_log": 180,  # Height of log pane (before history)
+            "sash_dropzone": 500,  # Height of top pane
+            "sash_queue": 320,  # Width of left bottom pane
+            "sash_log": 150,  # Height of log pane (before history)
         }
 
         # Layer 1: apply bundled defaults template (prompts, model, etc.)
@@ -695,6 +810,23 @@ class KlingGUIWindow:
         except Exception as e:
             self._log(f"Error saving config: {e}", "error")
 
+    def _save_ui_config(self):
+        """Save ui_config.json."""
+        try:
+            with open(self.ui_config_path, "w", encoding="utf-8") as f:
+                json.dump(self.ui_config, f, indent=2)
+        except Exception as e:
+            self._log(f"Error saving ui_config: {e}", "error")
+
+    def _persist_layout_corrections_if_needed(self):
+        """Persist one-time startup layout sanitization."""
+        if not self._layout_corrections_pending:
+            return
+        self._layout_corrections_pending = False
+        self._save_config()
+        self._save_ui_config()
+        self._log("Layout auto-adjusted for current screen size", "info")
+
     def _load_history(self) -> List[dict]:
         """Load processed video history from disk."""
         try:
@@ -747,12 +879,15 @@ class KlingGUIWindow:
             foreground=COLORS["text_light"],
             fieldbackground=COLORS["bg_panel"],
             borderwidth=0,
+            font=("Segoe UI", 8),
+            rowheight=18,
         )
         style.configure(
             "Treeview.Heading",
             background=COLORS["bg_input"],
             foreground=COLORS["text_light"],
             borderwidth=1,
+            font=("Segoe UI", 8, "bold"),
         )
         style.map(
             "Treeview",
@@ -774,8 +909,8 @@ class KlingGUIWindow:
             "TNotebook.Tab",
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
-            padding=[10, 4],
-            font=("Segoe UI", 9),
+            padding=[8, 3],
+            font=("Segoe UI", 8),
         )
         style.map(
             "TNotebook.Tab",
@@ -1230,14 +1365,19 @@ class KlingGUIWindow:
         if not hasattr(self, "root"):
             return
 
-        window_config = self.ui_config.get("window", {})
-        try:
-            width = int(window_config.get("width", 1100))
-            height = int(window_config.get("height", 1200))
-            min_width = int(window_config.get("min_width", 800))
-            min_height = int(window_config.get("min_height", 900))
-        except (TypeError, ValueError):
-            width, height, min_width, min_height = 1100, 1200, 800, 900
+        sanitized_window, sanitized_geometry, changed = sanitize_window_layout(
+            window_config=self.ui_config.get("window", {}),
+            saved_geometry=self.config.get("window_geometry", ""),
+            screen_width=self.root.winfo_screenwidth(),
+            screen_height=self.root.winfo_screenheight(),
+        )
+        self.ui_config["window"] = sanitized_window
+        self.config["window_geometry"] = sanitized_geometry
+        if changed:
+            self._layout_corrections_pending = True
+
+        min_width = sanitized_window["min_width"]
+        min_height = sanitized_window["min_height"]
 
         try:
             self.root.minsize(min_width, min_height)
@@ -1716,7 +1856,7 @@ class KlingGUIWindow:
         title = tk.Label(
             header,
             text="Ultimate-Selfie-Gen",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -1726,7 +1866,7 @@ class KlingGUIWindow:
         sessions_btn = tk.Button(
             header,
             text="Sessions",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1740,7 +1880,7 @@ class KlingGUIWindow:
         load_session_btn = tk.Button(
             header,
             text="Load Session",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["accent_blue"],
             fg="white",
             activebackground="#5080DD",
@@ -1754,7 +1894,7 @@ class KlingGUIWindow:
         save_session_btn = tk.Button(
             header,
             text="Save Session",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1769,7 +1909,7 @@ class KlingGUIWindow:
         add_image_btn = tk.Button(
             header,
             text="Add Image",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1786,7 +1926,7 @@ class KlingGUIWindow:
         drop_zone_btn = tk.Button(
             header,
             text="\u25CE",  # ◎ target icon
-            font=("Segoe UI", 11),
+            font=("Segoe UI", 9),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1812,7 +1952,7 @@ class KlingGUIWindow:
         indicator = tk.Label(
             frame,
             text=f"{label}: Set" if is_set else f"{label}: Not Set",
-            font=("Segoe UI", 8, "bold"),
+            font=("Segoe UI", 7, "bold"),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             padx=5, pady=2,
@@ -1872,7 +2012,7 @@ class KlingGUIWindow:
         self.queue_header = tk.Label(
             queue_frame,
             text="📋 QUEUE (0/50)",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -1889,7 +2029,7 @@ class KlingGUIWindow:
             list_frame,
             bg=COLORS["bg_main"],
             fg=COLORS["text_light"],
-            font=("Consolas", 9),
+            font=("Consolas", 8),
             selectbackground=COLORS["accent_blue"],
             selectforeground="white",
             yscrollcommand=scrollbar.set,
@@ -1912,7 +2052,7 @@ class KlingGUIWindow:
         tk.Label(
             header,
             text="🎞️ PROCESSED VIDEOS",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
@@ -1924,7 +2064,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open File",
             command=self._open_selected_file,
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -1938,7 +2078,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open Folder",
             command=self._open_selected_folder,
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -1952,7 +2092,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Refresh",
             command=self._refresh_history_view,
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2032,7 +2172,7 @@ class KlingGUIWindow:
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
         _btn_kwargs = dict(
-            font=("Segoe UI", 10), padx=14, pady=4,
+            font=("Segoe UI", 9), padx=12, pady=3,
             relief=tk.FLAT, borderwidth=0,
             activeforeground="white",
         )
@@ -2580,17 +2720,22 @@ class KlingGUIWindow:
             # Ensure all widgets are rendered before placing sashes
             self.root.update_idletasks()
 
-            # Get saved positions from config (with new defaults)
-            top_section_pos = self.config.get("sash_dropzone", 450)
-            # Migrate old too-small default to the correct open height
-            if top_section_pos < 500:
-                top_section_pos = 560
-            prompt_split = self.config.get("sash_prompt_split", 640)
-            queue_pos = self.config.get("sash_queue", 350)
-            log_pos = self.config.get("sash_log", 380)
-            # Migrate old small log height to a reasonable default
-            if log_pos < 200:
-                log_pos = 380
+            sash_values, changed = sanitize_sash_layout(
+                sash_dropzone=self.config.get("sash_dropzone", 500),
+                sash_prompt_split=self.config.get("sash_prompt_split", 620),
+                sash_queue=self.config.get("sash_queue", 320),
+                sash_log=self.config.get("sash_log", 150),
+                root_width=self.root.winfo_width(),
+                root_height=self.root.winfo_height(),
+            )
+            self.config.update(sash_values)
+            if changed:
+                self._layout_corrections_pending = True
+
+            top_section_pos = sash_values["sash_dropzone"]
+            prompt_split = sash_values["sash_prompt_split"]
+            queue_pos = sash_values["sash_queue"]
+            log_pos = sash_values["sash_log"]
 
             # Restore main paned (top section height)
             if hasattr(self, "main_paned"):
