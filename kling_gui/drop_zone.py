@@ -17,6 +17,11 @@ try:
 except ImportError:
     HAS_DND = False
 
+# TkinterDnD on macOS can cause unreliable primary-click delivery in large Tk UIs.
+# Default to stable Tk on macOS. Allow opt-in via env for troubleshooting.
+if sys.platform == "darwin" and os.getenv("SELFIEGEN_MAC_ENABLE_DND", "0") != "1":
+    HAS_DND = False
+
 
 def create_dnd_root():
     """Create a TkinterDnD root window if available, otherwise regular Tk.
