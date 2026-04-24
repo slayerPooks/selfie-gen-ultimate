@@ -3,9 +3,11 @@ Path utilities for PyInstaller compatibility.
 Provides functions to get correct paths whether running as script or frozen exe.
 """
 
-import sys
 import os
+import sys
 
+
+APP_NAME = "selfie-gen-ultimate"
 
 # Valid image extensions for processing
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif'}
@@ -55,7 +57,8 @@ def get_resource_dir() -> str:
 def get_config_path(filename: str = "kling_config.json") -> str:
     """
     Get the full path for a configuration file.
-    Config files are stored next to the executable/script.
+    On macOS, config files are stored in Application Support. On Windows,
+    keep the app-local path to preserve the tested portable workflow.
     
     Args:
         filename: Name of the config file
@@ -63,13 +66,15 @@ def get_config_path(filename: str = "kling_config.json") -> str:
     Returns:
         str: Full path to the config file
     """
-    return os.path.join(get_app_dir(), filename)
+    base_dir = get_user_data_dir() if sys.platform == "darwin" else get_app_dir()
+    return os.path.join(base_dir, filename)
 
 
 def get_log_path(filename: str = "kling_gui.log") -> str:
     """
     Get the full path for a log file.
-    Log files are stored next to the executable/script.
+    On macOS, log files are stored in Application Support. On Windows,
+    keep the app-local path to preserve the tested portable workflow.
     
     Args:
         filename: Name of the log file
@@ -77,7 +82,8 @@ def get_log_path(filename: str = "kling_gui.log") -> str:
     Returns:
         str: Full path to the log file
     """
-    return os.path.join(get_app_dir(), filename)
+    base_dir = get_user_data_dir() if sys.platform == "darwin" else get_app_dir()
+    return os.path.join(base_dir, filename)
 
 
 def get_crash_log_path() -> str:
@@ -87,7 +93,34 @@ def get_crash_log_path() -> str:
     Returns:
         str: Full path to crash_log.txt
     """
-    return os.path.join(get_app_dir(), "crash_log.txt")
+    base_dir = get_user_data_dir() if sys.platform == "darwin" else get_app_dir()
+    return os.path.join(base_dir, "crash_log.txt")
+
+
+def get_user_data_dir(app_name: str = APP_NAME) -> str:
+    """
+    Get the directory for storing user data such as config, logs, caches, and sessions.
+
+    Platform conventions:
+    - macOS: ~/Library/Application Support/<app_name>
+    - Windows: %APPDATA%/<app_name>
+    - Linux: ~/.local/share/<app_name>
+    """
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    elif sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~\\AppData\\Roaming"))
+    else:
+        base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+
+    path = os.path.join(base, app_name)
+    try:
+        if os.path.exists(path) and not os.path.isdir(path):
+            return get_app_dir()
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return get_app_dir()
+    return path
 
 
 def is_frozen() -> bool:

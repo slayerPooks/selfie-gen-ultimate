@@ -1837,7 +1837,8 @@ class KlingAutomationUI:
 def main():
     """Entry point"""
     try:
-        os.system("color")
+        if os.name == "nt":
+            os.system("color")
 
         # Check dependencies before starting
         try:

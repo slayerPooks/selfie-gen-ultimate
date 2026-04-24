@@ -17,7 +17,7 @@ from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
 # Import path utilities
-from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir
+from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir, get_user_data_dir
 
 from .drop_zone import create_dnd_root, HAS_DND
 from .log_display import LogDisplay
@@ -60,6 +60,8 @@ COLORS = {
 
 # Valid image extensions for folder scanning
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+FONT_FAMILY = "Helvetica" if sys.platform == "darwin" else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if sys.platform == "darwin" else "Segoe UI Emoji"
 
 
 UI_CONFIG_DEFAULTS = {
@@ -201,7 +203,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             self,
             text=f"Found {len(files)} matching images",
-            font=("Segoe UI", 14, "bold"),
+            font=(FONT_FAMILY, 14, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).pack(pady=(15, 5))
@@ -213,7 +215,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             info_frame,
             text=f"Folder: {folder}",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
             anchor="w",
@@ -223,7 +225,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             info_frame,
             text=f"Pattern: '{pattern}' ({mode_text})",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["accent_blue"],
             anchor="w",
@@ -264,7 +266,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Button(
             btn_frame,
             text="Cancel",
-            font=("Segoe UI", 10),
+            font=(FONT_FAMILY, 10),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             width=12,
@@ -274,7 +276,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Button(
             btn_frame,
             text=f"Add {len(files)} to Queue",
-            font=("Segoe UI", 10, "bold"),
+            font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             width=18,
@@ -341,7 +343,7 @@ class SessionManagerDialog(tk.Toplevel):
     def _build_ui(self):
         # Header
         header = tk.Label(
-            self, text="Saved Sessions", font=("Segoe UI", 12, "bold"),
+            self, text="Saved Sessions", font=(FONT_FAMILY, 12, "bold"),
             bg=COLORS["bg_main"], fg=COLORS["text_light"],
         )
         header.pack(fill=tk.X, padx=16, pady=(12, 6))
@@ -367,7 +369,7 @@ class SessionManagerDialog(tk.Toplevel):
         # Detail label
         self._detail_label = tk.Label(
             self, text="Select a session to view details",
-            font=("Segoe UI", 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
             anchor="w",
         )
         self._detail_label.pack(fill=tk.X, padx=16, pady=(0, 8))
@@ -377,7 +379,7 @@ class SessionManagerDialog(tk.Toplevel):
         autosave_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
 
         tk.Label(
-            autosave_frame, text="Auto-Save:", font=("Segoe UI", 9, "bold"),
+            autosave_frame, text="Auto-Save:", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -391,7 +393,7 @@ class SessionManagerDialog(tk.Toplevel):
         autosave_cb.pack(side=tk.LEFT, padx=(0, 12))
 
         tk.Label(
-            autosave_frame, text="Interval:", font=("Segoe UI", 9),
+            autosave_frame, text="Interval:", font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
         ).pack(side=tk.LEFT, padx=(0, 4))
 
@@ -414,19 +416,19 @@ class SessionManagerDialog(tk.Toplevel):
             ("Save New", COLORS["btn_green"], self._on_save_new),
         ]:
             tk.Button(
-                btn_frame, text=text, font=("Segoe UI", 9, "bold"),
+                btn_frame, text=text, font=(FONT_FAMILY, 9, "bold"),
                 bg=color, fg="white", relief="flat", padx=10, pady=4,
                 command=cmd,
             ).pack(side=tk.LEFT, padx=(0, 6))
 
         tk.Button(
-            btn_frame, text="Close", font=("Segoe UI", 9),
+            btn_frame, text="Close", font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"], fg=COLORS["text_light"], relief="flat",
             padx=10, pady=4, command=self.destroy,
         ).pack(side=tk.RIGHT)
 
         tk.Button(
-            btn_frame, text="Load", font=("Segoe UI", 9, "bold"),
+            btn_frame, text="Load", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["accent_blue"], fg="white", relief="flat",
             padx=10, pady=4, command=self._on_load,
         ).pack(side=tk.RIGHT, padx=(0, 6))
@@ -544,8 +546,14 @@ class KlingGUIWindow:
             # Relative path - make it relative to app dir
             self.config_path = os.path.join(get_app_dir(), config_path)
 
+        self.data_dir = get_user_data_dir() if sys.platform == "darwin" else get_app_dir()
+
         self.config = self._load_config()
-        self.ui_config_path = os.path.join(get_app_dir(), "ui_config.json")
+        self.ui_config_path = (
+            get_config_path("ui_config.json")
+            if sys.platform == "darwin"
+            else os.path.join(get_app_dir(), "ui_config.json")
+        )
         self.ui_config = self._load_ui_config()
         self._layout_corrections_pending = False
         self.edit_mode = False
@@ -879,7 +887,7 @@ class KlingGUIWindow:
             foreground=COLORS["text_light"],
             fieldbackground=COLORS["bg_panel"],
             borderwidth=0,
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             rowheight=18,
         )
         style.configure(
@@ -887,7 +895,7 @@ class KlingGUIWindow:
             background=COLORS["bg_input"],
             foreground=COLORS["text_light"],
             borderwidth=1,
-            font=("Segoe UI", 8, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
         )
         style.map(
             "Treeview",
@@ -910,7 +918,7 @@ class KlingGUIWindow:
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
             padding=[8, 3],
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
         )
         style.map(
             "TNotebook.Tab",
@@ -1218,7 +1226,7 @@ class KlingGUIWindow:
         icon_label = tk.Label(
             content,
             text="\U0001F4E5",
-            font=("Segoe UI Emoji", 36),
+            font=(EMOJI_FONT_FAMILY, 36),
             bg=bg,
             fg=COLORS["accent_blue"],
         )
@@ -1228,7 +1236,7 @@ class KlingGUIWindow:
         main_label = tk.Label(
             content,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 13, "bold"),
+            font=(FONT_FAMILY, 13, "bold"),
             bg=bg,
             fg=COLORS["text_light"],
         )
@@ -1238,7 +1246,7 @@ class KlingGUIWindow:
         sub_label = tk.Label(
             content,
             text="Left click to select  |  Right click to drag",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=bg,
             fg=COLORS["text_dim"],
         )
@@ -1248,7 +1256,7 @@ class KlingGUIWindow:
         status_label = tk.Label(
             drop_frame,
             text="",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=bg,
             fg=COLORS["text_light"],
         )
@@ -1581,7 +1589,7 @@ class KlingGUIWindow:
             label = tk.Label(
                 widget,
                 text=f"{width}x{height}",
-                font=("Segoe UI", 9, "bold"),
+                font=(FONT_FAMILY, 9, "bold"),
                 bg="#E53935",
                 fg="white",
                 padx=4,
@@ -1856,7 +1864,7 @@ class KlingGUIWindow:
         title = tk.Label(
             header,
             text="Ultimate-Selfie-Gen",
-            font=("Segoe UI", 11, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -1866,7 +1874,7 @@ class KlingGUIWindow:
         sessions_btn = tk.Button(
             header,
             text="Sessions",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1880,7 +1888,7 @@ class KlingGUIWindow:
         load_session_btn = tk.Button(
             header,
             text="Load Session",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["accent_blue"],
             fg="white",
             activebackground="#5080DD",
@@ -1894,7 +1902,7 @@ class KlingGUIWindow:
         save_session_btn = tk.Button(
             header,
             text="Save Session",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1909,7 +1917,7 @@ class KlingGUIWindow:
         add_image_btn = tk.Button(
             header,
             text="Add Image",
-            font=("Segoe UI", 8, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1926,7 +1934,7 @@ class KlingGUIWindow:
         drop_zone_btn = tk.Button(
             header,
             text="\u25CE",  # ◎ target icon
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1952,7 +1960,7 @@ class KlingGUIWindow:
         indicator = tk.Label(
             frame,
             text=f"{label}: Set" if is_set else f"{label}: Not Set",
-            font=("Segoe UI", 7, "bold"),
+            font=(FONT_FAMILY, 7, "bold"),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             padx=5, pady=2,
@@ -2012,7 +2020,7 @@ class KlingGUIWindow:
         self.queue_header = tk.Label(
             queue_frame,
             text="📋 QUEUE (0/50)",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -2052,7 +2060,7 @@ class KlingGUIWindow:
         tk.Label(
             header,
             text="🎞️ PROCESSED VIDEOS",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
@@ -2064,7 +2072,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open File",
             command=self._open_selected_file,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2078,7 +2086,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open Folder",
             command=self._open_selected_folder,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2092,7 +2100,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Refresh",
             command=self._refresh_history_view,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2141,7 +2149,7 @@ class KlingGUIWindow:
             add_btn = tk.Button(
                 control_frame,
                 text="📁 Add...",
-                font=("Segoe UI", 10),
+                font=(FONT_FAMILY, 10),
                 bg=COLORS["btn_green"],
                 fg="white",
                 command=self._browse_files,
@@ -2167,12 +2175,12 @@ class KlingGUIWindow:
         dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
         tk.Label(
             control_frame, text=dnd_status,
-            font=("Segoe UI", 8), bg=COLORS["bg_main"], fg=dnd_color,
+            font=(FONT_FAMILY, 8), bg=COLORS["bg_main"], fg=dnd_color,
         ).pack(side=tk.LEFT)
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
         _btn_kwargs = dict(
-            font=("Segoe UI", 9), padx=12, pady=3,
+            font=(FONT_FAMILY, 9), padx=12, pady=3,
             relief=tk.FLAT, borderwidth=0,
             activeforeground="white",
         )
@@ -2259,7 +2267,12 @@ class KlingGUIWindow:
 
     def _log_thread_safe(self, message: str, level: str = "info"):
         """Thread-safe logging using after()."""
-        self.root.after(0, lambda: self._log(message, level))
+        try:
+            if self.root.winfo_exists():
+                self.root.after(0, lambda: self._log(message, level))
+        except tk.TclError:
+            if self.logger:
+                self.logger.warning("Dropped GUI log after window closed: %s", message)
 
     def _update_queue_display(self):
         """Update the queue listbox display."""
@@ -2815,7 +2828,7 @@ class KlingGUIWindow:
             return
         from .session_manager import save_session
         try:
-            path = save_session(get_app_dir(), self.image_session, self.config)
+            path = save_session(self.data_dir, self.image_session, self.config)
             self._log(f"Session saved: {os.path.basename(path)}", "success")
         except Exception as e:
             self._log(f"Save failed: {e}", "error")
@@ -2823,7 +2836,7 @@ class KlingGUIWindow:
     def _on_open_sessions(self):
         """Open the session manager dialog."""
         dialog = SessionManagerDialog(
-            self.root, get_app_dir(), self.image_session,
+            self.root, self.data_dir, self.image_session,
             self.config, self._save_config, self._log,
         )
         self.root.wait_window(dialog)
@@ -2896,7 +2909,11 @@ class KlingGUIWindow:
             return  # No timer — triggered by API completion callbacks
         ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
         ms = ms_map.get(interval, 300000)
-        self.root.after(ms, self._autosave_tick)
+        try:
+            if self.root.winfo_exists():
+                self.root.after(ms, self._autosave_tick)
+        except tk.TclError:
+            return
 
     def _autosave_tick(self):
         """Perform auto-save if session has images, then reschedule."""
@@ -2912,13 +2929,13 @@ class KlingGUIWindow:
             return
         from .session_manager import save_session, get_autosave_path
 
-        target_path = get_autosave_path(get_app_dir(), self.image_session)
+        target_path = get_autosave_path(self.data_dir, self.image_session)
         autosave_name = os.path.splitext(os.path.basename(target_path))[0]
         overwrite = target_path if os.path.isfile(target_path) else None
 
         try:
             save_session(
-                get_app_dir(), self.image_session, self.config,
+                self.data_dir, self.image_session, self.config,
                 name=autosave_name,
                 overwrite_path=overwrite,
             )

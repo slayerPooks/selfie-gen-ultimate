@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
+from path_utils import get_user_data_dir
+
 logger = logging.getLogger(__name__)
 
-# Default cache TTL in seconds (1 hour)
-DEFAULT_CACHE_TTL = 3600
+# Default cache TTL in seconds (24 hours)
+DEFAULT_CACHE_TTL = 86400
 
 
 @dataclass
@@ -45,6 +47,16 @@ class CachedSchema:
         return (time.time() - self.timestamp) > ttl
 
 
+@dataclass
+class APIProbeResult:
+    """Represents the outcome of a lightweight fal.ai connectivity check."""
+
+    state: str
+    message: str
+    status_code: Optional[int] = None
+    retry_after_seconds: Optional[int] = None
+
+
 class ModelSchemaManager:
     """Manages model schemas and parameter detection with TTL-based caching"""
 
@@ -59,20 +71,85 @@ class ModelSchemaManager:
 
         Args:
             api_key: fal.ai API key
-            cache_dir: Directory for disk cache (default: ~/.kling-ui/model_cache)
-            cache_ttl: Cache time-to-live in seconds (default: 3600 = 1 hour)
+            cache_dir: Directory for disk cache
+            cache_ttl: Cache time-to-live in seconds
         """
         self.api_key = api_key
         self.cache_ttl = cache_ttl
-        self.cache_dir = (
-            Path(cache_dir) if cache_dir else Path.home() / ".kling-ui" / "model_cache"
-        )
+        self.cache_dir = Path(cache_dir) if cache_dir else self._default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._memory_cache: Dict[str, CachedSchema] = {}
         self._cache_lock = threading.Lock()
 
+    @staticmethod
+    def _default_cache_dir() -> Path:
+        """Return the model-cache location, using macOS Application Support when applicable."""
+        if sys.platform == "darwin":
+            return Path(get_user_data_dir()) / "model_cache"
+        return Path.home() / ".kling-ui" / "model_cache"
+
+    @staticmethod
+    def _parse_retry_after(response: Optional[requests.Response]) -> Optional[int]:
+        """Return Retry-After as seconds when the API provides it."""
+        if response is None:
+            return None
+        retry_after = response.headers.get("Retry-After", "").strip()
+        if retry_after.isdigit():
+            return max(1, int(retry_after))
+        return None
+
+    def probe_api_access(self, timeout: float = 10.0) -> APIProbeResult:
+        """Perform one lightweight live request to classify API availability."""
+        headers = {"Authorization": f"Key {self.api_key}"}
+        try:
+            response = requests.get(
+                "https://api.fal.ai/v1/models",
+                params={"limit": 1},
+                headers=headers,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            return APIProbeResult(
+                state="network_error",
+                message=f"Could not reach fal.ai right now: {exc}",
+            )
+
+        status_code = response.status_code
+        if status_code == 200:
+            return APIProbeResult("ok", "fal.ai connection verified.", status_code=200)
+        if status_code in (401, 403):
+            return APIProbeResult(
+                "auth_error",
+                "The saved fal.ai API key was rejected. Update it before generating.",
+                status_code=status_code,
+            )
+        if status_code == 429:
+            retry_after = self._parse_retry_after(response)
+            wait_text = f" Wait about {retry_after}s and try again." if retry_after else ""
+            return APIProbeResult(
+                "rate_limited",
+                f"fal.ai rate limited live model checks.{wait_text}",
+                status_code=status_code,
+                retry_after_seconds=retry_after,
+            )
+        if status_code >= 500:
+            return APIProbeResult(
+                "server_error",
+                f"fal.ai is temporarily unavailable (HTTP {status_code}).",
+                status_code=status_code,
+            )
+        return APIProbeResult(
+            "unexpected_error",
+            f"fal.ai returned HTTP {status_code} while checking API access.",
+            status_code=status_code,
+        )
+
     def get_model_schema(
-        self, model_endpoint: str, use_cache: bool = True, force_refresh: bool = False
+        self,
+        model_endpoint: str,
+        use_cache: bool = True,
+        force_refresh: bool = False,
+        allow_network: bool = True,
     ) -> Dict[str, ModelParameter]:
         """
         Fetch OpenAPI schema for a model endpoint.
@@ -81,6 +158,7 @@ class ModelSchemaManager:
             model_endpoint: e.g., "fal-ai/kling-video/v2.1/pro/image-to-video"
             use_cache: Whether to use cached schema
             force_refresh: Force refresh even if cache is valid (bypasses TTL)
+            allow_network: False keeps startup/cache-only paths from making live calls
 
         Returns:
             Dictionary of parameter name -> ModelParameter
@@ -121,6 +199,10 @@ class ModelSchemaManager:
             except Exception as e:
                 logger.warning(f"Failed to load cached schema: {e}")
 
+        if not allow_network:
+            logger.debug("Using offline schema fallback for %s (network disabled)", model_endpoint)
+            return {}
+
         # Fetch from API
         try:
             url = "https://api.fal.ai/v1/models"
@@ -131,7 +213,11 @@ class ModelSchemaManager:
             response = requests.get(url, params=params, headers=headers, timeout=30)
 
             if response.status_code != 200:
-                logger.error(f"Failed to fetch schema: {response.status_code}")
+                logger.warning(
+                    "Schema lookup for %s returned HTTP %s",
+                    model_endpoint,
+                    response.status_code,
+                )
                 return self._get_fallback_schema()
 
             data = response.json()
@@ -484,40 +570,56 @@ class ModelSchemaManager:
                 ts = cached.get("_cache_timestamp", 0)
                 if ts and (time.time() - ts) <= self.cache_ttl:
                     return cached.get("models", [])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not read catalog cache: {e}")
 
         try:
             headers = {"Authorization": f"Key {self.api_key}"}
-            params = {"category": category, "status": status, "limit": 500}
-            response = requests.get(
-                "https://api.fal.ai/v1/models",
-                params=params,
-                headers=headers,
-                timeout=30,
-            )
-            if response.status_code != 200:
-                body = response.text[:200] if response.text else "(empty)"
-                logger.warning(f"Catalog API returned {response.status_code}: {body}")
-                return []
-
-            data = response.json()
-            models_list = data.get("models", data if isinstance(data, list) else [])
-
             results = []
-            for item in models_list:
-                endpoint = item.get("endpoint_id", item.get("endpoint", ""))
-                if not endpoint:
-                    continue
-                metadata = item.get("metadata", {})
-                results.append({
-                    "endpoint": endpoint,
-                    "display_name": metadata.get("display_name", item.get("display_name", "")),
-                    "description": metadata.get("description", item.get("description", "")),
-                    "date": metadata.get("date", item.get("date", "")),
-                    "category": metadata.get("category", category),
-                    "status": metadata.get("status", status),
-                })
+            cursor = None
+            seen_cursors: set[str] = set()
+
+            while True:
+                params = {"category": category, "status": status, "limit": 500}
+                if cursor:
+                    params["cursor"] = cursor
+
+                response = requests.get(
+                    "https://api.fal.ai/v1/models",
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+                if response.status_code != 200:
+                    body = response.text[:200] if response.text else "(empty)"
+                    logger.warning(f"Catalog API returned {response.status_code}: {body}")
+                    return []
+
+                data = response.json()
+                models_list = data.get("models", data if isinstance(data, list) else [])
+
+                for item in models_list:
+                    endpoint = item.get("endpoint_id", item.get("endpoint", ""))
+                    if not endpoint:
+                        continue
+                    metadata = item.get("metadata", {})
+                    results.append({
+                        "endpoint": endpoint,
+                        "display_name": metadata.get("display_name", item.get("display_name", "")),
+                        "description": metadata.get("description", item.get("description", "")),
+                        "date": metadata.get("date", item.get("date", "")),
+                        "category": metadata.get("category", category),
+                        "status": metadata.get("status", status),
+                    })
+
+                next_cursor = data.get("next_cursor") if isinstance(data, dict) else None
+                if not (isinstance(data, dict) and data.get("has_more") and next_cursor):
+                    break
+                if next_cursor in seen_cursors:
+                    logger.warning("Catalog pagination returned repeated cursor; stopping at %s", next_cursor)
+                    break
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
 
             # Save to disk cache
             try:
