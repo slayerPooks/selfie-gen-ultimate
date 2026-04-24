@@ -24,6 +24,9 @@ class SelfieGenerator:
         "clothing",
         "expression",
     )
+    DEFAULT_POLL_TIMEOUT_SECONDS = 300
+    MIN_POLL_TIMEOUT_SECONDS = 60
+    MAX_POLL_TIMEOUT_SECONDS = 1800
     @staticmethod
     def resolve_wildcards(template: str) -> str:
         """Resolve {opt1|opt2|opt3} blocks by randomly picking one option per block."""
@@ -193,6 +196,17 @@ class SelfieGenerator:
     def _is_cancelled(self) -> bool:
         return self._cancel_event is not None and self._cancel_event.is_set()
 
+    @classmethod
+    def sanitize_poll_timeout_seconds(cls, value: Optional[int]) -> int:
+        """Clamp poll timeout seconds to safe bounds."""
+        try:
+            timeout = int(value)
+        except (TypeError, ValueError):
+            timeout = cls.DEFAULT_POLL_TIMEOUT_SECONDS
+        timeout = max(cls.MIN_POLL_TIMEOUT_SECONDS, timeout)
+        timeout = min(cls.MAX_POLL_TIMEOUT_SECONDS, timeout)
+        return timeout
+
     def _generate_fal_raw(
         self,
         image_path: str,
@@ -204,6 +218,7 @@ class SelfieGenerator:
         width: int,
         height: int,
         actual_seed: int,
+        poll_timeout_seconds: int,
     ) -> bool:
         """Run the fal.ai generation pipeline. Returns True on success."""
         if self._is_cancelled():
@@ -253,10 +268,13 @@ class SelfieGenerator:
             self._report("No status URL in response", "error")
             return False
 
-        self._report("Waiting for generation...", "progress")
+        self._report(
+            f"Waiting for generation... (timeout {poll_timeout_seconds}s)",
+            "progress",
+        )
         final = fal_queue_poll(
             self.api_key, status_url, self._progress_callback,
-            max_wait_seconds=120,
+            max_wait_seconds=poll_timeout_seconds,
             cancel_event=self._cancel_event,
         )
         if not final:
@@ -287,6 +305,7 @@ class SelfieGenerator:
         seed: int = -1,
         model_endpoint: str = "",
         model_label: str = "",
+        poll_timeout_seconds: Optional[int] = None,
     ) -> Optional[str]:
         """Generate a selfie from an identity reference image.
 
@@ -298,6 +317,7 @@ class SelfieGenerator:
         actual_seed = random.randint(0, 2**32 - 1) if seed == -1 else seed
         resolved_endpoint = model_endpoint or self.DEFAULT_ENDPOINT
         resolved_label = model_label or self.get_model_label(resolved_endpoint)
+        timeout_seconds = self.sanitize_poll_timeout_seconds(poll_timeout_seconds)
 
         os.makedirs(output_folder, exist_ok=True)
         stem = Path(image_path).stem
@@ -322,6 +342,7 @@ class SelfieGenerator:
             width=width,
             height=height,
             actual_seed=actual_seed,
+            poll_timeout_seconds=timeout_seconds,
         )
 
         if not success:

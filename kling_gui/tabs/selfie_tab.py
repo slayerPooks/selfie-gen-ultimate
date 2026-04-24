@@ -999,6 +999,7 @@ class SelfieTab(tk.Frame):
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
         bfl_api_key = config.get("bfl_api_key", "")
+        poll_timeout_seconds = config.get("selfie_poll_timeout_seconds", 300)
 
         image_path = self.image_session.active_image_path
         if not image_path:
@@ -1144,6 +1145,7 @@ class SelfieTab(tk.Frame):
                         seed=seed,
                         model_endpoint=endpoint,
                         model_label=label,
+                        poll_timeout_seconds=poll_timeout_seconds,
                     )
                     if result:
                         results.append((model, result))

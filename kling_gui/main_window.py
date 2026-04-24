@@ -705,6 +705,7 @@ class KlingGUIWindow:
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
+            "selfie_poll_timeout_seconds": 300,
             "selfie_selected_models": {
                 "bfl/flux-kontext-pro": False,
                 "bfl/flux-kontext-max": False,
