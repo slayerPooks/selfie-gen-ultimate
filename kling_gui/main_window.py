@@ -1372,6 +1372,12 @@ class KlingGUIWindow:
 
         if idx == 0:  # Tab 0: show tools panel
             self._show_right_pane(self._right_tools_frame)
+        elif idx == 3:  # Tab 2.5 Expand
+            self._hide_right_pane()
+            try:
+                self.expand_tab.refresh_from_active_carousel()
+            except Exception:
+                pass
         elif idx == 4:  # Tab 3 (Video): show prompt slots
             self._show_right_pane(self._right_prompt_frame)
         else:  # Tab 1, 2, 2.5: hide right pane entirely — tabs get full width

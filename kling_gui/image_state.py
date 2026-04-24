@@ -303,6 +303,36 @@ class ImageSession:
             return self._images[self._similarity_ref_index]
         return None
 
+    @property
+    def canonical_similarity_ref_entry(self) -> Optional[ImageEntry]:
+        """Stable similarity reference for gated workflows.
+
+        Priority:
+        1) First existing input containing "_crop" in filename
+        2) First existing input containing "front" in filename
+        3) Stored input reference index
+        4) First existing input entry
+        """
+        inputs = [entry for _idx, entry in self.input_images if entry.exists]
+        if not inputs:
+            return None
+
+        for entry in inputs:
+            name = entry.filename.lower()
+            if "_crop" in name:
+                return entry
+
+        for entry in inputs:
+            name = entry.filename.lower()
+            if "front" in name:
+                return entry
+
+        ref = self.reference_entry
+        if ref and ref.exists:
+            return ref
+
+        return inputs[0]
+
     def set_similarity_ref(self, index: int) -> bool:
         """Set the similarity reference to any image by index. Pass -1 to clear."""
         if index == -1:

@@ -58,6 +58,10 @@ def _sim_color(similarity_str) -> Optional[str]:
 
 logger = logging.getLogger(__name__)
 
+CAROUSEL_BTN_BG = "#F2F2F2"
+CAROUSEL_BTN_FG = "#1A1A1A"
+CAROUSEL_BTN_DISABLED_FG = "#4A4A4A"
+
 
 class ImageCarousel(tk.Frame):
     """Unified carousel showing all images (input + selfie + outpaint) in one stream.
@@ -130,13 +134,18 @@ class ImageCarousel(tk.Frame):
         add_btn = tk.Button(
             header,
             text="+",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["success"],
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_add_image,
             cursor="hand2",
             relief=tk.FLAT,
             width=2,
+            padx=4,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         add_btn.pack(side=tk.RIGHT)
 
@@ -144,13 +153,18 @@ class ImageCarousel(tk.Frame):
         self.remove_btn = tk.Button(
             header,
             text="-",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["error"],
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_remove_image,
             cursor="hand2",
             relief=tk.FLAT,
             width=2,
+            padx=4,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
@@ -160,12 +174,16 @@ class ImageCarousel(tk.Frame):
             header,
             text="Compare",
             font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_compare,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=6,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self.compare_btn.pack(side=tk.RIGHT, padx=(0, 4))
@@ -173,16 +191,21 @@ class ImageCarousel(tk.Frame):
         # Nav buttons + counter
         self.next_btn = tk.Button(
             header,
-            text=">",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            text="\u25B6",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=lambda: self.image_session.navigate(1),
-            width=2,
+            width=1,
             cursor="hand2",
             relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
-        self.next_btn.pack(side=tk.RIGHT, padx=(2, 4))
+        self.next_btn.pack(side=tk.RIGHT, padx=(1, 3))
 
         self.counter_label = tk.Label(
             header,
@@ -195,14 +218,19 @@ class ImageCarousel(tk.Frame):
 
         self.prev_btn = tk.Button(
             header,
-            text="<",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            text="\u25C0",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=lambda: self.image_session.navigate(-1),
-            width=2,
+            width=1,
             cursor="hand2",
             relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         self.prev_btn.pack(side=tk.RIGHT)
 
@@ -213,13 +241,17 @@ class ImageCarousel(tk.Frame):
         self._ref_btn = tk.Button(
             sim_row,
             text="\u2605 Ref",
-            font=(FONT_FAMILY, 7),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 7, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._toggle_sim_ref,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=4,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self._ref_btn.pack(side=tk.LEFT)
@@ -323,12 +355,12 @@ class ImageCarousel(tk.Frame):
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
             if is_sim_ref:
-                self._ref_btn.config(text="\u2605 Clear", fg=COLORS["warning"])
+                self._ref_btn.config(text="\u2605 Clear", fg=CAROUSEL_BTN_FG)
             else:
-                self._ref_btn.config(text="\u2605 Ref", fg=COLORS["text_light"])
+                self._ref_btn.config(text="\u2605 Ref", fg=CAROUSEL_BTN_FG)
         else:
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref",
-                                 fg=COLORS["text_light"])
+                                 fg=CAROUSEL_BTN_DISABLED_FG)
 
         if n == 0:
             self.counter_label.config(text="")
