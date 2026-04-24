@@ -1204,10 +1204,24 @@ class KlingGUIWindow:
         self._macos_button_fix_job = None
         self._apply_macos_button_fixes(force=True)
 
+    @staticmethod
+    def _is_macos_clickable_control(widget) -> bool:
+        """Return True for Tk clickable controls that need macOS click normalization."""
+        return isinstance(widget, (tk.Button, tk.Checkbutton, tk.Radiobutton, tk.Menubutton))
+
+    @staticmethod
+    def _apply_widget_patch(widget, patch: dict):
+        """Apply patch options one by one so unsupported options don't cancel all updates."""
+        for key, value in patch.items():
+            try:
+                widget.configure(**{key: value})
+            except tk.TclError:
+                continue
+
     def _on_macos_button_press(self, event):
         """Invoke tk.Button command on primary press for reliable macOS clicks."""
         widget = getattr(event, "widget", None)
-        if not isinstance(widget, tk.Button):
+        if not self._is_macos_clickable_control(widget):
             return None
         try:
             state = str(widget.cget("state")).lower()
@@ -1228,7 +1242,7 @@ class KlingGUIWindow:
 
         def _walk(widget):
             for child in widget.winfo_children():
-                if isinstance(child, tk.Button):
+                if self._is_macos_clickable_control(child):
                     button_id = id(child)
                     if not force and button_id in self._macos_patched_button_ids:
                         _walk(child)
@@ -1255,6 +1269,7 @@ class KlingGUIWindow:
                         pady = 2
 
                     patch = {
+                        "fg": COLORS["text_dark"],
                         "activeforeground": COLORS["text_dark"],
                         "disabledforeground": "#666666",
                         "highlightthickness": 0,
@@ -1274,9 +1289,11 @@ class KlingGUIWindow:
                         patch["padx"] = 8
                     if pady < 3:
                         patch["pady"] = 3
+                    if isinstance(child, (tk.Checkbutton, tk.Radiobutton)):
+                        patch["selectcolor"] = COLORS["bg_input"]
 
                     try:
-                        child.configure(**patch)
+                        self._apply_widget_patch(child, patch)
                         self._macos_patched_button_ids.add(button_id)
                     except tk.TclError:
                         pass
