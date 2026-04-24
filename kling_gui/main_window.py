@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 import re
+import time
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -590,6 +591,7 @@ class KlingGUIWindow:
         self._macos_patched_button_ids = set()
         self._macos_bound_button_ids = set()
         self._macos_button_fix_job = None
+        self._macos_control_invoke_ts = {}
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -1218,22 +1220,39 @@ class KlingGUIWindow:
             except tk.TclError:
                 continue
 
-    def _on_macos_button_press(self, event):
-        """Invoke tk.Button command on primary press for reliable macOS clicks."""
-        widget = getattr(event, "widget", None)
-        if not self._is_macos_clickable_control(widget):
-            return None
+    def _invoke_macos_control(self, widget) -> str:
+        """Invoke clickable control once, suppressing duplicate press/release triggers."""
         try:
             state = str(widget.cget("state")).lower()
         except Exception:
             state = "normal"
         if state in {"disabled"}:
             return "break"
+        now = time.monotonic()
+        widget_id = id(widget)
+        last_ts = self._macos_control_invoke_ts.get(widget_id, 0.0)
+        if now - last_ts < 0.18:
+            return "break"
+        self._macos_control_invoke_ts[widget_id] = now
         try:
             widget.invoke()
         except Exception:
             return "break"
         return "break"
+
+    def _on_macos_button_press(self, event):
+        """Invoke Tk clickable controls on primary press for reliable macOS clicks."""
+        widget = getattr(event, "widget", None)
+        if not self._is_macos_clickable_control(widget):
+            return None
+        return self._invoke_macos_control(widget)
+
+    def _on_macos_button_release(self, event):
+        """Fallback invoke on release for macOS environments that drop press events."""
+        widget = getattr(event, "widget", None)
+        if not self._is_macos_clickable_control(widget):
+            return None
+        return self._invoke_macos_control(widget)
 
     def _apply_macos_button_fixes(self, force: bool = False):
         """Normalize tk.Button readability and hit areas on macOS."""
@@ -1300,6 +1319,7 @@ class KlingGUIWindow:
                     if button_id not in self._macos_bound_button_ids:
                         try:
                             child.bind("<ButtonPress-1>", self._on_macos_button_press, add="+")
+                            child.bind("<ButtonRelease-1>", self._on_macos_button_release, add="+")
                             self._macos_bound_button_ids.add(button_id)
                         except tk.TclError:
                             pass
