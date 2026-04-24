@@ -494,6 +494,45 @@ class SelfieTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).grid(row=1, column=2, columnspan=2, sticky="w", padx=(12, 0))
 
+        save_mode = self.config.get("selfie_output_mode", "")
+        if save_mode not in ("source", "custom"):
+            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
+        self.output_mode_var = tk.StringVar(value=save_mode)
+        self.output_path_var = tk.StringVar(
+            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
+        )
+        tk.Label(
+            grid,
+            text="Save:",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        tk.Radiobutton(
+            grid,
+            text="Next To Source",
+            variable=self.output_mode_var,
+            value="source",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 8),
+        ).grid(row=2, column=1, sticky="w", padx=5, pady=(4, 0))
+        tk.Radiobutton(
+            grid,
+            text="Custom Folder",
+            variable=self.output_mode_var,
+            value="custom",
+            command=self._on_output_mode_changed,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 8),
+        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=(12, 0), pady=(4, 0))
+
         # Model selection (moved to right side of Generation Settings)
         models_frame = tk.LabelFrame(
             settings_split,
@@ -582,55 +621,9 @@ class SelfieTab(tk.Frame):
                 pady=1,
             )
 
-        # Save location settings
-        save_frame = tk.LabelFrame(
-            content_frame,
-            text="Save Location",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-        )
-        save_frame.pack(fill=tk.X, padx=8, pady=4)
-
-        save_mode = self.config.get("selfie_output_mode", "")
-        if save_mode not in ("source", "custom"):
-            save_mode = "source" if self.config.get("use_source_folder", True) else "custom"
-        self.output_mode_var = tk.StringVar(value=save_mode)
-        self.output_path_var = tk.StringVar(
-            value=self.config.get("selfie_output_folder", self.config.get("output_folder", ""))
-        )
-
-        mode_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        mode_row.pack(fill=tk.X, padx=4, pady=(3, 1))
-        tk.Radiobutton(
-            mode_row,
-            text="Save Next To Source Image",
-            variable=self.output_mode_var,
-            value="source",
-            command=self._on_output_mode_changed,
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_input"],
-            activebackground=COLORS["bg_panel"],
-            font=(FONT_FAMILY, 9),
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Radiobutton(
-            mode_row,
-            text="Save In Custom Folder",
-            variable=self.output_mode_var,
-            value="custom",
-            command=self._on_output_mode_changed,
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_light"],
-            selectcolor=COLORS["bg_input"],
-            activebackground=COLORS["bg_panel"],
-            font=(FONT_FAMILY, 9),
-        ).pack(side=tk.LEFT)
-
-        path_row = tk.Frame(save_frame, bg=COLORS["bg_panel"])
-        path_row.pack(fill=tk.X, padx=4, pady=(0, 3))
+        self.output_path_row = tk.Frame(content_frame, bg=COLORS["bg_panel"])
         self.output_entry = tk.Entry(
-            path_row,
+            self.output_path_row,
             textvariable=self.output_path_var,
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
@@ -640,7 +633,7 @@ class SelfieTab(tk.Frame):
         )
         self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         self.browse_btn = tk.Button(
-            path_row,
+            self.output_path_row,
             text="Browse",
             font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"],
@@ -1309,6 +1302,13 @@ class SelfieTab(tk.Frame):
 
     def _update_output_entry_state(self):
         use_custom = self.output_mode_var.get() == "custom"
+        if hasattr(self, "output_path_row"):
+            if use_custom:
+                if not self.output_path_row.winfo_ismapped():
+                    self.output_path_row.pack(fill=tk.X, padx=8, pady=(2, 4))
+            else:
+                if self.output_path_row.winfo_ismapped():
+                    self.output_path_row.pack_forget()
         self.output_entry.config(state=tk.NORMAL if use_custom else tk.DISABLED)
         self.browse_btn.config(state=tk.NORMAL if use_custom else tk.DISABLED)
 
