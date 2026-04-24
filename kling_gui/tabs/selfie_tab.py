@@ -533,10 +533,22 @@ class SelfieTab(tk.Frame):
         )
 
         def _on_models_grid_configure(_event):
-            models_canvas.configure(scrollregion=models_canvas.bbox("all"))
+            bbox = models_canvas.bbox("all")
+            models_canvas.configure(scrollregion=bbox)
+            if not bbox:
+                return
+            content_height = bbox[3] - bbox[1]
+            viewport_height = models_canvas.winfo_height()
+            if content_height <= viewport_height + 2:
+                if models_scroll.winfo_ismapped():
+                    models_scroll.pack_forget()
+            else:
+                if not models_scroll.winfo_ismapped():
+                    models_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def _on_models_canvas_configure(event):
             models_canvas.itemconfigure(models_window_id, width=event.width)
+            _on_models_grid_configure(None)
 
         models_grid_frame.bind("<Configure>", _on_models_grid_configure)
         models_canvas.bind("<Configure>", _on_models_canvas_configure)
