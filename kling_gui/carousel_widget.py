@@ -59,6 +59,30 @@ def _sim_color(similarity_str) -> Optional[str]:
     return "#8B0000"  # deep red
 
 
+def _sim_badge_style(similarity_str) -> Optional[dict]:
+    """Return badge style for similarity indicator."""
+    if similarity_str is None:
+        return None
+    raw = str(similarity_str).strip().lower()
+    if not raw:
+        return None
+    if raw in {"n/a", "na", "none"}:
+        return {"fg": "#F1F1F1", "bg": "#4A4A4A", "border": "#6A6A6A"}
+    try:
+        val = int(raw.rstrip("%"))
+    except ValueError:
+        return {"fg": "#F1F1F1", "bg": "#4A4A4A", "border": "#6A6A6A"}
+    if val >= 100:
+        return {"fg": "#F4FFF6", "bg": "#0B5D1E", "border": "#2B8A3E"}
+    if val >= 80:
+        return {"fg": "#F8FFE9", "bg": "#567F00", "border": "#84B800"}
+    if val >= 70:
+        return {"fg": "#FFF3E8", "bg": "#8C4300", "border": "#C96A1A"}
+    if val >= 60:
+        return {"fg": "#FFEDE5", "bg": "#8B2E10", "border": "#BE4A20"}
+    return {"fg": "#FFEAEA", "bg": "#7A0000", "border": "#B21B1B"}
+
+
 logger = logging.getLogger(__name__)
 
 CAROUSEL_BTN_BG = "#F2F2F2"
@@ -300,7 +324,14 @@ class ImageCarousel(tk.Frame):
             self.meta_frame,
             text="",
             font=(FONT_FAMILY, 12, "bold"),
-            bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor=tk.E,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor=tk.E,
+            bd=0,
+            relief=tk.FLAT,
+            padx=0,
+            pady=0,
+            highlightthickness=0,
         )
         self.sim_label.pack(side=tk.RIGHT)
 
@@ -417,10 +448,38 @@ class ImageCarousel(tk.Frame):
 
             # Similarity (right, colored)
             if entry.similarity is not None:
-                sim_fg = _sim_color(entry.similarity) or "#E6E6E6"
-                self.sim_label.config(text=f"Sim: {entry.similarity}", fg=sim_fg)
+                badge = _sim_badge_style(entry.similarity)
+                if badge:
+                    self.sim_label.config(
+                        text=f"  SIM {entry.similarity}  ",
+                        fg=badge["fg"],
+                        bg=badge["bg"],
+                        highlightthickness=1,
+                        highlightbackground=badge["border"],
+                        highlightcolor=badge["border"],
+                        padx=8,
+                        pady=2,
+                    )
+                else:
+                    self.sim_label.config(
+                        text=f"  SIM {entry.similarity}  ",
+                        fg="#E6E6E6",
+                        bg="#4A4A4A",
+                        highlightthickness=1,
+                        highlightbackground="#6A6A6A",
+                        highlightcolor="#6A6A6A",
+                        padx=8,
+                        pady=2,
+                    )
             else:
-                self.sim_label.config(text="")
+                self.sim_label.config(
+                    text="",
+                    fg=COLORS["text_dim"],
+                    bg=COLORS["bg_panel"],
+                    highlightthickness=0,
+                    padx=0,
+                    pady=0,
+                )
         elif entry:
             self.info_label.config(text="File not found", fg=COLORS["error"])
             self.meta_label.config(text="")
