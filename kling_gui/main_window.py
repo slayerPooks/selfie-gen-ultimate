@@ -48,6 +48,7 @@ COLORS = {
     "bg_hover": "#505055",
     "text_light": "#DCDCDC",
     "text_dim": "#B4B4B4",
+    "text_dark": "#111111",
     "accent_blue": "#6496FF",
     "success": "#64FF64",
     "error": "#FF6464",
@@ -60,8 +61,9 @@ COLORS = {
 
 # Valid image extensions for folder scanning
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
-FONT_FAMILY = "Helvetica" if sys.platform == "darwin" else "Segoe UI"
-EMOJI_FONT_FAMILY = "Apple Color Emoji" if sys.platform == "darwin" else "Segoe UI Emoji"
+IS_MACOS = sys.platform == "darwin"
+FONT_FAMILY = "Helvetica" if IS_MACOS else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if IS_MACOS else "Segoe UI Emoji"
 
 
 UI_CONFIG_DEFAULTS = {
@@ -926,6 +928,15 @@ class KlingGUIWindow:
             foreground=[("selected", COLORS["text_light"])],
         )
 
+        if IS_MACOS:
+            # Ensure native Aqua fallback colors don't produce white-on-white labels.
+            self.root.option_add("*Button.foreground", COLORS["text_dark"])
+            self.root.option_add("*Button.activeForeground", COLORS["text_dark"])
+            self.root.option_add("*Button.disabledForeground", "#8A8A8A")
+            self.root.option_add("*Button.highlightThickness", 0)
+            self.root.option_add("*Button.relief", tk.RAISED)
+            self.root.option_add("*Button.borderWidth", 1)
+
         # Header
         self._setup_header()
 
@@ -1127,10 +1138,60 @@ class KlingGUIWindow:
 
         self._start_autosave_timer()
 
+        if IS_MACOS:
+            self._apply_macos_button_fixes()
+            self.root.after(250, self._apply_macos_button_fixes)
+
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
+
+    def _apply_macos_button_fixes(self):
+        """Normalize tk.Button readability and hit areas on macOS."""
+        if not IS_MACOS:
+            return
+
+        def _walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Button):
+                    try:
+                        bg = str(child.cget("bg")).lower()
+                    except Exception:
+                        bg = ""
+                    try:
+                        fg = str(child.cget("fg")).lower()
+                    except Exception:
+                        fg = ""
+                    try:
+                        active_bg = str(child.cget("activebackground")).lower()
+                    except Exception:
+                        active_bg = ""
+
+                    patch = {
+                        "activeforeground": COLORS["text_dark"],
+                        "disabledforeground": "#8A8A8A",
+                        "highlightthickness": 0,
+                        "bd": 1,
+                        "relief": tk.RAISED,
+                        "cursor": "hand2",
+                    }
+
+                    if fg in ("white", "#fff", "#ffffff", COLORS["text_light"].lower()):
+                        patch["fg"] = COLORS["text_dark"]
+                    if bg in ("", "white", "#fff", "#ffffff", "systembuttonface"):
+                        patch["bg"] = COLORS["bg_input"]
+                    if active_bg in ("", "white", "#fff", "#ffffff", "systembuttonface"):
+                        patch["activebackground"] = COLORS["bg_hover"]
+
+                    try:
+                        child.configure(**patch)
+                    except tk.TclError:
+                        pass
+
+                _walk(child)
+
+        _walk(self.root)
 
     def _on_selfie_send_to_expand(self, paths: List[str], active_path: Optional[str] = None):
         """Handle Step 2 -> Step 2.5 handoff."""
