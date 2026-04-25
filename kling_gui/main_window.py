@@ -20,7 +20,7 @@ from datetime import datetime
 # Import path utilities
 from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir, get_user_data_dir
 
-from .drop_zone import create_dnd_root, HAS_DND
+from .drop_zone import create_dnd_root, HAS_DND, DND_FILES, parse_dnd_paths
 from .log_display import LogDisplay
 from .config_panel import ConfigPanel
 from .queue_manager import QueueManager, QueueItem
@@ -1419,10 +1419,10 @@ class KlingGUIWindow:
             w.config(cursor="hand2")
 
         # Try to bind DnD if available
-        if HAS_DND:
+        if HAS_DND and DND_FILES:
             try:
                 for w in [drop_frame, icon_label, main_label, sub_label, content]:
-                    w.drop_target_register("DND_Files")
+                    w.drop_target_register(DND_FILES)
                     w.dnd_bind("<<DropEnter>>", lambda e: (
                         _set_bg(COLORS.get("drop_valid", "#329632")),
                         status_label.config(text="DROP TO ADD"),
@@ -1432,8 +1432,9 @@ class KlingGUIWindow:
                         status_label.config(text=""),
                     ))
                     w.dnd_bind("<<Drop>>", self._on_drop_zone_drop)
-            except Exception:
-                pass
+            except Exception as exc:
+                status_label.config(text="Drag-and-drop unavailable", fg=COLORS.get("warning", "#FFA500"))
+                self._log(f"Floating drop-zone DnD bind failed: {exc}", "warning")
 
         self._drop_zone_open_guard_until = time.monotonic() + 0.55
         win.protocol("WM_DELETE_WINDOW", self._close_drop_zone)
@@ -1451,17 +1452,15 @@ class KlingGUIWindow:
         data = event.data
         if not data:
             return
-        # Parse dropped file paths (may be space-separated or brace-quoted)
-        files = []
-        if "{" in data:
-            import re
-            files = re.findall(r"\{([^}]+)\}", data)
-        else:
-            files = data.split()
+        splitlist_fn = None
+        try:
+            splitlist_fn = self.root.tk.splitlist
+        except Exception:
+            splitlist_fn = None
+        files = parse_dnd_paths(data, splitlist_fn=splitlist_fn, require_exists=True)
 
         added = 0
         for f in files:
-            f = f.strip()
             if os.path.isfile(f):
                 ext = os.path.splitext(f)[1].lower()
                 if ext in VALID_EXTENSIONS:

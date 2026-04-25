@@ -20,6 +20,9 @@ except ImportError:
     _DND_FILES = None
     _HAS_DND = False
 
+if os.getenv("SELFIEGEN_MAC_DISABLE_DND", "0") == "1":
+    _HAS_DND = False
+
 
 # Color palette
 COLORS = {

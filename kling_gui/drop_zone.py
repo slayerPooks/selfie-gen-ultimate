@@ -15,12 +15,50 @@ try:
 
     HAS_DND = True
 except ImportError:
+    DND_FILES = None
     HAS_DND = False
 
-# TkinterDnD on macOS can cause unreliable primary-click delivery in large Tk UIs.
-# Default to stable Tk on macOS. Allow opt-in via env for troubleshooting.
-if sys.platform == "darwin" and os.getenv("SELFIEGEN_MAC_ENABLE_DND", "0") != "1":
+# Allow explicit runtime opt-out when troubleshooting drag-and-drop.
+if os.getenv("SELFIEGEN_MAC_DISABLE_DND", "0") == "1":
     HAS_DND = False
+
+
+def parse_dnd_paths(data: str, splitlist_fn=None, require_exists: bool = True) -> List[str]:
+    """Parse TkDND payload into normalized file paths."""
+    if not data:
+        return []
+
+    raw_items = []
+    parser = splitlist_fn
+    if parser:
+        try:
+            raw_items = list(parser(data))
+        except Exception:
+            raw_items = []
+
+    if not raw_items:
+        # Fallback parser for plain/brace-quoted payloads.
+        import re
+
+        if "{" in data:
+            brace_items = re.findall(r"\{([^}]+)\}", data)
+            raw_items.extend(brace_items)
+            remaining = re.sub(r"\{[^}]+\}", "", data).strip()
+            if remaining:
+                raw_items.extend(remaining.split())
+        else:
+            raw_items.extend(data.split())
+
+    cleaned = []
+    for item in raw_items:
+        path = str(item).strip().strip('"').strip("'")
+        if not path:
+            continue
+        if require_exists and not os.path.exists(path):
+            continue
+        cleaned.append(path)
+
+    return cleaned
 
 
 def create_dnd_root():
@@ -284,7 +322,12 @@ class DropZone(tk.Frame):
         self.status_label.config(text="")
 
         # Parse dropped files/folders
-        items = self._parse_drop_data(event.data)
+        splitlist_fn = None
+        try:
+            splitlist_fn = self.winfo_toplevel().tk.splitlist
+        except Exception:
+            splitlist_fn = None
+        items = parse_dnd_paths(event.data, splitlist_fn=splitlist_fn, require_exists=True)
 
         # Separate files and folders
         valid_files = []
@@ -328,32 +371,12 @@ class DropZone(tk.Frame):
 
     def _parse_drop_data(self, data: str) -> List[str]:
         """Parse the dropped file data into a list of paths."""
-        files = []
-
-        # Handle different formats
-        # Windows typically gives paths in {} braces if they contain spaces
-        if "{" in data:
-            # Parse {path1} {path2} format
-            import re
-
-            matches = re.findall(r"\{([^}]+)\}", data)
-            files.extend(matches)
-            # Also get unbraced paths
-            remaining = re.sub(r"\{[^}]+\}", "", data).strip()
-            if remaining:
-                files.extend(remaining.split())
-        else:
-            # Simple space-separated paths
-            files = data.split()
-
-        # Clean up paths
-        cleaned = []
-        for f in files:
-            f = f.strip()
-            if f and os.path.exists(f):
-                cleaned.append(f)
-
-        return cleaned
+        splitlist_fn = None
+        try:
+            splitlist_fn = self.winfo_toplevel().tk.splitlist
+        except Exception:
+            splitlist_fn = None
+        return parse_dnd_paths(data, splitlist_fn=splitlist_fn, require_exists=True)
 
     def validate_file(self, file_path: str) -> tuple:
         """
