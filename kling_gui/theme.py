@@ -1,6 +1,8 @@
-"""Shared theme constants for the Kling GUI."""
+"""Shared theme constants and helpers for the Kling GUI."""
 
 import sys
+import time
+from typing import Callable, Dict
 
 
 IS_MACOS = sys.platform == "darwin"
@@ -60,3 +62,28 @@ COLORS = {
 BUTTON_TEXT_COLOR = "#000000" if IS_MACOS else COLORS["text_light"]
 BUTTON_FILLED_TEXT_COLOR = "#000000" if IS_MACOS else COLORS["text_light"]
 BUTTON_DISABLED_TEXT_COLOR = "#666666"
+
+# ttk button style names (applied in main_window style setup)
+TTK_BTN_PRIMARY = "Primary.TButton"
+TTK_BTN_SECONDARY = "Secondary.TButton"
+TTK_BTN_DANGER = "Danger.TButton"
+TTK_BTN_SUCCESS = "Success.TButton"
+TTK_BTN_COMPACT = "Compact.TButton"
+TTK_BTN_TAB_NAV = "TabNav.TButton"
+
+_DEBOUNCE_LAST_CALL: Dict[str, float] = {}
+
+
+def debounce_command(command: Callable[[], None], key: str, interval_ms: int = 180) -> Callable[[], None]:
+    """Wrap a command so rapid repeated clicks invoke it once per interval."""
+    min_interval = max(0.03, float(interval_ms) / 1000.0)
+
+    def _wrapped():
+        now = time.monotonic()
+        last = _DEBOUNCE_LAST_CALL.get(key, 0.0)
+        if now - last < min_interval:
+            return
+        _DEBOUNCE_LAST_CALL[key] = now
+        command()
+
+    return _wrapped

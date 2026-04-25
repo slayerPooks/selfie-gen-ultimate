@@ -1,13 +1,21 @@
 """Image Carousel Widget — unified carousel showing all images with hover preview."""
 
 import tkinter as tk
+from tkinter import ttk
 from tkinter import filedialog
 from typing import Callable, Optional
 import os
 import logging
 import threading
 
-from .theme import COLORS, FONT_FAMILY
+from .theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_TAB_NAV,
+    debounce_command,
+)
 from .image_state import ImageSession
 from .tag_utils import derive_display_tag
 
@@ -85,11 +93,6 @@ def _sim_badge_style(similarity_str) -> Optional[dict]:
 
 logger = logging.getLogger(__name__)
 
-CAROUSEL_BTN_BG = "#F2F2F2"
-CAROUSEL_BTN_FG = "#1A1A1A"
-CAROUSEL_BTN_DISABLED_FG = "#4A4A4A"
-
-
 class ImageCarousel(tk.Frame):
     """Unified carousel showing all images (input + selfie + outpaint) in one stream.
 
@@ -158,79 +161,43 @@ class ImageCarousel(tk.Frame):
         ).pack(side=tk.LEFT)
 
         # Add button (rightmost)
-        add_btn = tk.Button(
+        add_btn = ttk.Button(
             header,
             text="+",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=self._on_add_image,
-            cursor="hand2",
-            relief=tk.FLAT,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_add_image, key="carousel_add"),
             width=2,
-            padx=4,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         add_btn.pack(side=tk.RIGHT)
 
         # Remove button
-        self.remove_btn = tk.Button(
+        self.remove_btn = ttk.Button(
             header,
             text="-",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=self._on_remove_image,
-            cursor="hand2",
-            relief=tk.FLAT,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_remove_image, key="carousel_remove"),
             width=2,
-            padx=4,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
 
         # Compare button
-        self.compare_btn = tk.Button(
+        self.compare_btn = ttk.Button(
             header,
             text="Compare",
-            font=(FONT_FAMILY, 8),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=self._on_compare,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=5,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_compare, key="carousel_compare"),
             state=tk.DISABLED,
         )
         self.compare_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
         # Nav buttons + counter
-        self.next_btn = tk.Button(
+        self.next_btn = ttk.Button(
             header,
             text="\u25B6",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=lambda: self.image_session.navigate(1),
+            style=TTK_BTN_TAB_NAV,
+            command=debounce_command(lambda: self.image_session.navigate(1), key="carousel_next", interval_ms=120),
             width=1,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=5,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         self.next_btn.pack(side=tk.RIGHT, padx=(1, 3))
 
@@ -243,21 +210,12 @@ class ImageCarousel(tk.Frame):
         )
         self.counter_label.pack(side=tk.RIGHT, padx=2)
 
-        self.prev_btn = tk.Button(
+        self.prev_btn = ttk.Button(
             header,
             text="\u25C0",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=lambda: self.image_session.navigate(-1),
+            style=TTK_BTN_TAB_NAV,
+            command=debounce_command(lambda: self.image_session.navigate(-1), key="carousel_prev", interval_ms=120),
             width=1,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=5,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         self.prev_btn.pack(side=tk.RIGHT)
 
@@ -265,37 +223,14 @@ class ImageCarousel(tk.Frame):
         sim_row = tk.Frame(self.panel_frame, bg=COLORS["bg_panel"])
         sim_row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 2))
 
-        self._ref_btn = tk.Button(
+        self._ref_btn = ttk.Button(
             sim_row,
             text="\u2605 Ref",
-            font=(FONT_FAMILY, 7, "bold"),
-            bg=CAROUSEL_BTN_BG,
-            fg=CAROUSEL_BTN_FG,
-            command=self._toggle_sim_ref,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=5,
-            pady=1,
-            activebackground=CAROUSEL_BTN_BG,
-            activeforeground=CAROUSEL_BTN_FG,
-            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._toggle_sim_ref, key="carousel_ref"),
             state=tk.DISABLED,
         )
         self._ref_btn.pack(side=tk.LEFT)
-
-        # Preserve compact carousel controls on macOS while keeping click hardening.
-        for control in (
-            add_btn,
-            self.remove_btn,
-            self.compare_btn,
-            self.prev_btn,
-            self.next_btn,
-            self._ref_btn,
-        ):
-            try:
-                setattr(control, "_macos_compact_click", True)
-            except Exception:
-                pass
 
         self._auto_chk = tk.Checkbutton(
             sim_row,
@@ -405,12 +340,11 @@ class ImageCarousel(tk.Frame):
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
             if is_sim_ref:
-                self._ref_btn.config(text="\u2605 Clear", fg=CAROUSEL_BTN_FG)
+                self._ref_btn.config(text="\u2605 Clear")
             else:
-                self._ref_btn.config(text="\u2605 Ref", fg=CAROUSEL_BTN_FG)
+                self._ref_btn.config(text="\u2605 Ref")
         else:
-            self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref",
-                                 fg=CAROUSEL_BTN_DISABLED_FG)
+            self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")
 
         if n == 0:
             self.counter_label.config(text="")

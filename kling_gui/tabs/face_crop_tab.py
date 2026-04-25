@@ -8,7 +8,16 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..theme import COLORS, FONT_FAMILY
+from ..theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_SUCCESS,
+    TTK_BTN_TAB_NAV,
+    debounce_command,
+)
 from ..image_state import ImageSession
 from path_utils import get_gen_images_folder
 
@@ -263,27 +272,19 @@ class FaceCropTab(tk.Frame):
         )
         path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
 
-        browse_btn = tk.Button(
+        browse_btn = ttk.Button(
             browse_row,
             text="Browse",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 9),
-            relief="flat",
-            cursor="hand2",
-            command=self._browse_image,
+            style=TTK_BTN_SECONDARY,
+            command=debounce_command(self._browse_image, key="facecrop_browse"),
         )
         browse_btn.pack(side=tk.LEFT, padx=(6, 0))
 
-        use_carousel_btn = tk.Button(
+        use_carousel_btn = ttk.Button(
             browse_row,
             text="Use Carousel Image",
-            bg=COLORS["accent_blue"],
-            fg="white",
-            font=(FONT_FAMILY, 9),
-            relief="flat",
-            cursor="hand2",
-            command=self._use_carousel_image,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._use_carousel_image, key="facecrop_use_carousel"),
         )
         use_carousel_btn.pack(side=tk.LEFT, padx=(6, 0))
 
@@ -291,15 +292,11 @@ class FaceCropTab(tk.Frame):
         detect_row = tk.Frame(source_frame, bg=COLORS["bg_panel"])
         detect_row.pack(fill=tk.X, padx=6, pady=(2, 2))
 
-        self._detect_btn = tk.Button(
+        self._detect_btn = ttk.Button(
             detect_row,
             text="Detect Face and Crop",
-            bg=COLORS["btn_green"],
-            fg="white",
-            font=(FONT_FAMILY, 10, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._detect_face,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._detect_face, key="facecrop_detect"),
             state=tk.DISABLED if not HAS_FACE_DEPS else tk.NORMAL,
         )
         self._detect_btn.pack(side=tk.LEFT)
@@ -326,16 +323,12 @@ class FaceCropTab(tk.Frame):
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT)
 
-        tk.Button(
+        ttk.Button(
             slider_row,
             text="-",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 10, "bold"),
-            relief="flat",
-            cursor="hand2",
+            style=TTK_BTN_TAB_NAV,
             width=2,
-            command=lambda: self._adjust_multiplier(-0.1),
+            command=debounce_command(lambda: self._adjust_multiplier(-0.1), key="facecrop_multiplier_down", interval_ms=100),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
         self._slider = tk.Scale(
@@ -355,28 +348,20 @@ class FaceCropTab(tk.Frame):
         )
         self._slider.pack(side=tk.LEFT, padx=(2, 2), fill=tk.X, expand=True)
 
-        tk.Button(
+        ttk.Button(
             slider_row,
             text="+",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 10, "bold"),
-            relief="flat",
-            cursor="hand2",
+            style=TTK_BTN_TAB_NAV,
             width=2,
-            command=lambda: self._adjust_multiplier(0.1),
+            command=debounce_command(lambda: self._adjust_multiplier(0.1), key="facecrop_multiplier_up", interval_ms=100),
         ).pack(side=tk.LEFT)
 
         # "Add to Carousel" button
-        self._add_carousel_btn = tk.Button(
+        self._add_carousel_btn = ttk.Button(
             slider_row,
             text="Add to Carousel",
-            bg=COLORS["btn_green"],
-            fg="white",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._add_crop_to_carousel,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._add_crop_to_carousel, key="facecrop_add_carousel"),
             state=tk.DISABLED,
         )
         self._add_carousel_btn.pack(side=tk.LEFT, padx=(10, 0))
@@ -479,29 +464,19 @@ class FaceCropTab(tk.Frame):
         send_btn_row = tk.Frame(send_lf, bg=COLORS["bg_panel"])
         send_btn_row.pack(fill=tk.X, padx=4, pady=(0, 3))
 
-        self._send_prep_btn = tk.Button(
+        self._send_prep_btn = ttk.Button(
             send_btn_row,
             text="Send to 1 (AI Analysis)",
-            bg=COLORS["accent_blue"],
-            fg="white",
-            disabledforeground="#C8C8C8",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._send_to_prep,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._send_to_prep, key="facecrop_send_prep"),
         )
         self._send_prep_btn.pack(fill=tk.X, pady=(0, 2))
 
-        self._send_selfie_btn = tk.Button(
+        self._send_selfie_btn = ttk.Button(
             send_btn_row,
             text="Send to 2 (Generate Selfie)",
-            bg=COLORS["btn_green"],
-            fg="white",
-            disabledforeground="#C8C8C8",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._send_to_selfie,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._send_to_selfie, key="facecrop_send_selfie"),
         )
         self._send_selfie_btn.pack(fill=tk.X)
 
@@ -543,12 +518,10 @@ class FaceCropTab(tk.Frame):
 
         self._polish_accent = tk.Frame(self._polish_header_row, bg=COLORS["accent_blue"], width=3)
 
-        self._polish_toggle_btn = tk.Button(
+        self._polish_toggle_btn = ttk.Button(
             self._polish_header_row, text="\u25b6  [AI POLISH]",
-            bg=_HEADER_BG_COLLAPSED, fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 10, "bold"), relief="flat", anchor="w",
-            cursor="hand2", command=lambda: self._toggle_section("polish"),
-            activebackground=COLORS["bg_hover"],
+            style=TTK_BTN_TAB_NAV,
+            command=debounce_command(lambda: self._toggle_section("polish"), key="facecrop_toggle_polish", interval_ms=120),
         )
         self._polish_toggle_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
         self._bind_header_hover(self._polish_toggle_btn)
@@ -566,28 +539,19 @@ class FaceCropTab(tk.Frame):
         polish_row = tk.Frame(polish_parent, bg=COLORS["bg_panel"])
         polish_row.pack(fill=tk.X, pady=(2, 4))
 
-        self._polish_btn = tk.Button(
+        self._polish_btn = ttk.Button(
             polish_row,
             text="AI Polish",
-            bg=COLORS["accent_blue"],
-            fg="white",
-            disabledforeground="#C8C8C8",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._polish_crop,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._polish_crop, key="facecrop_polish"),
         )
         self._polish_btn.pack(side=tk.LEFT)
 
-        tk.Button(
+        ttk.Button(
             polish_row,
             text="Edit Prompt",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 8),
-            relief="flat",
-            cursor="hand2",
-            command=self._open_polish_prompt_editor,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._open_polish_prompt_editor, key="facecrop_edit_polish_prompt", interval_ms=120),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
         tk.Label(
@@ -644,12 +608,10 @@ class FaceCropTab(tk.Frame):
 
         self._expand_accent = tk.Frame(self._expand_header_row, bg=COLORS["accent_blue"], width=3)
 
-        self._expand_toggle_btn = tk.Button(
+        self._expand_toggle_btn = ttk.Button(
             self._expand_header_row, text="\u25b6  [GENERATIVE EXPAND]",
-            bg=_HEADER_BG_COLLAPSED, fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 10, "bold"), relief="flat", anchor="w",
-            cursor="hand2", command=lambda: self._toggle_section("expand"),
-            activebackground=COLORS["bg_hover"],
+            style=TTK_BTN_TAB_NAV,
+            command=debounce_command(lambda: self._toggle_section("expand"), key="facecrop_toggle_expand", interval_ms=120),
         )
         self._expand_toggle_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
         self._bind_header_hover(self._expand_toggle_btn)
@@ -667,28 +629,19 @@ class FaceCropTab(tk.Frame):
         btn_row = tk.Frame(expand_parent, bg=COLORS["bg_panel"])
         btn_row.pack(fill=tk.X, pady=(2, 5))
 
-        self._expand_btn = tk.Button(
+        self._expand_btn = ttk.Button(
             btn_row,
             text="Expand Image",
-            bg=COLORS["accent_blue"],
-            fg="white",
-            disabledforeground="#C8C8C8",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._outpaint_image,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._outpaint_image, key="facecrop_expand"),
         )
         self._expand_btn.pack(side=tk.LEFT)
 
-        tk.Button(
+        ttk.Button(
             btn_row,
             text="Edit Prompt",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 8),
-            relief="flat",
-            cursor="hand2",
-            command=self._open_expand_prompt_editor,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._open_expand_prompt_editor, key="facecrop_edit_expand_prompt", interval_ms=120),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
         tk.Radiobutton(
@@ -839,12 +792,10 @@ class FaceCropTab(tk.Frame):
 
         self._upscale_accent = tk.Frame(self._upscale_header_row, bg=COLORS["accent_blue"], width=3)
 
-        self._upscale_toggle_btn = tk.Button(
+        self._upscale_toggle_btn = ttk.Button(
             self._upscale_header_row, text="\u25b6  [UPSCALING]",
-            bg=_HEADER_BG_COLLAPSED, fg=COLORS["text_light"],
-            font=(FONT_FAMILY, 10, "bold"), relief="flat", anchor="w",
-            cursor="hand2", command=lambda: self._toggle_section("upscale"),
-            activebackground=COLORS["bg_hover"],
+            style=TTK_BTN_TAB_NAV,
+            command=debounce_command(lambda: self._toggle_section("upscale"), key="facecrop_toggle_upscale", interval_ms=120),
         )
         self._upscale_toggle_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
         self._bind_header_hover(self._upscale_toggle_btn)
@@ -861,16 +812,11 @@ class FaceCropTab(tk.Frame):
         upscale_row = tk.Frame(upscale_parent, bg=COLORS["bg_panel"])
         upscale_row.pack(fill=tk.X, pady=(2, 4))
 
-        self._upscale_btn = tk.Button(
+        self._upscale_btn = ttk.Button(
             upscale_row,
             text="Upscale",
-            bg=COLORS["accent_blue"],
-            fg="white",
-            disabledforeground="#C8C8C8",
-            font=(FONT_FAMILY, 9, "bold"),
-            relief="flat",
-            cursor="hand2",
-            command=self._upscale_image,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._upscale_image, key="facecrop_upscale"),
         )
         self._upscale_btn.pack(side=tk.LEFT)
 
@@ -958,6 +904,8 @@ class FaceCropTab(tk.Frame):
     def _bind_header_hover(self, btn):
         """Add hover highlight to a collapsed accordion header button."""
         _HOVER_MID = "#484850"
+        if isinstance(btn, ttk.Button):
+            return
 
         def on_enter(e):
             cur_bg = btn.cget("bg")
@@ -1018,19 +966,13 @@ class FaceCropTab(tk.Frame):
             if sec in self._expanded_sections:
                 body.pack(fill=tk.X, padx=0, pady=(0, 3))
                 accent.pack(side=tk.LEFT, fill=tk.Y, before=btn)
-                btn.config(
-                    text=btn.cget("text").replace("\u25b6", "\u25bc"),
-                    bg=_HEADER_BG_OPEN,
-                )
+                btn.config(text=btn.cget("text").replace("\u25b6", "\u25bc"))
                 header_row.config(bg=_HEADER_BG_OPEN)
             else:
                 body.pack_forget()
                 # Keep accent bar visible when collapsed
                 accent.pack(side=tk.LEFT, fill=tk.Y, before=btn)
-                btn.config(
-                    text=btn.cget("text").replace("\u25bc", "\u25b6"),
-                    bg=_HEADER_BG_COLLAPSED,
-                )
+                btn.config(text=btn.cget("text").replace("\u25bc", "\u25b6"))
                 header_row.config(bg=_HEADER_BG_COLLAPSED)
 
     # ── Outpaint expand mode switching ────────────────────────────────

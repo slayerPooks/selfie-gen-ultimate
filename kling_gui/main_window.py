@@ -9,7 +9,6 @@ import os
 import sys
 import logging
 import re
-import time
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -28,6 +27,15 @@ from .image_state import ImageSession
 from .carousel_widget import ImageCarousel
 from .compare_panel import ComparePanel
 from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
+from .theme import (
+    TTK_BTN_COMPACT,
+    TTK_BTN_DANGER,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_SUCCESS,
+    TTK_BTN_TAB_NAV,
+    debounce_command,
+)
 
 # Try to import the generator
 try:
@@ -588,11 +596,6 @@ class KlingGUIWindow:
         self.root = create_dnd_root()
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
-        self._macos_click_bindtag = "MacClickFix"
-        self._macos_patched_button_ids = set()
-        self._macos_button_fix_job = None
-        self._macos_control_invoke_ts = {}
-        self._macos_pressed_control = None
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -925,8 +928,8 @@ class KlingGUIWindow:
             "TNotebook.Tab",
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
-            padding=[8, 3],
-            font=(FONT_FAMILY, 8),
+            padding=[14, 6],
+            font=(FONT_FAMILY, 10, "bold"),
         )
         style.map(
             "TNotebook.Tab",
@@ -934,14 +937,85 @@ class KlingGUIWindow:
             foreground=[("selected", COLORS["text_light"])],
         )
 
-        if IS_MACOS:
-            # Ensure native Aqua fallback colors don't produce white-on-white labels.
-            self.root.option_add("*Button.foreground", COLORS["text_dark"])
-            self.root.option_add("*Button.activeForeground", COLORS["text_dark"])
-            self.root.option_add("*Button.disabledForeground", "#8A8A8A")
-            self.root.option_add("*Button.highlightThickness", 0)
-            self.root.option_add("*Button.relief", tk.RAISED)
-            self.root.option_add("*Button.borderWidth", 1)
+        # Cross-platform dark ttk button styles.
+        style.configure(
+            TTK_BTN_SECONDARY,
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground=COLORS["text_light"],
+            background=COLORS["bg_input"],
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            TTK_BTN_SECONDARY,
+            background=[("active", COLORS["bg_hover"]), ("pressed", COLORS["bg_main"]), ("disabled", "#3A3A3A")],
+            foreground=[("disabled", "#8C8C8C")],
+        )
+        style.configure(
+            TTK_BTN_PRIMARY,
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground="white",
+            background=COLORS["accent_blue"],
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            TTK_BTN_PRIMARY,
+            background=[("active", "#7AA7FF"), ("pressed", "#4A79D8"), ("disabled", "#4B4B4B")],
+            foreground=[("disabled", "#9D9D9D")],
+        )
+        style.configure(
+            TTK_BTN_SUCCESS,
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground="white",
+            background=COLORS["btn_green"],
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            TTK_BTN_SUCCESS,
+            background=[("active", "#3CAD3C"), ("pressed", "#267826"), ("disabled", "#3E3E3E")],
+            foreground=[("disabled", "#9D9D9D")],
+        )
+        style.configure(
+            TTK_BTN_DANGER,
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground="white",
+            background=COLORS["btn_red"],
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            TTK_BTN_DANGER,
+            background=[("active", "#C24444"), ("pressed", "#862525"), ("disabled", "#3E3E3E")],
+            foreground=[("disabled", "#9D9D9D")],
+        )
+        style.configure(
+            TTK_BTN_COMPACT,
+            font=(FONT_FAMILY, 8, "bold"),
+            foreground=COLORS["text_light"],
+            background=COLORS["bg_input"],
+            borderwidth=1,
+            padding=(8, 4),
+        )
+        style.map(
+            TTK_BTN_COMPACT,
+            background=[("active", COLORS["bg_hover"]), ("pressed", COLORS["bg_main"]), ("disabled", "#3A3A3A")],
+            foreground=[("disabled", "#8C8C8C")],
+        )
+        style.configure(
+            TTK_BTN_TAB_NAV,
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground=COLORS["text_light"],
+            background=COLORS["bg_input"],
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            TTK_BTN_TAB_NAV,
+            background=[("active", COLORS["bg_hover"]), ("pressed", COLORS["bg_main"]), ("disabled", "#3A3A3A")],
+            foreground=[("disabled", "#8C8C8C")],
+        )
 
         # Header
         self._setup_header()
@@ -1144,238 +1218,14 @@ class KlingGUIWindow:
 
         self._start_autosave_timer()
 
-        if IS_MACOS:
-            self._configure_macos_click_bindtag()
-            self._schedule_macos_button_fix_pulses()
-            self.root.bind_all("<Map>", self._on_macos_widget_mapped, add="+")
-
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
 
-    @staticmethod
-    def _is_macos_system_or_light_color(value: str) -> bool:
-        """Return True when Tk resolved a button color to light/system defaults."""
-        color = str(value).strip().lower()
-        if not color:
-            return True
-        if color in {
-            "white",
-            "#fff",
-            "#ffffff",
-            "systembuttonface",
-            "systemwindowbackgroundcolor",
-            "systemwindow",
-        }:
-            return True
-        return color.startswith("system")
-
-    @staticmethod
-    def _safe_int(value, fallback: int) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return fallback
-
-    def _schedule_macos_button_fix_pulses(self):
-        """Apply button normalization repeatedly during startup."""
-        if not IS_MACOS:
-            return
-        # First pass fast; follow-up passes catch late-created widgets.
-        self.root.after(0, lambda: self._apply_macos_button_fixes(force=False))
-        for delay in (140, 320, 700, 1300):
-            self.root.after(delay, lambda: self._apply_macos_button_fixes(force=True))
-
-    def _on_macos_widget_mapped(self, event):
-        """Re-apply button normalization when new widgets are mapped."""
-        if not IS_MACOS:
-            return
-        widget = getattr(event, "widget", None)
-        if widget is None:
-            return
-        if not isinstance(widget, (tk.Button, tk.Toplevel, tk.Frame, tk.LabelFrame)):
-            return
-        if self._macos_button_fix_job is not None:
-            try:
-                self.root.after_cancel(self._macos_button_fix_job)
-            except Exception:
-                pass
-        self._macos_button_fix_job = self.root.after(60, self._run_deferred_macos_button_fix)
-
-    def _run_deferred_macos_button_fix(self):
-        """Debounced map-event callback for macOS button normalization."""
-        self._macos_button_fix_job = None
-        self._apply_macos_button_fixes(force=True)
-
-    def _configure_macos_click_bindtag(self):
-        """Configure a dedicated class bindtag for macOS clickable controls."""
-        if not IS_MACOS:
-            return
-        self.root.bind_class(self._macos_click_bindtag, "<ButtonPress-1>", self._on_macos_button_press, add=False)
-        self.root.bind_class(
-            self._macos_click_bindtag, "<ButtonRelease-1>", self._on_macos_button_release, add=False
-        )
-        # Some Tk/mac builds dispatch <Button-1> more consistently than split press/release.
-        self.root.bind_class(self._macos_click_bindtag, "<Button-1>", self._on_macos_button_release, add=False)
-        self.root.bind_all("<ButtonRelease-1>", self._on_macos_global_button_release, add="+")
-
-    @staticmethod
-    def _is_macos_clickable_control(widget) -> bool:
-        """Return True for Tk clickable controls that need macOS click normalization."""
-        return isinstance(widget, (tk.Button, tk.Checkbutton, tk.Radiobutton, tk.Menubutton))
-
-    def _resolve_macos_clickable_control(self, widget):
-        """Walk up parent chain until a clickable control is found."""
-        current = widget
-        while current is not None and not self._is_macos_clickable_control(current):
-            current = getattr(current, "master", None)
-        return current
-
-    @staticmethod
-    def _apply_widget_patch(widget, patch: dict):
-        """Apply patch options one by one so unsupported options don't cancel all updates."""
-        for key, value in patch.items():
-            try:
-                widget.configure(**{key: value})
-            except tk.TclError:
-                continue
-
-    def _invoke_macos_control(self, widget) -> str:
-        """Invoke clickable control once, suppressing duplicate press/release triggers."""
-        try:
-            state = str(widget.cget("state")).lower()
-        except Exception:
-            state = "normal"
-        if state in {"disabled"}:
-            return "break"
-        now = time.monotonic()
-        widget_id = id(widget)
-        last_ts = self._macos_control_invoke_ts.get(widget_id, 0.0)
-        if now - last_ts < 0.04:
-            return "break"
-        self._macos_control_invoke_ts[widget_id] = now
-        try:
-            widget.invoke()
-        except Exception:
-            return "break"
-        return "break"
-
-    def _on_macos_button_press(self, event):
-        """Track the pressed control; release handler performs deterministic invoke."""
-        widget = self._resolve_macos_clickable_control(getattr(event, "widget", None))
-        if widget is None:
-            return None
-        self._macos_pressed_control = widget
-        return "break"
-
-    def _on_macos_button_release(self, event):
-        """Invoke tracked control on release; fallback to resolved control."""
-        widget = self._resolve_macos_clickable_control(getattr(event, "widget", None))
-        pressed = self._macos_pressed_control
-        self._macos_pressed_control = None
-
-        if pressed is not None:
-            if widget is None or widget is pressed:
-                return self._invoke_macos_control(pressed)
-            # Pointer left control before release; treat as canceled click.
-            return "break"
-
-        if widget is None:
-            return None
-        return self._invoke_macos_control(widget)
-
-    def _on_macos_global_button_release(self, event):
-        """Global fallback for releases that bypass the control's own bindtags."""
-        if not IS_MACOS:
-            return None
-        pressed = self._macos_pressed_control
-        if pressed is None:
-            return None
-
-        target = self.root.winfo_containing(getattr(event, "x_root", -1), getattr(event, "y_root", -1))
-        resolved_target = self._resolve_macos_clickable_control(target)
-        if resolved_target is not pressed:
-            self._macos_pressed_control = None
-            return None
-        self._macos_pressed_control = None
-        return self._invoke_macos_control(pressed)
-
-    def _apply_macos_button_fixes(self, force: bool = False):
-        """Normalize tk.Button readability and hit areas on macOS."""
-        if not IS_MACOS:
-            return
-
-        def _walk(widget):
-            for child in widget.winfo_children():
-                if self._is_macos_clickable_control(child):
-                    button_id = id(child)
-                    if not force and button_id in self._macos_patched_button_ids:
-                        _walk(child)
-                        continue
-                    try:
-                        bg = str(child.cget("bg")).lower()
-                    except Exception:
-                        bg = ""
-                    try:
-                        fg = str(child.cget("fg")).lower()
-                    except Exception:
-                        fg = ""
-                    try:
-                        active_bg = str(child.cget("activebackground")).lower()
-                    except Exception:
-                        active_bg = ""
-                    try:
-                        padx = self._safe_int(child.cget("padx"), 6)
-                    except Exception:
-                        padx = 6
-                    try:
-                        pady = self._safe_int(child.cget("pady"), 2)
-                    except Exception:
-                        pady = 2
-                    is_compact = bool(getattr(child, "_macos_compact_click", False))
-
-                    patch = {
-                        "fg": COLORS["text_dark"],
-                        "activeforeground": COLORS["text_dark"],
-                        "disabledforeground": "#666666",
-                        "highlightthickness": 0,
-                        "bd": 1,
-                        "relief": tk.RAISED,
-                        "overrelief": tk.RAISED,
-                        "cursor": "hand2",
-                    }
-
-                    if fg in ("white", "#fff", "#ffffff", COLORS["text_light"].lower()) or self._is_macos_system_or_light_color(fg):
-                        patch["fg"] = COLORS["text_dark"]
-                    if self._is_macos_system_or_light_color(bg):
-                        patch["bg"] = COLORS["bg_input"]
-                    if self._is_macos_system_or_light_color(active_bg):
-                        patch["activebackground"] = COLORS["bg_hover"]
-                    min_padx = 4 if is_compact else 8
-                    min_pady = 1 if is_compact else 3
-                    if padx < min_padx:
-                        patch["padx"] = min_padx
-                    if pady < min_pady:
-                        patch["pady"] = min_pady
-                    if isinstance(child, (tk.Checkbutton, tk.Radiobutton)):
-                        patch["selectcolor"] = COLORS["bg_input"]
-
-                    try:
-                        self._apply_widget_patch(child, patch)
-                        self._macos_patched_button_ids.add(button_id)
-                    except tk.TclError:
-                        pass
-                    # Ensure mac click handler bindtag runs before Tk's default class handlers.
-                    try:
-                        current_tags = child.bindtags()
-                        if self._macos_click_bindtag not in current_tags:
-                            child.bindtags((self._macos_click_bindtag,) + current_tags)
-                    except tk.TclError:
-                        pass
-                _walk(child)
-
-        _walk(self.root)
+    def _dbcmd(self, key: str, command, interval_ms: int = 180):
+        """Return a command wrapped with click debounce protection."""
+        return debounce_command(command=command, key=key, interval_ms=interval_ms)
 
     def _on_selfie_send_to_expand(self, paths: List[str], active_path: Optional[str] = None):
         """Handle Step 2 -> Step 2.5 handoff."""
@@ -1392,8 +1242,6 @@ class KlingGUIWindow:
 
     def _on_tab_changed(self, event=None):
         """Swap right pane content based on the active tab."""
-        if IS_MACOS:
-            self._apply_macos_button_fixes(force=True)
         try:
             idx = self.notebook.index(self.notebook.select())
         except Exception:
@@ -2124,78 +1972,46 @@ class KlingGUIWindow:
         title.pack(side=tk.LEFT, padx=10, pady=6)
 
         # Session management buttons
-        sessions_btn = tk.Button(
+        sessions_btn = ttk.Button(
             header,
             text="Sessions",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_panel"],
-            activeforeground=COLORS["text_light"],
-            relief="flat",
-            padx=8, pady=2,
-            command=self._on_open_sessions,
+            style=TTK_BTN_COMPACT,
+            command=self._dbcmd("header_sessions", self._on_open_sessions),
         )
         sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        load_session_btn = tk.Button(
+        load_session_btn = ttk.Button(
             header,
             text="Load Session",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            activebackground="#5080DD",
-            activeforeground="white",
-            relief="flat",
-            padx=8, pady=2,
-            command=self._on_open_sessions,
+            style=TTK_BTN_PRIMARY,
+            command=self._dbcmd("header_load_session", self._on_open_sessions),
         )
         load_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        save_session_btn = tk.Button(
+        save_session_btn = ttk.Button(
             header,
             text="Save Session",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_green"],
-            fg="white",
-            activebackground="#287828",
-            activeforeground="white",
-            relief="flat",
-            padx=8, pady=2,
-            command=self._on_save_session,
+            style=TTK_BTN_SUCCESS,
+            command=self._dbcmd("header_save_session", self._on_save_session),
         )
         save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # "Add Image" button — browse and add to carousel
-        add_image_btn = tk.Button(
+        add_image_btn = ttk.Button(
             header,
             text="Add Image",
-            font=(FONT_FAMILY, 8, "bold"),
-            bg=COLORS["btn_green"],
-            fg="white",
-            activebackground="#287828",
-            activeforeground="white",
-            relief="flat",
-            padx=8, pady=2,
-            cursor="hand2",
-            command=self._browse_and_add_images,
+            style=TTK_BTN_SUCCESS,
+            command=self._dbcmd("header_add_image", self._browse_and_add_images),
         )
         add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # Floating drop zone toggle
         self._drop_zone_window = None
-        drop_zone_btn = tk.Button(
+        drop_zone_btn = ttk.Button(
             header,
             text="\u25CE",  # ◎ target icon
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_panel"],
-            activeforeground=COLORS["text_light"],
-            relief="flat",
-            padx=4, pady=0,
-            cursor="hand2",
-            command=self._toggle_drop_zone,
+            style=TTK_BTN_COMPACT,
+            command=self._dbcmd("header_toggle_drop_zone", self._toggle_drop_zone),
         )
         drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 3), pady=4)
 
@@ -2321,47 +2137,23 @@ class KlingGUIWindow:
         btn_frame = tk.Frame(header, bg=COLORS["bg_panel"])
         btn_frame.pack(side=tk.RIGHT)
 
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Open File",
-            command=self._open_selected_file,
-            font=(FONT_FAMILY, 7),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            activeforeground=COLORS["text_light"],
-            relief=tk.FLAT,
-            borderwidth=0,
-            padx=8,
-            pady=2,
+            style=TTK_BTN_COMPACT,
+            command=self._dbcmd("history_open_file", self._open_selected_file),
         ).pack(side=tk.LEFT, padx=2)
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Open Folder",
-            command=self._open_selected_folder,
-            font=(FONT_FAMILY, 7),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            activeforeground=COLORS["text_light"],
-            relief=tk.FLAT,
-            borderwidth=0,
-            padx=8,
-            pady=2,
+            style=TTK_BTN_COMPACT,
+            command=self._dbcmd("history_open_folder", self._open_selected_folder),
         ).pack(side=tk.LEFT, padx=2)
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Refresh",
-            command=self._refresh_history_view,
-            font=(FONT_FAMILY, 7),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            activeforeground=COLORS["text_light"],
-            relief=tk.FLAT,
-            borderwidth=0,
-            padx=8,
-            pady=2,
+            style=TTK_BTN_COMPACT,
+            command=self._dbcmd("history_refresh", self._refresh_history_view),
         ).pack(side=tk.LEFT, padx=2)
 
         columns = ("time", "source", "output", "status")
@@ -2399,13 +2191,11 @@ class KlingGUIWindow:
 
         # Left side: Add file button (fallback if DnD unavailable)
         if not HAS_DND:
-            add_btn = tk.Button(
+            add_btn = ttk.Button(
                 control_frame,
                 text="📁 Add...",
-                font=(FONT_FAMILY, 10),
-                bg=COLORS["btn_green"],
-                fg="white",
-                command=self._browse_files,
+                style=TTK_BTN_SUCCESS,
+                command=self._dbcmd("controls_add_files", self._browse_files),
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
@@ -2432,40 +2222,35 @@ class KlingGUIWindow:
         ).pack(side=tk.LEFT)
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
-        _btn_kwargs = dict(
-            font=(FONT_FAMILY, 9), padx=12, pady=3,
-            relief=tk.FLAT, borderwidth=0,
-            activeforeground="white",
-        )
-        self.close_btn = tk.Button(
-            control_frame, text="Close",
-            bg=COLORS["btn_red"], fg="white",
-            activebackground=COLORS["btn_red"],
-            command=self._on_close, **_btn_kwargs,
+        self.close_btn = ttk.Button(
+            control_frame,
+            text="Close",
+            style=TTK_BTN_DANGER,
+            command=self._dbcmd("controls_close", self._on_close),
         )
         self.close_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.clear_btn = tk.Button(
-            control_frame, text="Clear",
-            bg=COLORS["bg_input"], fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            command=self._clear_queue, **_btn_kwargs,
+        self.clear_btn = ttk.Button(
+            control_frame,
+            text="Clear",
+            style=TTK_BTN_SECONDARY,
+            command=self._dbcmd("controls_clear", self._clear_queue),
         )
         self.clear_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.retry_btn = tk.Button(
-            control_frame, text="Retry Failed",
-            bg=COLORS["bg_input"], fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            command=self._retry_failed, **_btn_kwargs,
+        self.retry_btn = ttk.Button(
+            control_frame,
+            text="Retry Failed",
+            style=TTK_BTN_SECONDARY,
+            command=self._dbcmd("controls_retry_failed", self._retry_failed),
         )
         self.retry_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.pause_btn = tk.Button(
-            control_frame, text="Pause",
-            bg=COLORS["bg_input"], fg=COLORS["text_light"],
-            activebackground=COLORS["bg_main"],
-            command=self._toggle_pause, **_btn_kwargs,
+        self.pause_btn = ttk.Button(
+            control_frame,
+            text="Pause",
+            style=TTK_BTN_TAB_NAV,
+            command=self._dbcmd("controls_pause", self._toggle_pause),
         )
         self.pause_btn.pack(side=tk.RIGHT, padx=4)
 

@@ -5,7 +5,16 @@ from tkinter import ttk
 import threading
 from typing import Callable, Optional
 
-from ..theme import COLORS, FONT_FAMILY
+from ..theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_DANGER,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_SUCCESS,
+    debounce_command,
+)
 from ..image_state import ImageSession
 
 class PrepTab(tk.Frame):
@@ -128,17 +137,11 @@ class PrepTab(tk.Frame):
             self.model_combo.current(0)
         self.model_combo.pack(side=tk.LEFT, padx=(5, 0))
 
-        self.remove_model_btn = tk.Button(
+        self.remove_model_btn = ttk.Button(
             model_frame,
             text="Remove",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_remove_model,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=6,
-            pady=1,
+            style=TTK_BTN_DANGER,
+            command=debounce_command(self._on_remove_model, key="prep_remove_model"),
         )
         self.remove_model_btn.pack(side=tk.LEFT, padx=(5, 0))
 
@@ -172,17 +175,11 @@ class PrepTab(tk.Frame):
             "<FocusIn>", self._on_custom_entry_focus
         )
 
-        self.add_model_btn = tk.Button(
+        self.add_model_btn = ttk.Button(
             custom_frame,
             text="Add",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg=self.PRIMARY_TEXT_COLOR,
-            command=self._on_add_model,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_add_model, key="prep_add_model"),
         )
         self.add_model_btn.pack(side=tk.LEFT, padx=(5, 0))
 
@@ -229,46 +226,28 @@ class PrepTab(tk.Frame):
         prompt_actions = tk.Frame(self, bg=COLORS["bg_panel"])
         prompt_actions.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-        self.edit_prompt_btn = tk.Button(
+        self.edit_prompt_btn = ttk.Button(
             prompt_actions,
             text="Edit Prompt",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_edit_system_prompt,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_edit_system_prompt, key="prep_edit_prompt"),
         )
         self.edit_prompt_btn.pack(side=tk.LEFT)
 
-        self.save_prompt_btn = tk.Button(
+        self.save_prompt_btn = ttk.Button(
             prompt_actions,
             text="Save Prompt",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg=self.PRIMARY_TEXT_COLOR,
-            command=self._on_save_system_prompt,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_save_system_prompt, key="prep_save_prompt"),
             state=tk.DISABLED,
         )
         self.save_prompt_btn.pack(side=tk.LEFT, padx=(5, 0))
 
-        self.reset_prompt_btn = tk.Button(
+        self.reset_prompt_btn = ttk.Button(
             prompt_actions,
             text="Reset Prompt",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_reset_system_prompt,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
+            style=TTK_BTN_DANGER,
+            command=debounce_command(self._on_reset_system_prompt, key="prep_reset_prompt"),
         )
         self.reset_prompt_btn.pack(side=tk.LEFT)
 
@@ -276,17 +255,11 @@ class PrepTab(tk.Frame):
         btn_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.analyze_btn = tk.Button(
+        self.analyze_btn = ttk.Button(
             btn_frame,
             text="Analyze Image",
-            font=(FONT_FAMILY, 11, "bold"),
-            bg=COLORS["accent_blue"],
-            fg=self.PRIMARY_TEXT_COLOR,
-            command=self._on_analyze,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=20,
-            pady=6,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_analyze, key="prep_analyze"),
         )
         self.analyze_btn.pack(anchor="center")
 
@@ -303,18 +276,11 @@ class PrepTab(tk.Frame):
         write_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         write_frame.pack(fill=tk.X, padx=10, pady=(0, 10), side=tk.BOTTOM)
 
-        self.write_btn = tk.Button(
+        self.write_btn = ttk.Button(
             write_frame,
             text="Send to Selfie Gen \u2192 Custom JSON",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["btn_green"],
-            fg="white",
-            disabledforeground="#8FBC8F",
-            command=self._on_send_to_step2,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
-            pady=3,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_send_to_step2, key="prep_send_step2"),
             state=tk.DISABLED,
         )
         self.write_btn.pack(anchor="center")

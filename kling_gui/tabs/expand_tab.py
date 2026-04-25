@@ -10,7 +10,14 @@ from typing import Callable, List, Optional
 from path_utils import get_gen_images_folder
 
 from ..image_state import ImageSession, SIMILARITY_PASS_THRESHOLD, parse_similarity_score
-from ..theme import COLORS, FONT_FAMILY
+from ..theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SUCCESS,
+    debounce_command,
+)
 
 
 class ExpandTab(tk.Frame):
@@ -93,38 +100,23 @@ class ExpandTab(tk.Frame):
 
         candidate_actions = tk.Frame(self, bg=COLORS["bg_panel"])
         candidate_actions.pack(fill=tk.X, padx=10, pady=(0, 4))
-        tk.Button(
+        ttk.Button(
             candidate_actions,
             text="Refresh Selfies",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=lambda: self.refresh_candidates(select_all_default=True),
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(lambda: self.refresh_candidates(select_all_default=True), key="expand_refresh_candidates"),
         ).pack(side=tk.LEFT)
-        tk.Button(
+        ttk.Button(
             candidate_actions,
             text="Select All",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._select_all_candidates,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._select_all_candidates, key="expand_select_all"),
         ).pack(side=tk.LEFT, padx=(5, 0))
-        tk.Button(
+        ttk.Button(
             candidate_actions,
             text="Select Passing",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._select_passing_candidates,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=8,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._select_passing_candidates, key="expand_select_passing"),
         ).pack(side=tk.LEFT, padx=(5, 0))
         self._candidate_meta = tk.Label(
             candidate_actions,
@@ -268,17 +260,11 @@ class ExpandTab(tk.Frame):
 
         run_frame = tk.Frame(self, bg=COLORS["bg_panel"])
         run_frame.pack(fill=tk.X, padx=10, pady=(4, 4))
-        self._expand_btn = tk.Button(
+        self._expand_btn = ttk.Button(
             run_frame,
             text="Expand Selected",
-            font=(FONT_FAMILY, 10, "bold"),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            command=self._on_expand_selected,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=16,
-            pady=5,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_expand_selected, key="expand_run"),
         )
         self._expand_btn.pack(side=tk.LEFT)
         self._status_label = tk.Label(
@@ -330,17 +316,11 @@ class ExpandTab(tk.Frame):
             activeforeground=COLORS["text_light"],
             font=(FONT_FAMILY, 8),
         ).pack(side=tk.LEFT)
-        self._send_btn = tk.Button(
+        self._send_btn = ttk.Button(
             send_row,
             text="Send Selected Expanded to 3 (Video)",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["btn_green"],
-            fg="white",
-            command=self._on_send_to_video_clicked,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
-            pady=4,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_send_to_video_clicked, key="expand_send_video"),
         )
         self._send_btn.pack(side=tk.RIGHT)
 

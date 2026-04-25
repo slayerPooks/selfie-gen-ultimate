@@ -11,7 +11,16 @@ import json
 import re
 from typing import Callable, Dict, List, Optional
 
-from ..theme import COLORS, FONT_FAMILY
+from ..theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_DANGER,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_SUCCESS,
+    debounce_command,
+)
 from ..image_state import ImageSession
 from path_utils import get_gen_images_folder
 
@@ -256,44 +265,26 @@ class SelfieTab(tk.Frame):
 
         template_actions = tk.Frame(self._customized_frame, bg=COLORS["bg_panel"])
         template_actions.pack(fill=tk.X, padx=4, pady=(0, 2))
-        self.edit_template_btn = tk.Button(
+        self.edit_template_btn = ttk.Button(
             template_actions,
             text="Edit Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_edit_prompt_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_edit_prompt_template, key="selfie_edit_template"),
         )
         self.edit_template_btn.pack(side=tk.LEFT)
-        self.save_template_btn = tk.Button(
+        self.save_template_btn = ttk.Button(
             template_actions,
             text="Save Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            command=self._on_save_prompt_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_save_prompt_template, key="selfie_save_template"),
             state=tk.DISABLED,
         )
         self.save_template_btn.pack(side=tk.LEFT, padx=(5, 0))
-        self.reset_template_btn = tk.Button(
+        self.reset_template_btn = ttk.Button(
             template_actions,
             text="Reset Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_reset_prompt_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_DANGER,
+            command=debounce_command(self._on_reset_prompt_template, key="selfie_reset_template"),
         )
         self.reset_template_btn.pack(side=tk.LEFT, padx=(5, 0))
 
@@ -338,44 +329,26 @@ class SelfieTab(tk.Frame):
 
         wildcard_actions = tk.Frame(self._wildcard_frame, bg=COLORS["bg_panel"])
         wildcard_actions.pack(fill=tk.X, padx=4, pady=(0, 3))
-        self._edit_wildcard_btn = tk.Button(
+        self._edit_wildcard_btn = ttk.Button(
             wildcard_actions,
             text="Edit Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_edit_wildcard_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_edit_wildcard_template, key="selfie_edit_wildcard"),
         )
         self._edit_wildcard_btn.pack(side=tk.LEFT)
-        self._save_wildcard_btn = tk.Button(
+        self._save_wildcard_btn = ttk.Button(
             wildcard_actions,
             text="Save Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            command=self._on_save_wildcard_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_save_wildcard_template, key="selfie_save_wildcard"),
             state=tk.DISABLED,
         )
         self._save_wildcard_btn.pack(side=tk.LEFT, padx=(5, 0))
-        tk.Button(
+        ttk.Button(
             wildcard_actions,
             text="Reset Template",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["btn_red"],
-            fg="white",
-            command=self._on_reset_wildcard_template,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=7,
-            pady=1,
+            style=TTK_BTN_DANGER,
+            command=debounce_command(self._on_reset_wildcard_template, key="selfie_reset_wildcard"),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
         # Apply initial prompt mode visibility
@@ -632,16 +605,11 @@ class SelfieTab(tk.Frame):
             relief=tk.FLAT,
         )
         self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        self.browse_btn = tk.Button(
+        self.browse_btn = ttk.Button(
             self.output_path_row,
             text="Browse",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._browse_output_folder,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
+            style=TTK_BTN_SECONDARY,
+            command=debounce_command(self._browse_output_folder, key="selfie_browse_output"),
         )
         self.browse_btn.pack(side=tk.LEFT)
         self._update_output_entry_state()
@@ -649,72 +617,46 @@ class SelfieTab(tk.Frame):
         # Action buttons (btn_frame was packed at top of _build_ui)
         btn_frame = self._btn_frame
 
-        self.generate_btn = tk.Button(
+        self.generate_btn = ttk.Button(
             btn_frame,
             text="Generate Selfie",
-            font=(FONT_FAMILY, 11, "bold"),
-            bg=COLORS["btn_green"],
-            fg="white",
-            command=self._on_generate,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=20,
-            pady=6,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_generate, key="selfie_generate"),
         )
         self.generate_btn.pack(side=tk.LEFT)
 
-        self.save_as_btn = tk.Button(
+        self.save_as_btn = ttk.Button(
             btn_frame,
             text="Save As...",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["accent_blue"],
-            fg="white",
-            command=self._on_save_as,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_save_as, key="selfie_save_as"),
             state=tk.DISABLED,
         )
         self.save_as_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.open_file_btn = tk.Button(
+        self.open_file_btn = ttk.Button(
             btn_frame,
             text="Open Image",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_open_result_file,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
+            style=TTK_BTN_SECONDARY,
+            command=debounce_command(self._on_open_result_file, key="selfie_open_file"),
             state=tk.DISABLED,
         )
         self.open_file_btn.pack(side=tk.LEFT, padx=(6, 0))
 
-        self.open_folder_btn = tk.Button(
+        self.open_folder_btn = ttk.Button(
             btn_frame,
             text="Open Folder",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
-            command=self._on_open_result_folder,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
+            style=TTK_BTN_SECONDARY,
+            command=debounce_command(self._on_open_result_folder, key="selfie_open_folder"),
             state=tk.DISABLED,
         )
         self.open_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
-        self.send_expand_btn = tk.Button(
+        self.send_expand_btn = ttk.Button(
             btn_frame,
             text="Send to 2.5 Expand",
-            font=(FONT_FAMILY, 9),
-            bg=COLORS["btn_green"],
-            fg="white",
-            command=self._on_send_to_expand,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_send_to_expand, key="selfie_send_expand"),
             state=tk.DISABLED,
         )
         self.send_expand_btn.pack(side=tk.LEFT, padx=(6, 0))
@@ -733,42 +675,27 @@ class SelfieTab(tk.Frame):
         self._cancel_bar = tk.Frame(self, bg=COLORS["bg_panel"])
         # Not packed initially — shown in _set_busy(True)
 
-        self._skip_btn = tk.Button(
+        self._skip_btn = ttk.Button(
             self._cancel_bar,
             text="Skip Model",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["warning"],
-            fg="white",
-            relief=tk.FLAT,
-            padx=10, pady=3,
-            cursor="hand2",
-            command=self._on_skip_model,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_skip_model, key="selfie_skip_model"),
         )
         self._skip_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self._stop_btn = tk.Button(
+        self._stop_btn = ttk.Button(
             self._cancel_bar,
             text="Stop After This",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg="#FFA500",
-            fg="white",
-            relief=tk.FLAT,
-            padx=10, pady=3,
-            cursor="hand2",
-            command=self._on_stop_after,
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_stop_after, key="selfie_stop_after"),
         )
         self._stop_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self._abort_btn = tk.Button(
+        self._abort_btn = ttk.Button(
             self._cancel_bar,
             text="Abort All",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["btn_red"],
-            fg="white",
-            relief=tk.FLAT,
-            padx=10, pady=3,
-            cursor="hand2",
-            command=self._on_abort_all,
+            style=TTK_BTN_DANGER,
+            command=debounce_command(self._on_abort_all, key="selfie_abort_all"),
         )
         self._abort_btn.pack(side=tk.LEFT)
 
