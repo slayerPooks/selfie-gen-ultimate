@@ -11,6 +11,7 @@ import time
 import os
 import re
 import logging
+import sys
 
 try:
     from tkinterdnd2 import DND_FILES as _DND_FILES
@@ -51,7 +52,8 @@ FAL_API_DOCS_URL = "https://docs.fal.ai"
 
 # Global font — change this one line to switch the entire UI typeface.
 # JetBrains Mono and Inter look great if installed; Segoe UI is the safe fallback.
-FONT_FAMILY = "Segoe UI"
+FONT_FAMILY = "Helvetica" if sys.platform == "darwin" else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if sys.platform == "darwin" else "Segoe UI Emoji"
 
 # UI Configuration
 COMBOBOX_DROPDOWN_HEIGHT = 25  # Number of items visible in dropdown (default ~10)
@@ -148,6 +150,7 @@ class ModelFetcher:
                 headers = {"Authorization": f"Key {api_key}"}
                 all_models = []
                 cursor = None
+                seen_cursors = set()
 
                 # Paginate through all results
                 while True:
@@ -172,7 +175,14 @@ class ModelFetcher:
                         logger.debug(
                             "Fal API error %s: %s", response.status_code, detail
                         )
-                        callback([], f"API error {response.status_code}")
+                        if response.status_code in (401, 403):
+                            callback([], "fal.ai API key rejected. Update the key in settings.")
+                        elif response.status_code == 429:
+                            retry_after = response.headers.get("Retry-After", "").strip()
+                            suffix = f" Wait about {retry_after}s and try again." if retry_after.isdigit() else ""
+                            callback([], f"fal.ai rate limited model loading.{suffix}")
+                        else:
+                            callback([], f"fal.ai model loading failed (HTTP {response.status_code})")
                         return
 
                     data = response.json()
@@ -214,8 +224,16 @@ class ModelFetcher:
                         )
 
                     # Check for more pages
-                    if data.get("has_more") and data.get("next_cursor"):
-                        cursor = data["next_cursor"]
+                    next_cursor = data.get("next_cursor")
+                    if data.get("has_more") and next_cursor:
+                        if next_cursor in seen_cursors:
+                            logger.warning(
+                                "Fal model pagination returned repeated cursor; stopping at %s",
+                                next_cursor,
+                            )
+                            break
+                        seen_cursors.add(next_cursor)
+                        cursor = next_cursor
                     else:
                         break
 
@@ -815,27 +833,27 @@ class ConfigPanel(tk.Frame):
         center.place(relx=0.5, rely=0.5, anchor="center")
 
         lbl_icon = tk.Label(
-            center, text="\U0001f4e5", font=("Segoe UI Emoji", 28),
+            center, text="\U0001f4e5", font=(EMOJI_FONT_FAMILY, 28),
             bg=_bg, fg=COLORS["accent_blue"], cursor="hand2",
         )
         lbl_icon.pack(pady=(0, 4))
 
         lbl_main = tk.Label(
             center, text="DROP IMAGES HERE",
-            font=("Segoe UI", 11, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=_bg, fg=COLORS["text_light"], cursor="hand2",
         )
         lbl_main.pack(pady=1)
 
         lbl_sub = tk.Label(
             center, text="or click to browse",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=_bg, fg=COLORS["text_dim"], cursor="hand2",
         )
         lbl_sub.pack(pady=(0, 2))
 
         self._mini_dz_status = tk.Label(
-            center, text="", font=("Segoe UI", 9, "bold"),
+            center, text="", font=(FONT_FAMILY, 9, "bold"),
             bg=_bg, fg=COLORS["success"], cursor="hand2",
         )
         self._mini_dz_status.pack()

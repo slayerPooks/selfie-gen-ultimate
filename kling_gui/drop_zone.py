@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog
 from typing import Callable, List
 import os
+import sys
 
 from path_utils import VALID_EXTENSIONS
 
@@ -14,6 +15,11 @@ try:
 
     HAS_DND = True
 except ImportError:
+    HAS_DND = False
+
+# TkinterDnD on macOS can cause unreliable primary-click delivery in large Tk UIs.
+# Default to stable Tk on macOS. Allow opt-in via env for troubleshooting.
+if sys.platform == "darwin" and os.getenv("SELFIEGEN_MAC_ENABLE_DND", "0") != "1":
     HAS_DND = False
 
 
@@ -41,6 +47,9 @@ COLORS = {
     "border": "#5A5A5E",
     "accent_blue": "#6496FF",
 }
+
+FONT_FAMILY = "Helvetica" if sys.platform == "darwin" else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if sys.platform == "darwin" else "Segoe UI Emoji"
 
 
 class DropZone(tk.Frame):
@@ -83,7 +92,7 @@ class DropZone(tk.Frame):
         self.icon_label = tk.Label(
             self.content_container,
             text="📥",
-            font=("Segoe UI Emoji", 40),
+            font=(EMOJI_FONT_FAMILY, 40),
             bg=self._default_bg,
             fg=COLORS["accent_blue"],
         )
@@ -93,7 +102,7 @@ class DropZone(tk.Frame):
         self.main_label = tk.Label(
             self.content_container,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 14, "bold"),
+            font=(FONT_FAMILY, 14, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
@@ -103,7 +112,7 @@ class DropZone(tk.Frame):
         self.sub_label = tk.Label(
             self.content_container,
             text="Left click to select files  |  Right click for folder",
-            font=("Segoe UI", 11),
+            font=(FONT_FAMILY, 11),
             bg=self._default_bg,
             fg=COLORS["text_dim"],
         )
@@ -127,7 +136,7 @@ class DropZone(tk.Frame):
         self.status_label = tk.Label(
             self.drop_frame,
             text="",
-            font=("Segoe UI", 11, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
@@ -171,6 +180,13 @@ class DropZone(tk.Frame):
     def _reset_highlight(self):
         """Reset to default colors."""
         self._set_highlight(self._default_bg)
+
+    def _clear_status_later(self):
+        """Clear status text only if the widget still exists."""
+        self.after(
+            2000,
+            lambda: self.status_label.config(text="") if self.winfo_exists() else None,
+        )
 
     def _on_click_browse(self, event=None):
         """Handle left-click to open file browser dialog."""
@@ -218,8 +234,7 @@ class DropZone(tk.Frame):
                     fg=COLORS["drop_invalid"],
                 )
 
-            # Clear status after delay
-            self.after(2000, lambda: self.status_label.config(text=""))
+            self._clear_status_later()
 
     def _browse_folder(self):
         """Open folder browser dialog."""
@@ -230,8 +245,7 @@ class DropZone(tk.Frame):
                 text="Processing folder...", fg=COLORS["text_light"]
             )
             self.on_folder_dropped(folder_path)
-            # Clear status after delay
-            self.after(2000, lambda: self.status_label.config(text=""))
+            self._clear_status_later()
 
     def _on_right_click_browse_folder(self, event=None):
         """Handle right-click to open folder browser dialog."""
@@ -308,8 +322,7 @@ class DropZone(tk.Frame):
                 fg=COLORS["drop_invalid"],
             )
 
-        # Clear status after delay
-        self.after(2000, lambda: self.status_label.config(text=""))
+        self._clear_status_later()
 
         return event.action
 

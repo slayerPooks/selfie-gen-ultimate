@@ -12,6 +12,20 @@ import os
 import traceback
 from pathlib import Path
 
+
+def get_tkinter_setup_hint() -> str:
+    """Return a platform-aware help message for missing Tk support."""
+    if sys.platform == "darwin":
+        version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        return (
+            "This Python installation does not include Tk support.\n\n"
+            "On macOS, install a Tk-enabled Python build, then recreate the virtual environment.\n"
+            f"If you are using Homebrew Python, install the matching package:\n  brew install python-tk@{version}\n\n"
+            "You can also use the python.org macOS installer, which bundles Tk support."
+        )
+
+    return "This Python installation does not include Tk support."
+
 # Add appropriate directories to path for imports
 if getattr(sys, 'frozen', False):
     # Running as compiled exe
@@ -74,15 +88,21 @@ def main():
     KlingGUIWindow, import_error, import_traceback = _load_gui_window()
     if KlingGUIWindow is None:
         # Fallback error handling if GUI can't be imported
-        error_msg = (
-            f"Failed to initialize Kling GUI:\n\n{import_error}\n\n"
-            f"Please ensure all dependencies are installed:\n"
-            f"pip install requests pillow rich tkinterdnd2 selenium webdriver-manager "
-            f"opencv-python-headless numpy tensorflow==2.16.2 "
-            f"tensorflow-intel==2.16.2 tf-keras==2.16.0 retina-face==0.0.17 deepface==0.0.92\n\n"
-            f"If you're running the standalone exe, this may indicate a build issue.\n"
-            f"All dependencies should be bundled internally."
-        )
+        if "_tkinter" in import_error or "tkinter" in import_error.lower():
+            error_msg = (
+                f"Failed to initialize Kling GUI:\n\n{import_error}\n\n"
+                f"{get_tkinter_setup_hint()}"
+            )
+        else:
+            error_msg = (
+                f"Failed to initialize Kling GUI:\n\n{import_error}\n\n"
+                f"Please ensure all dependencies are installed:\n"
+                f"pip install requests pillow rich tkinterdnd2 selenium webdriver-manager "
+                f"opencv-python-headless numpy tensorflow==2.16.2 "
+                f"tensorflow-intel==2.16.2 tf-keras==2.16.0 retina-face==0.0.17 deepface==0.0.92\n\n"
+                f"If you're running the standalone exe, this may indicate a build issue.\n"
+                f"All dependencies should be bundled internally."
+            )
         
         # Log crash to file if possible
         crash_log = "crash_log.txt"

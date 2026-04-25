@@ -46,17 +46,48 @@ def _sim_color(similarity_str) -> Optional[str]:
         val = int(str(similarity_str).rstrip("%"))
     except ValueError:
         return None
+    if val >= 100:
+        return "#0B5D1E"  # very dark green
     if val >= 90:
-        return "#64FF64"   # bright green
-    elif val >= 80:
-        return "#C8FF00"   # yellow-green
-    elif val >= 70:
-        return "#FFA500"   # orange
-    else:
-        return "#FF6464"   # red
+        return "#0F7A2B"  # dark green
+    if val >= 80:
+        return "#6EA80D"  # yellow-green
+    if val >= 70:
+        return "#B35B00"  # orange/dark orange-red
+    if val >= 60:
+        return "#A93A14"  # transition red-orange
+    return "#8B0000"  # deep red
+
+
+def _sim_badge_style(similarity_str) -> Optional[dict]:
+    """Return badge style for similarity indicator."""
+    if similarity_str is None:
+        return None
+    raw = str(similarity_str).strip().lower()
+    if not raw:
+        return None
+    if raw in {"n/a", "na", "none"}:
+        return {"fg": "#F1F1F1", "bg": "#4A4A4A", "border": "#6A6A6A"}
+    try:
+        val = int(raw.rstrip("%"))
+    except ValueError:
+        return {"fg": "#F1F1F1", "bg": "#4A4A4A", "border": "#6A6A6A"}
+    if val >= 100:
+        return {"fg": "#F4FFF6", "bg": "#0B5D1E", "border": "#2B8A3E"}
+    if val >= 80:
+        return {"fg": "#F8FFE9", "bg": "#567F00", "border": "#84B800"}
+    if val >= 70:
+        return {"fg": "#FFF3E8", "bg": "#8C4300", "border": "#C96A1A"}
+    if val >= 60:
+        return {"fg": "#FFEDE5", "bg": "#8B2E10", "border": "#BE4A20"}
+    return {"fg": "#FFEAEA", "bg": "#7A0000", "border": "#B21B1B"}
 
 
 logger = logging.getLogger(__name__)
+
+CAROUSEL_BTN_BG = "#F2F2F2"
+CAROUSEL_BTN_FG = "#1A1A1A"
+CAROUSEL_BTN_DISABLED_FG = "#4A4A4A"
 
 
 class ImageCarousel(tk.Frame):
@@ -130,13 +161,18 @@ class ImageCarousel(tk.Frame):
         add_btn = tk.Button(
             header,
             text="+",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["success"],
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_add_image,
             cursor="hand2",
             relief=tk.FLAT,
             width=2,
+            padx=4,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         add_btn.pack(side=tk.RIGHT)
 
@@ -144,13 +180,18 @@ class ImageCarousel(tk.Frame):
         self.remove_btn = tk.Button(
             header,
             text="-",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["error"],
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_remove_image,
             cursor="hand2",
             relief=tk.FLAT,
             width=2,
+            padx=4,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
@@ -160,12 +201,16 @@ class ImageCarousel(tk.Frame):
             header,
             text="Compare",
             font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._on_compare,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=6,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self.compare_btn.pack(side=tk.RIGHT, padx=(0, 4))
@@ -173,16 +218,21 @@ class ImageCarousel(tk.Frame):
         # Nav buttons + counter
         self.next_btn = tk.Button(
             header,
-            text=">",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            text="\u25B6",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=lambda: self.image_session.navigate(1),
-            width=2,
+            width=1,
             cursor="hand2",
             relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
-        self.next_btn.pack(side=tk.RIGHT, padx=(2, 4))
+        self.next_btn.pack(side=tk.RIGHT, padx=(1, 3))
 
         self.counter_label = tk.Label(
             header,
@@ -195,14 +245,19 @@ class ImageCarousel(tk.Frame):
 
         self.prev_btn = tk.Button(
             header,
-            text="<",
-            font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            text="\u25C0",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=lambda: self.image_session.navigate(-1),
-            width=2,
+            width=1,
             cursor="hand2",
             relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
         )
         self.prev_btn.pack(side=tk.RIGHT)
 
@@ -213,16 +268,34 @@ class ImageCarousel(tk.Frame):
         self._ref_btn = tk.Button(
             sim_row,
             text="\u2605 Ref",
-            font=(FONT_FAMILY, 7),
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 7, "bold"),
+            bg=CAROUSEL_BTN_BG,
+            fg=CAROUSEL_BTN_FG,
             command=self._toggle_sim_ref,
             cursor="hand2",
             relief=tk.FLAT,
-            padx=4,
+            padx=5,
+            pady=1,
+            activebackground=CAROUSEL_BTN_BG,
+            activeforeground=CAROUSEL_BTN_FG,
+            disabledforeground=CAROUSEL_BTN_DISABLED_FG,
             state=tk.DISABLED,
         )
         self._ref_btn.pack(side=tk.LEFT)
+
+        # Preserve compact carousel controls on macOS while keeping click hardening.
+        for control in (
+            add_btn,
+            self.remove_btn,
+            self.compare_btn,
+            self.prev_btn,
+            self.next_btn,
+            self._ref_btn,
+        ):
+            try:
+                setattr(control, "_macos_compact_click", True)
+            except Exception:
+                pass
 
         self._auto_chk = tk.Checkbutton(
             sim_row,
@@ -248,8 +321,17 @@ class ImageCarousel(tk.Frame):
         self.meta_label.pack(side=tk.LEFT)
 
         self.sim_label = tk.Label(
-            self.meta_frame, text="", font=(FONT_FAMILY, 8, "bold"),
-            bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor=tk.E,
+            self.meta_frame,
+            text="",
+            font=(FONT_FAMILY, 12, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor=tk.E,
+            bd=0,
+            relief=tk.FLAT,
+            padx=0,
+            pady=0,
+            highlightthickness=0,
         )
         self.sim_label.pack(side=tk.RIGHT)
 
@@ -323,12 +405,12 @@ class ImageCarousel(tk.Frame):
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
             if is_sim_ref:
-                self._ref_btn.config(text="\u2605 Clear", fg=COLORS["warning"])
+                self._ref_btn.config(text="\u2605 Clear", fg=CAROUSEL_BTN_FG)
             else:
-                self._ref_btn.config(text="\u2605 Ref", fg=COLORS["text_light"])
+                self._ref_btn.config(text="\u2605 Ref", fg=CAROUSEL_BTN_FG)
         else:
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref",
-                                 fg=COLORS["text_light"])
+                                 fg=CAROUSEL_BTN_DISABLED_FG)
 
         if n == 0:
             self.counter_label.config(text="")
@@ -366,10 +448,38 @@ class ImageCarousel(tk.Frame):
 
             # Similarity (right, colored)
             if entry.similarity is not None:
-                sim_fg = _sim_color(entry.similarity) or COLORS["text_dim"]
-                self.sim_label.config(text=f"Sim: {entry.similarity}", fg=sim_fg)
+                badge = _sim_badge_style(entry.similarity)
+                if badge:
+                    self.sim_label.config(
+                        text=f"  SIM {entry.similarity}  ",
+                        fg=badge["fg"],
+                        bg=badge["bg"],
+                        highlightthickness=1,
+                        highlightbackground=badge["border"],
+                        highlightcolor=badge["border"],
+                        padx=8,
+                        pady=2,
+                    )
+                else:
+                    self.sim_label.config(
+                        text=f"  SIM {entry.similarity}  ",
+                        fg="#E6E6E6",
+                        bg="#4A4A4A",
+                        highlightthickness=1,
+                        highlightbackground="#6A6A6A",
+                        highlightcolor="#6A6A6A",
+                        padx=8,
+                        pady=2,
+                    )
             else:
-                self.sim_label.config(text="")
+                self.sim_label.config(
+                    text="",
+                    fg=COLORS["text_dim"],
+                    bg=COLORS["bg_panel"],
+                    highlightthickness=0,
+                    padx=0,
+                    pady=0,
+                )
         elif entry:
             self.info_label.config(text="File not found", fg=COLORS["error"])
             self.meta_label.config(text="")

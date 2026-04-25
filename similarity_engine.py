@@ -4,6 +4,7 @@ import math
 import os
 import threading
 import urllib.request
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, Optional, Union
 
@@ -14,6 +15,8 @@ from PIL import Image
 # Configure DeepFace backend before import.
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 from deepface import DeepFace
+
+logger = logging.getLogger(__name__)
 
 
 class FaceEngine:
@@ -167,6 +170,19 @@ class FaceEngine:
             raise ValueError(f"No face detected in {image_label}.")
         return max(faces, key=self._face_area)
 
+    def _represent_faces(self, faces: Any, image_label: str) -> list:
+        """Represent all valid extracted faces; raises if none can be embedded."""
+        vectors = []
+        for idx, face in enumerate(faces or []):
+            try:
+                vectors.append(self._represent_face(face["face"]))
+            except Exception:
+                # Ignore individual failures; keep any successful embeddings.
+                continue
+        if not vectors:
+            raise ValueError(f"Could not generate face embedding(s) for {image_label}.")
+        return vectors
+
     def _represent_face(self, face_crop: Any) -> np.ndarray:
         representations = DeepFace.represent(
             img_path=face_crop,
@@ -208,13 +224,14 @@ class FaceEngine:
                 detector_backend=self.detector_backend,
                 enforce_detection=True,
             )
+            logger.debug(
+                "Similarity compare faces: source=%d target=%d", len(faces1 or []), len(faces2 or [])
+            )
 
             face1 = self._select_prominent_face(faces1, "image 1")
-            face2 = self._select_prominent_face(faces2, "image 2")
-
             embedding1 = self._represent_face(face1["face"])
-            embedding2 = self._represent_face(face2["face"])
-            distance = self._cosine_distance(embedding1, embedding2)
+            target_embeddings = self._represent_faces(faces2, "image 2")
+            distance = min(self._cosine_distance(embedding1, emb) for emb in target_embeddings)
             threshold = 0.68
 
             distance = max(0.0, min(1.0, distance))
@@ -260,4 +277,3 @@ class FaceEngine:
                 "score": 0.0,
                 "error": f"An unexpected ML error occurred: {exc}",
             }
-

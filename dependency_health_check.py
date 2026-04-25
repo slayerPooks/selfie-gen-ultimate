@@ -15,10 +15,12 @@ ImportFn = Callable[[str], object]
 
 REPAIR_PACKAGES = [
     "tensorflow==2.16.2",
-    "tensorflow-intel==2.16.2",
     "tf-keras==2.16.0",
     "retina-face==0.0.17",
 ]
+
+if sys.platform == "win32":
+    REPAIR_PACKAGES.insert(1, "tensorflow-intel==2.16.2")
 
 
 def check_runtime_dependencies(importer: ImportFn = importlib.import_module) -> tuple[bool, list[str]]:
@@ -44,8 +46,11 @@ def check_runtime_dependencies(importer: ImportFn = importlib.import_module) -> 
         failures.append(f"tf_keras import failed: {type(exc).__name__}: {exc}")
 
     try:
-        retinaface_module = importer("retinaface")
-        getattr(retinaface_module, "RetinaFace")
+        try:
+            importer("retinaface.RetinaFace")
+        except Exception:
+            retinaface_module = importer("retinaface")
+            getattr(retinaface_module, "RetinaFace")
     except Exception as exc:
         failures.append(f"retinaface import failed: {type(exc).__name__}: {exc}")
 

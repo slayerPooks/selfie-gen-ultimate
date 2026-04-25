@@ -1,7 +1,14 @@
 """Shared theme constants for the Kling GUI."""
 
+import sys
+
+
+IS_MACOS = sys.platform == "darwin"
+
 # Global font — change this one line to switch the entire UI typeface.
-FONT_FAMILY = "Segoe UI"
+# Tk on macOS does not reliably resolve Windows font names.
+FONT_FAMILY = "Helvetica" if IS_MACOS else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if IS_MACOS else "Segoe UI Emoji"
 
 # Unified color palette
 COLORS = {
@@ -14,6 +21,7 @@ COLORS = {
     # Text
     "text_light": "#DCDCDC",
     "text_dim": "#B4B4B4",
+    "text_dark": "#111111",
 
     # Accents
     "accent_blue": "#6496FF",
@@ -47,3 +55,8 @@ COLORS = {
     "bg_unsupported": "#3A3A3A",
     "warning_light": "#FFB347",
 }
+
+# Native macOS Tk buttons can ignore dark backgrounds, so dark text keeps labels readable.
+BUTTON_TEXT_COLOR = "#000000" if IS_MACOS else COLORS["text_light"]
+BUTTON_FILLED_TEXT_COLOR = "#000000" if IS_MACOS else COLORS["text_light"]
+BUTTON_DISABLED_TEXT_COLOR = "#666666"

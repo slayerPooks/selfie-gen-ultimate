@@ -12,6 +12,7 @@ import sys
 import shutil
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
+import importlib.metadata
 
 
 @dataclass
@@ -24,6 +25,7 @@ class Dependency:
     description: str
     installed: bool = False
     version: Optional[str] = None
+    runtime_issue: Optional[str] = None
 
 
 # Define all dependencies
@@ -114,7 +116,7 @@ EXTERNAL_TOOLS = [
         args=["-version"],
         required=False,
         description="Video processing for Loop Video feature",
-        install_hint="Download from https://ffmpeg.org/download.html or install via: winget install FFmpeg"
+        install_hint="Install via your package manager (macOS: brew install ffmpeg, Windows: winget install FFmpeg) or download from https://ffmpeg.org/download.html"
     ),
 ]
 
@@ -135,6 +137,44 @@ class DependencyChecker:
     def __init__(self):
         self.python_deps = [Dependency(**d.__dict__) for d in PYTHON_DEPENDENCIES]
         self.external_tools = [ExternalTool(**t.__dict__) for t in EXTERNAL_TOOLS]
+        self.tkinter_available = False
+        self.tkinter_error: Optional[str] = None
+
+    def _get_tkinter_install_hint(self) -> str:
+        """Return a platform-specific hint for enabling Tk support."""
+        if sys.platform == "darwin":
+            version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            return (
+                "GUI mode needs a Python build with Tk support. "
+                "For Homebrew Python, install the matching package and recreate the virtual environment: "
+                f"brew install python-tk@{version}"
+            )
+        return "GUI mode needs Python with Tk support enabled."
+
+    def check_tkinter_support(self) -> bool:
+        """Check whether the active Python runtime can import tkinter."""
+        try:
+            import tkinter  # noqa: F401
+        except ModuleNotFoundError as exc:
+            self.tkinter_available = False
+            self.tkinter_error = self._get_tkinter_install_hint() if exc.name == "_tkinter" else str(exc)
+            return False
+        except Exception as exc:
+            self.tkinter_available = False
+            self.tkinter_error = str(exc)
+            return False
+
+        self.tkinter_available = True
+        self.tkinter_error = None
+        return True
+
+    @staticmethod
+    def _get_installed_package_version(pip_name: str) -> Optional[str]:
+        """Return installed metadata version, or None when the package is absent."""
+        try:
+            return importlib.metadata.version(pip_name)
+        except importlib.metadata.PackageNotFoundError:
+            return None
 
     def print_header(self, text: str):
         """Print a header line."""
@@ -153,17 +193,24 @@ class DependencyChecker:
         try:
             module = __import__(dep.import_name)
             dep.installed = True
+            dep.runtime_issue = None
             # Try to get version
             try:
                 dep.version = getattr(module, '__version__', None)
                 if dep.version is None:
-                    import importlib.metadata
                     dep.version = importlib.metadata.version(dep.pip_name)
             except Exception:
                 dep.version = "unknown"
             return True
-        except ImportError:
-            dep.installed = False
+        except ImportError as exc:
+            dep.version = self._get_installed_package_version(dep.pip_name)
+            dep.installed = dep.version is not None
+            dep.runtime_issue = str(exc) if dep.installed else None
+            return False
+        except Exception as exc:
+            dep.version = self._get_installed_package_version(dep.pip_name)
+            dep.installed = dep.version is not None
+            dep.runtime_issue = str(exc) if dep.installed else None
             return False
 
     def check_external_tool(self, tool: ExternalTool) -> bool:
@@ -201,6 +248,8 @@ class DependencyChecker:
         optional_ok = 0
         optional_missing = 0
 
+        self.check_tkinter_support()
+
         # Check Python packages
         for dep in self.python_deps:
             installed = self.check_python_package(dep)
@@ -235,16 +284,31 @@ class DependencyChecker:
         """Display the status of all dependencies."""
         self.print_header("DEPENDENCY CHECK")
 
+        self.print_section("Python Runtime")
+        if self.tkinter_available:
+            print(f"  {self.GREEN}✓{self.RESET} tkinter runtime available {self.GRAY}[GUI]{self.RESET}")
+        else:
+            print(f"  {self.RED}✗{self.RESET} tkinter runtime unavailable {self.RED}[GUI]{self.RESET}")
+            if self.tkinter_error:
+                print(f"    {self.YELLOW}{self.tkinter_error}{self.RESET}")
+        print()
+
         # Python packages
         self.print_section("Python Packages")
 
         for dep in self.python_deps:
             req_label = f"{self.RED}[REQUIRED]{self.RESET}" if dep.required else f"{self.GRAY}[optional]{self.RESET}"
 
-            if dep.installed:
+            if dep.installed and not dep.runtime_issue:
                 version_str = f" v{dep.version}" if dep.version and dep.version != "unknown" else ""
                 print(f"  {self.GREEN}✓{self.RESET} {dep.name}{version_str} {req_label}")
                 print(f"    {self.GRAY}{dep.description}{self.RESET}")
+            elif dep.installed and dep.runtime_issue:
+                version_str = f" v{dep.version}" if dep.version and dep.version != "unknown" else ""
+                print(f"  {self.YELLOW}!{self.RESET} {dep.name}{version_str} {req_label}")
+                print(f"    {self.GRAY}{dep.description}{self.RESET}")
+                print(f"    {self.YELLOW}Installed but failing at runtime: {dep.runtime_issue}{self.RESET}")
+                print(f"    {self.YELLOW}Repair: pip install --force-reinstall {dep.pip_name}{self.RESET}")
             else:
                 print(f"  {self.RED}✗{self.RESET} {dep.name} {req_label}")
                 print(f"    {self.GRAY}{dep.description}{self.RESET}")
@@ -293,8 +357,8 @@ class DependencyChecker:
         return required_missing == 0
 
     def get_missing_pip_packages(self) -> List[Dependency]:
-        """Get list of missing pip packages."""
-        return [dep for dep in self.python_deps if not dep.installed]
+        """Get list of missing or runtime-broken pip packages."""
+        return [dep for dep in self.python_deps if not dep.installed or dep.runtime_issue]
 
     def install_pip_package(self, dep: Dependency) -> bool:
         """Install a single pip package."""

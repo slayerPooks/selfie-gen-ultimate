@@ -380,13 +380,58 @@ class ExpandTab(tk.Frame):
             if entry.source_type == "selfie" and entry.exists
         ]
 
+    @staticmethod
+    def _dedupe_entries_by_path(entries: List) -> List:
+        deduped = []
+        seen = set()
+        for entry in entries:
+            path = getattr(entry, "path", None)
+            if not path:
+                continue
+            key = os.path.abspath(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+        return deduped
+
+    @classmethod
+    def compose_candidate_entries(cls, selfie_entries: List, active_entry) -> List:
+        """Build Step 2.5 candidates: selfies plus active non-selfie (deduped)."""
+        entries = list(selfie_entries or [])
+        if active_entry and getattr(active_entry, "exists", False):
+            if getattr(active_entry, "source_type", "") != "selfie":
+                entries.append(active_entry)
+        return cls._dedupe_entries_by_path(entries)
+
+    def _get_candidate_entries(self, active_path: Optional[str] = None) -> List:
+        entries = self._get_all_selfie_entries()
+        active_candidate = None
+        active_abs = os.path.abspath(active_path) if active_path else None
+        if active_abs:
+            for entry in self.image_session.images:
+                if not entry.exists:
+                    continue
+                if os.path.abspath(entry.path) == active_abs:
+                    active_candidate = entry
+                    break
+        return self.compose_candidate_entries(entries, active_candidate)
+
+    def _fallback_active_path(self, entries: List) -> Optional[str]:
+        if not entries:
+            return None
+        active_entry = self.image_session.active_entry
+        if active_entry and active_entry.exists:
+            return active_entry.path
+        return entries[-1].path
+
     def refresh_candidates(
         self,
         preselect_paths: Optional[List[str]] = None,
         active_path: Optional[str] = None,
         select_all_default: bool = False,
     ):
-        entries = self._get_all_selfie_entries()
+        entries = self._get_candidate_entries(active_path=active_path)
         self._candidate_entries = entries
         self._candidate_list.delete(0, tk.END)
 
@@ -417,8 +462,14 @@ class ExpandTab(tk.Frame):
                 score = parse_similarity_score(entry.similarity)
             if score is not None and score >= SIMILARITY_PASS_THRESHOLD:
                 pass_count += 1
+        selfie_count = sum(1 for entry in entries if entry.source_type == "selfie")
+        extra_count = len(entries) - selfie_count
+        extra_text = f", +{extra_count} active non-selfie" if extra_count else ""
         self._candidate_meta.config(
-            text=f"{len(entries)} selfie images - {pass_count} passing (>= {SIMILARITY_PASS_THRESHOLD})"
+            text=(
+                f"{len(entries)} candidate images ({selfie_count} selfie{extra_text}) - "
+                f"{pass_count} passing (>= {SIMILARITY_PASS_THRESHOLD})"
+            )
         )
 
     def receive_from_step2(self, paths: List[str], active_path: Optional[str] = None):
@@ -517,10 +568,29 @@ class ExpandTab(tk.Frame):
         return left, right, top, bottom
 
     def _get_similarity_reference(self) -> Optional[str]:
-        ref = self.image_session.similarity_ref_entry or self.image_session.reference_entry
+        ref = self.image_session.extracted_similarity_ref_entry
         if ref and ref.exists:
             return ref.path
         return None
+
+    def refresh_from_active_carousel(self):
+        """Default Step 2.5 entry behavior: include and preselect active carousel image."""
+        active_path = self.image_session.active_image_path
+        entries = self._get_candidate_entries(active_path=active_path)
+        if active_path:
+            active_abs = os.path.abspath(active_path)
+            entry_paths = {os.path.abspath(entry.path) for entry in entries}
+            if active_abs not in entry_paths:
+                active_path = self._fallback_active_path(entries)
+        else:
+            active_path = self._fallback_active_path(entries)
+
+        preselect = [active_path] if active_path else None
+        self.refresh_candidates(
+            preselect_paths=preselect,
+            active_path=active_path,
+            select_all_default=not bool(preselect),
+        )
 
     def _set_busy(self, busy: bool):
         self._busy = busy
@@ -575,6 +645,14 @@ class ExpandTab(tk.Frame):
         composite_mode = cfg.get("outpaint_composite_mode", "feathered")
         freeimage_key = cfg.get("freeimage_api_key")
         ref_path = self._get_similarity_reference()
+        if ref_path:
+            self.log(
+                f"Step 2.5 similarity reference: {ref_path}",
+                "info",
+            )
+        else:
+            self.log("Step 2.5 similarity reference missing: no extracted/front/input image", "error")
+            return
         mode = self._expand_mode_var.get()
         try:
             if mode == "percentage":
@@ -669,12 +747,21 @@ class ExpandTab(tk.Frame):
                 score = None
                 passed = None
                 if result and ref_path:
+                    self.log(
+                        f"Step 2.5 compare pair: ref={ref_path} target={result}",
+                        "debug",
+                    )
                     details = compute_face_similarity_details(
                         ref_path, result, report_cb=self.log
                     )
                     if not details.get("error"):
                         score = details.get("score")
                         passed = details.get("pass")
+                    else:
+                        self.log(
+                            f"Step 2.5 similarity unavailable for {os.path.basename(result)}: {details.get('error')}",
+                            "warning",
+                        )
 
                 completed += 1
                 self.winfo_toplevel().after(
@@ -691,7 +778,7 @@ class ExpandTab(tk.Frame):
     def _on_single_expand_complete(self, source_entry, result_path, score, passed, ops):
         if not result_path:
             return
-        similarity = f"{score}%" if score is not None else None
+        similarity = f"{score}%" if score is not None else "n/a"
         basename = os.path.basename(result_path)
         self.image_session.add_image(
             result_path,

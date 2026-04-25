@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 import re
+import time
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -17,7 +18,7 @@ from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
 # Import path utilities
-from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir
+from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir, get_user_data_dir
 
 from .drop_zone import create_dnd_root, HAS_DND
 from .log_display import LogDisplay
@@ -48,6 +49,7 @@ COLORS = {
     "bg_hover": "#505055",
     "text_light": "#DCDCDC",
     "text_dim": "#B4B4B4",
+    "text_dark": "#111111",
     "accent_blue": "#6496FF",
     "success": "#64FF64",
     "error": "#FF6464",
@@ -60,6 +62,9 @@ COLORS = {
 
 # Valid image extensions for folder scanning
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+IS_MACOS = sys.platform == "darwin"
+FONT_FAMILY = "Helvetica" if IS_MACOS else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if IS_MACOS else "Segoe UI Emoji"
 
 
 UI_CONFIG_DEFAULTS = {
@@ -201,7 +206,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             self,
             text=f"Found {len(files)} matching images",
-            font=("Segoe UI", 14, "bold"),
+            font=(FONT_FAMILY, 14, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).pack(pady=(15, 5))
@@ -213,7 +218,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             info_frame,
             text=f"Folder: {folder}",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
             anchor="w",
@@ -223,7 +228,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Label(
             info_frame,
             text=f"Pattern: '{pattern}' ({mode_text})",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"],
             fg=COLORS["accent_blue"],
             anchor="w",
@@ -264,7 +269,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Button(
             btn_frame,
             text="Cancel",
-            font=("Segoe UI", 10),
+            font=(FONT_FAMILY, 10),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             width=12,
@@ -274,7 +279,7 @@ class FolderPreviewDialog(tk.Toplevel):
         tk.Button(
             btn_frame,
             text=f"Add {len(files)} to Queue",
-            font=("Segoe UI", 10, "bold"),
+            font=(FONT_FAMILY, 10, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             width=18,
@@ -341,7 +346,7 @@ class SessionManagerDialog(tk.Toplevel):
     def _build_ui(self):
         # Header
         header = tk.Label(
-            self, text="Saved Sessions", font=("Segoe UI", 12, "bold"),
+            self, text="Saved Sessions", font=(FONT_FAMILY, 12, "bold"),
             bg=COLORS["bg_main"], fg=COLORS["text_light"],
         )
         header.pack(fill=tk.X, padx=16, pady=(12, 6))
@@ -367,7 +372,7 @@ class SessionManagerDialog(tk.Toplevel):
         # Detail label
         self._detail_label = tk.Label(
             self, text="Select a session to view details",
-            font=("Segoe UI", 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
+            font=(FONT_FAMILY, 9), bg=COLORS["bg_main"], fg=COLORS["text_dim"],
             anchor="w",
         )
         self._detail_label.pack(fill=tk.X, padx=16, pady=(0, 8))
@@ -377,7 +382,7 @@ class SessionManagerDialog(tk.Toplevel):
         autosave_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
 
         tk.Label(
-            autosave_frame, text="Auto-Save:", font=("Segoe UI", 9, "bold"),
+            autosave_frame, text="Auto-Save:", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"], fg=COLORS["text_light"],
         ).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -391,7 +396,7 @@ class SessionManagerDialog(tk.Toplevel):
         autosave_cb.pack(side=tk.LEFT, padx=(0, 12))
 
         tk.Label(
-            autosave_frame, text="Interval:", font=("Segoe UI", 9),
+            autosave_frame, text="Interval:", font=(FONT_FAMILY, 9),
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"],
         ).pack(side=tk.LEFT, padx=(0, 4))
 
@@ -414,19 +419,19 @@ class SessionManagerDialog(tk.Toplevel):
             ("Save New", COLORS["btn_green"], self._on_save_new),
         ]:
             tk.Button(
-                btn_frame, text=text, font=("Segoe UI", 9, "bold"),
+                btn_frame, text=text, font=(FONT_FAMILY, 9, "bold"),
                 bg=color, fg="white", relief="flat", padx=10, pady=4,
                 command=cmd,
             ).pack(side=tk.LEFT, padx=(0, 6))
 
         tk.Button(
-            btn_frame, text="Close", font=("Segoe UI", 9),
+            btn_frame, text="Close", font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"], fg=COLORS["text_light"], relief="flat",
             padx=10, pady=4, command=self.destroy,
         ).pack(side=tk.RIGHT)
 
         tk.Button(
-            btn_frame, text="Load", font=("Segoe UI", 9, "bold"),
+            btn_frame, text="Load", font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["accent_blue"], fg="white", relief="flat",
             padx=10, pady=4, command=self._on_load,
         ).pack(side=tk.RIGHT, padx=(0, 6))
@@ -544,8 +549,14 @@ class KlingGUIWindow:
             # Relative path - make it relative to app dir
             self.config_path = os.path.join(get_app_dir(), config_path)
 
+        self.data_dir = get_user_data_dir() if sys.platform == "darwin" else get_app_dir()
+
         self.config = self._load_config()
-        self.ui_config_path = os.path.join(get_app_dir(), "ui_config.json")
+        self.ui_config_path = (
+            get_config_path("ui_config.json")
+            if sys.platform == "darwin"
+            else os.path.join(get_app_dir(), "ui_config.json")
+        )
         self.ui_config = self._load_ui_config()
         self._layout_corrections_pending = False
         self.edit_mode = False
@@ -577,6 +588,11 @@ class KlingGUIWindow:
         self.root = create_dnd_root()
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
+        self._macos_click_bindtag = "MacClickFix"
+        self._macos_patched_button_ids = set()
+        self._macos_bound_button_ids = set()
+        self._macos_button_fix_job = None
+        self._macos_control_invoke_ts = {}
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -879,7 +895,7 @@ class KlingGUIWindow:
             foreground=COLORS["text_light"],
             fieldbackground=COLORS["bg_panel"],
             borderwidth=0,
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             rowheight=18,
         )
         style.configure(
@@ -887,7 +903,7 @@ class KlingGUIWindow:
             background=COLORS["bg_input"],
             foreground=COLORS["text_light"],
             borderwidth=1,
-            font=("Segoe UI", 8, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
         )
         style.map(
             "Treeview",
@@ -910,13 +926,22 @@ class KlingGUIWindow:
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
             padding=[8, 3],
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
         )
         style.map(
             "TNotebook.Tab",
             background=[("selected", COLORS["bg_panel"])],
             foreground=[("selected", COLORS["text_light"])],
         )
+
+        if IS_MACOS:
+            # Ensure native Aqua fallback colors don't produce white-on-white labels.
+            self.root.option_add("*Button.foreground", COLORS["text_dark"])
+            self.root.option_add("*Button.activeForeground", COLORS["text_dark"])
+            self.root.option_add("*Button.disabledForeground", "#8A8A8A")
+            self.root.option_add("*Button.highlightThickness", 0)
+            self.root.option_add("*Button.relief", tk.RAISED)
+            self.root.option_add("*Button.borderWidth", 1)
 
         # Header
         self._setup_header()
@@ -1119,10 +1144,212 @@ class KlingGUIWindow:
 
         self._start_autosave_timer()
 
+        if IS_MACOS:
+            self._configure_macos_click_bindtag()
+            self._schedule_macos_button_fix_pulses()
+            self.root.bind_all("<Map>", self._on_macos_widget_mapped, add="+")
+
     def _write_to_active_prompt(self, text: str):
         """Write text to the active prompt slot (used by PrepTab vision analysis)."""
         if hasattr(self, "config_panel") and self.config_panel:
             self.config_panel.set_active_prompt_text(text)
+
+    @staticmethod
+    def _is_macos_system_or_light_color(value: str) -> bool:
+        """Return True when Tk resolved a button color to light/system defaults."""
+        color = str(value).strip().lower()
+        if not color:
+            return True
+        if color in {
+            "white",
+            "#fff",
+            "#ffffff",
+            "systembuttonface",
+            "systemwindowbackgroundcolor",
+            "systemwindow",
+        }:
+            return True
+        return color.startswith("system")
+
+    @staticmethod
+    def _safe_int(value, fallback: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _schedule_macos_button_fix_pulses(self):
+        """Apply button normalization repeatedly during startup."""
+        if not IS_MACOS:
+            return
+        # First pass fast; follow-up passes catch late-created widgets.
+        self.root.after(0, lambda: self._apply_macos_button_fixes(force=False))
+        for delay in (140, 320, 700, 1300):
+            self.root.after(delay, lambda: self._apply_macos_button_fixes(force=True))
+
+    def _on_macos_widget_mapped(self, event):
+        """Re-apply button normalization when new widgets are mapped."""
+        if not IS_MACOS:
+            return
+        widget = getattr(event, "widget", None)
+        if widget is None:
+            return
+        if not isinstance(widget, (tk.Button, tk.Toplevel, tk.Frame, tk.LabelFrame)):
+            return
+        if self._macos_button_fix_job is not None:
+            try:
+                self.root.after_cancel(self._macos_button_fix_job)
+            except Exception:
+                pass
+        self._macos_button_fix_job = self.root.after(60, self._run_deferred_macos_button_fix)
+
+    def _run_deferred_macos_button_fix(self):
+        """Debounced map-event callback for macOS button normalization."""
+        self._macos_button_fix_job = None
+        self._apply_macos_button_fixes(force=True)
+
+    def _configure_macos_click_bindtag(self):
+        """Configure a dedicated class bindtag for macOS clickable controls."""
+        if not IS_MACOS:
+            return
+        self.root.bind_class(self._macos_click_bindtag, "<ButtonPress-1>", self._on_macos_button_press, add=False)
+        self.root.bind_class(
+            self._macos_click_bindtag, "<ButtonRelease-1>", self._on_macos_button_release, add=False
+        )
+        # Some Tk/mac builds dispatch <Button-1> more consistently than split press/release.
+        self.root.bind_class(self._macos_click_bindtag, "<Button-1>", self._on_macos_button_release, add=False)
+
+    @staticmethod
+    def _is_macos_clickable_control(widget) -> bool:
+        """Return True for Tk clickable controls that need macOS click normalization."""
+        return isinstance(widget, (tk.Button, tk.Checkbutton, tk.Radiobutton, tk.Menubutton))
+
+    @staticmethod
+    def _apply_widget_patch(widget, patch: dict):
+        """Apply patch options one by one so unsupported options don't cancel all updates."""
+        for key, value in patch.items():
+            try:
+                widget.configure(**{key: value})
+            except tk.TclError:
+                continue
+
+    def _invoke_macos_control(self, widget) -> str:
+        """Invoke clickable control once, suppressing duplicate press/release triggers."""
+        try:
+            state = str(widget.cget("state")).lower()
+        except Exception:
+            state = "normal"
+        if state in {"disabled"}:
+            return "break"
+        now = time.monotonic()
+        widget_id = id(widget)
+        last_ts = self._macos_control_invoke_ts.get(widget_id, 0.0)
+        if now - last_ts < 0.18:
+            return "break"
+        self._macos_control_invoke_ts[widget_id] = now
+        try:
+            widget.invoke()
+        except Exception:
+            return "break"
+        return "break"
+
+    def _on_macos_button_press(self, event):
+        """Invoke Tk clickable controls on primary press for reliable macOS clicks."""
+        widget = getattr(event, "widget", None)
+        if not self._is_macos_clickable_control(widget):
+            return None
+        return self._invoke_macos_control(widget)
+
+    def _on_macos_button_release(self, event):
+        """Fallback invoke on release for macOS environments that drop press events."""
+        widget = getattr(event, "widget", None)
+        if not self._is_macos_clickable_control(widget):
+            return None
+        return self._invoke_macos_control(widget)
+
+    def _apply_macos_button_fixes(self, force: bool = False):
+        """Normalize tk.Button readability and hit areas on macOS."""
+        if not IS_MACOS:
+            return
+
+        def _walk(widget):
+            for child in widget.winfo_children():
+                if self._is_macos_clickable_control(child):
+                    button_id = id(child)
+                    if not force and button_id in self._macos_patched_button_ids:
+                        _walk(child)
+                        continue
+                    try:
+                        bg = str(child.cget("bg")).lower()
+                    except Exception:
+                        bg = ""
+                    try:
+                        fg = str(child.cget("fg")).lower()
+                    except Exception:
+                        fg = ""
+                    try:
+                        active_bg = str(child.cget("activebackground")).lower()
+                    except Exception:
+                        active_bg = ""
+                    try:
+                        padx = self._safe_int(child.cget("padx"), 6)
+                    except Exception:
+                        padx = 6
+                    try:
+                        pady = self._safe_int(child.cget("pady"), 2)
+                    except Exception:
+                        pady = 2
+                    is_compact = bool(getattr(child, "_macos_compact_click", False))
+
+                    patch = {
+                        "fg": COLORS["text_dark"],
+                        "activeforeground": COLORS["text_dark"],
+                        "disabledforeground": "#666666",
+                        "highlightthickness": 0,
+                        "bd": 1,
+                        "relief": tk.RAISED,
+                        "overrelief": tk.RAISED,
+                        "cursor": "hand2",
+                    }
+
+                    if fg in ("white", "#fff", "#ffffff", COLORS["text_light"].lower()) or self._is_macos_system_or_light_color(fg):
+                        patch["fg"] = COLORS["text_dark"]
+                    if self._is_macos_system_or_light_color(bg):
+                        patch["bg"] = COLORS["bg_input"]
+                    if self._is_macos_system_or_light_color(active_bg):
+                        patch["activebackground"] = COLORS["bg_hover"]
+                    min_padx = 4 if is_compact else 8
+                    min_pady = 1 if is_compact else 3
+                    if padx < min_padx:
+                        patch["padx"] = min_padx
+                    if pady < min_pady:
+                        patch["pady"] = min_pady
+                    if isinstance(child, (tk.Checkbutton, tk.Radiobutton)):
+                        patch["selectcolor"] = COLORS["bg_input"]
+
+                    try:
+                        self._apply_widget_patch(child, patch)
+                        self._macos_patched_button_ids.add(button_id)
+                    except tk.TclError:
+                        pass
+                    # Ensure mac click handler bindtag runs before Tk's default class handlers.
+                    try:
+                        current_tags = child.bindtags()
+                        if self._macos_click_bindtag not in current_tags:
+                            child.bindtags((self._macos_click_bindtag,) + current_tags)
+                    except tk.TclError:
+                        pass
+                    if button_id not in self._macos_bound_button_ids:
+                        try:
+                            child.bind("<ButtonPress-1>", self._on_macos_button_press, add="+")
+                            child.bind("<ButtonRelease-1>", self._on_macos_button_release, add="+")
+                            self._macos_bound_button_ids.add(button_id)
+                        except tk.TclError:
+                            pass
+
+                _walk(child)
+
+        _walk(self.root)
 
     def _on_selfie_send_to_expand(self, paths: List[str], active_path: Optional[str] = None):
         """Handle Step 2 -> Step 2.5 handoff."""
@@ -1139,6 +1366,8 @@ class KlingGUIWindow:
 
     def _on_tab_changed(self, event=None):
         """Swap right pane content based on the active tab."""
+        if IS_MACOS:
+            self._apply_macos_button_fixes(force=True)
         try:
             idx = self.notebook.index(self.notebook.select())
         except Exception:
@@ -1146,6 +1375,12 @@ class KlingGUIWindow:
 
         if idx == 0:  # Tab 0: show tools panel
             self._show_right_pane(self._right_tools_frame)
+        elif idx == 3:  # Tab 2.5 Expand
+            self._hide_right_pane()
+            try:
+                self.expand_tab.refresh_from_active_carousel()
+            except Exception:
+                pass
         elif idx == 4:  # Tab 3 (Video): show prompt slots
             self._show_right_pane(self._right_prompt_frame)
         else:  # Tab 1, 2, 2.5: hide right pane entirely — tabs get full width
@@ -1218,7 +1453,7 @@ class KlingGUIWindow:
         icon_label = tk.Label(
             content,
             text="\U0001F4E5",
-            font=("Segoe UI Emoji", 36),
+            font=(EMOJI_FONT_FAMILY, 36),
             bg=bg,
             fg=COLORS["accent_blue"],
         )
@@ -1228,7 +1463,7 @@ class KlingGUIWindow:
         main_label = tk.Label(
             content,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 13, "bold"),
+            font=(FONT_FAMILY, 13, "bold"),
             bg=bg,
             fg=COLORS["text_light"],
         )
@@ -1238,7 +1473,7 @@ class KlingGUIWindow:
         sub_label = tk.Label(
             content,
             text="Left click to select  |  Right click to drag",
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=bg,
             fg=COLORS["text_dim"],
         )
@@ -1248,7 +1483,7 @@ class KlingGUIWindow:
         status_label = tk.Label(
             drop_frame,
             text="",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=bg,
             fg=COLORS["text_light"],
         )
@@ -1581,7 +1816,7 @@ class KlingGUIWindow:
             label = tk.Label(
                 widget,
                 text=f"{width}x{height}",
-                font=("Segoe UI", 9, "bold"),
+                font=(FONT_FAMILY, 9, "bold"),
                 bg="#E53935",
                 fg="white",
                 padx=4,
@@ -1856,7 +2091,7 @@ class KlingGUIWindow:
         title = tk.Label(
             header,
             text="Ultimate-Selfie-Gen",
-            font=("Segoe UI", 11, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -1866,7 +2101,7 @@ class KlingGUIWindow:
         sessions_btn = tk.Button(
             header,
             text="Sessions",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1880,7 +2115,7 @@ class KlingGUIWindow:
         load_session_btn = tk.Button(
             header,
             text="Load Session",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["accent_blue"],
             fg="white",
             activebackground="#5080DD",
@@ -1894,7 +2129,7 @@ class KlingGUIWindow:
         save_session_btn = tk.Button(
             header,
             text="Save Session",
-            font=("Segoe UI", 8),
+            font=(FONT_FAMILY, 8),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1909,7 +2144,7 @@ class KlingGUIWindow:
         add_image_btn = tk.Button(
             header,
             text="Add Image",
-            font=("Segoe UI", 8, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
             bg=COLORS["btn_green"],
             fg="white",
             activebackground="#287828",
@@ -1926,7 +2161,7 @@ class KlingGUIWindow:
         drop_zone_btn = tk.Button(
             header,
             text="\u25CE",  # ◎ target icon
-            font=("Segoe UI", 9),
+            font=(FONT_FAMILY, 9),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_panel"],
@@ -1952,7 +2187,7 @@ class KlingGUIWindow:
         indicator = tk.Label(
             frame,
             text=f"{label}: Set" if is_set else f"{label}: Not Set",
-            font=("Segoe UI", 7, "bold"),
+            font=(FONT_FAMILY, 7, "bold"),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             padx=5, pady=2,
@@ -2012,7 +2247,7 @@ class KlingGUIWindow:
         self.queue_header = tk.Label(
             queue_frame,
             text="📋 QUEUE (0/50)",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         )
@@ -2052,7 +2287,7 @@ class KlingGUIWindow:
         tk.Label(
             header,
             text="🎞️ PROCESSED VIDEOS",
-            font=("Segoe UI", 9, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
@@ -2064,7 +2299,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open File",
             command=self._open_selected_file,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2078,7 +2313,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Open Folder",
             command=self._open_selected_folder,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2092,7 +2327,7 @@ class KlingGUIWindow:
             btn_frame,
             text="Refresh",
             command=self._refresh_history_view,
-            font=("Segoe UI", 7),
+            font=(FONT_FAMILY, 7),
             bg=COLORS["bg_input"],
             fg=COLORS["text_light"],
             activebackground=COLORS["bg_main"],
@@ -2141,7 +2376,7 @@ class KlingGUIWindow:
             add_btn = tk.Button(
                 control_frame,
                 text="📁 Add...",
-                font=("Segoe UI", 10),
+                font=(FONT_FAMILY, 10),
                 bg=COLORS["btn_green"],
                 fg="white",
                 command=self._browse_files,
@@ -2167,12 +2402,12 @@ class KlingGUIWindow:
         dnd_color = COLORS["success"] if HAS_DND else COLORS["warning"]
         tk.Label(
             control_frame, text=dnd_status,
-            font=("Segoe UI", 8), bg=COLORS["bg_main"], fg=dnd_color,
+            font=(FONT_FAMILY, 8), bg=COLORS["bg_main"], fg=dnd_color,
         ).pack(side=tk.LEFT)
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
         _btn_kwargs = dict(
-            font=("Segoe UI", 9), padx=12, pady=3,
+            font=(FONT_FAMILY, 9), padx=12, pady=3,
             relief=tk.FLAT, borderwidth=0,
             activeforeground="white",
         )
@@ -2259,7 +2494,12 @@ class KlingGUIWindow:
 
     def _log_thread_safe(self, message: str, level: str = "info"):
         """Thread-safe logging using after()."""
-        self.root.after(0, lambda: self._log(message, level))
+        try:
+            if self.root.winfo_exists():
+                self.root.after(0, lambda: self._log(message, level))
+        except tk.TclError:
+            if self.logger:
+                self.logger.warning("Dropped GUI log after window closed: %s", message)
 
     def _update_queue_display(self):
         """Update the queue listbox display."""
@@ -2815,7 +3055,7 @@ class KlingGUIWindow:
             return
         from .session_manager import save_session
         try:
-            path = save_session(get_app_dir(), self.image_session, self.config)
+            path = save_session(self.data_dir, self.image_session, self.config)
             self._log(f"Session saved: {os.path.basename(path)}", "success")
         except Exception as e:
             self._log(f"Save failed: {e}", "error")
@@ -2823,7 +3063,7 @@ class KlingGUIWindow:
     def _on_open_sessions(self):
         """Open the session manager dialog."""
         dialog = SessionManagerDialog(
-            self.root, get_app_dir(), self.image_session,
+            self.root, self.data_dir, self.image_session,
             self.config, self._save_config, self._log,
         )
         self.root.wait_window(dialog)
@@ -2896,7 +3136,11 @@ class KlingGUIWindow:
             return  # No timer — triggered by API completion callbacks
         ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
         ms = ms_map.get(interval, 300000)
-        self.root.after(ms, self._autosave_tick)
+        try:
+            if self.root.winfo_exists():
+                self.root.after(ms, self._autosave_tick)
+        except tk.TclError:
+            return
 
     def _autosave_tick(self):
         """Perform auto-save if session has images, then reschedule."""
@@ -2912,13 +3156,13 @@ class KlingGUIWindow:
             return
         from .session_manager import save_session, get_autosave_path
 
-        target_path = get_autosave_path(get_app_dir(), self.image_session)
+        target_path = get_autosave_path(self.data_dir, self.image_session)
         autosave_name = os.path.splitext(os.path.basename(target_path))[0]
         overwrite = target_path if os.path.isfile(target_path) else None
 
         try:
             save_session(
-                get_app_dir(), self.image_session, self.config,
+                self.data_dir, self.image_session, self.config,
                 name=autosave_name,
                 overwrite_path=overwrite,
             )
