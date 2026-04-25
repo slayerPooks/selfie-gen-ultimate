@@ -335,11 +335,13 @@ class ImageCarousel(tk.Frame):
         self.next_btn.config(state=nav_state)
 
         # Sim ref button state
-        is_sim_ref = (session.current_index == session.similarity_ref_index
-                      and session.similarity_ref_index >= 0)
+        is_manual_ref = (session.current_index == session.similarity_ref_index
+                         and session.similarity_ref_index >= 0)
+        is_effective_ref = (entry is session.effective_similarity_ref_entry and entry is not None)
+
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
-            if is_sim_ref:
+            if is_manual_ref:
                 self._ref_btn.config(text="\u2605 Clear")
             else:
                 self._ref_btn.config(text="\u2605 Ref")
@@ -373,7 +375,7 @@ class ImageCarousel(tk.Frame):
             tag, color_key = derive_display_tag(entry)
             color = COLORS.get(color_key, COLORS["text_dim"])
             display_name = _truncate_filename(entry.filename)
-            ref_prefix = "\u2605 " if is_sim_ref else ""
+            ref_prefix = "\u2605 " if is_effective_ref else ""
             self.info_label.config(text=f"{ref_prefix}{tag} {display_name}", fg=color)
 
             # Meta line: dimensions + filesize (left, gray)
@@ -381,7 +383,18 @@ class ImageCarousel(tk.Frame):
             self.meta_label.config(text=info.strip("()") if info else "")
 
             # Similarity (right, colored)
-            if entry.similarity is not None:
+            if entry.similarity_recalculating:
+                self.sim_label.config(
+                    text="  SIM \u21bb  ",
+                    fg=COLORS["text_dim"],
+                    bg=COLORS["bg_panel"],
+                    highlightthickness=1,
+                    highlightbackground=COLORS["border"],
+                    highlightcolor=COLORS["border"],
+                    padx=8,
+                    pady=2,
+                )
+            elif entry.similarity is not None:
                 badge = _sim_badge_style(entry.similarity)
                 if badge:
                     self.sim_label.config(
@@ -577,11 +590,14 @@ class ImageCarousel(tk.Frame):
             entry = session.active_entry
             name = entry.filename if entry else "?"
             self.log(f"Similarity reference set: {name}", "info")
+        
+        # Trigger recompute for all generated images against new effective ref
+        self._calc_all_similarity(auto_triggered=True)
 
     def _calc_similarity(self):
         """Compute similarity for the active image vs ref (context menu)."""
         entry = self.image_session.active_entry
-        ref = self.image_session.similarity_ref_entry
+        ref = self.image_session.effective_similarity_ref_entry
         if not entry or not ref or entry is ref:
             return
         self._run_sim_calc(entry, ref)
@@ -593,10 +609,15 @@ class ImageCarousel(tk.Frame):
             f"ref={os.path.basename(ref_path)} "
             f"target={os.path.basename(target_path)}", "debug"
         )
+        
+        entry.similarity_recalculating = True
+        self.image_session._notify()
 
         def _worker():
             if not self._sim_lock.acquire(blocking=False):
                 self._sim_log("busy \u2014 skipped", "debug")
+                entry.similarity_recalculating = False
+                self.after(0, self.image_session._notify)
                 return
             try:
                 self._sim_busy = True
@@ -620,26 +641,37 @@ class ImageCarousel(tk.Frame):
         score = None
         if details and not details.get("error"):
             score = details.get("score")
+        entry.similarity_recalculating = False
         entry.update_similarity(score)
         self.image_session._notify()
         if score is not None:
             self._sim_log(f"result: {score}%", "info")
 
-    def _calc_all_similarity(self):
-        """Compute similarity for all non-ref images (context menu)."""
-        ref = self.image_session.similarity_ref_entry
+    def _calc_all_similarity(self, auto_triggered: bool = False):
+        """Compute similarity for all non-ref generated images."""
+        ref = self.image_session.effective_similarity_ref_entry
         if not ref:
             return
         targets = [e for e in self.image_session.images
-                   if e is not ref and e.exists]
+                   if e.source_type != "input" and e is not ref and e.exists]
         if not targets:
             return
-        self._sim_log(f"batch: {len(targets)} images", "info")
+            
+        if not auto_triggered:
+            self._sim_log(f"batch: {len(targets)} images", "info")
+            
+        for t in targets:
+            t.similarity_recalculating = True
+        self.image_session._notify()
+        
         ref_path = ref.path
 
         def _worker():
             if not self._sim_lock.acquire(blocking=True, timeout=10):
                 self._sim_log("busy \u2014 batch skipped", "warning")
+                for t in targets:
+                    t.similarity_recalculating = False
+                self.after(0, self.image_session._notify)
                 return
             try:
                 self._sim_busy = True

@@ -26,13 +26,13 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session.add_image(crop, "input")
             session.add_image(selfie, "selfie")
 
-            self.assertEqual(session.extracted_similarity_ref_entry.path, crop)
+            self.assertEqual(session.effective_similarity_ref_entry.path, crop)
 
             os.remove(crop)
-            self.assertEqual(session.extracted_similarity_ref_entry.path, front)
+            self.assertEqual(session.effective_similarity_ref_entry.path, front)
 
             os.remove(front)
-            self.assertEqual(session.extracted_similarity_ref_entry.path, plain)
+            self.assertEqual(session.effective_similarity_ref_entry.path, plain)
 
     def test_falls_back_to_first_existing_input(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -41,9 +41,9 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session = ImageSession()
             session.add_image(first, "input")
             session.add_image(second, "input")
-            self.assertEqual(session.extracted_similarity_ref_entry.path, first)
+            self.assertEqual(session.effective_similarity_ref_entry.path, first)
 
-    def test_ignores_similarity_ref_and_generic_reference(self):
+    def test_respects_similarity_ref_over_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             plain = self._touch(tmpdir, "plain.png")
             crop_old = self._touch(tmpdir, "old_crop.jpg")
@@ -54,12 +54,17 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             session.add_image(crop_old, "input")
             session.add_image(front_new, "input")
             session.add_image(selfie, "selfie")
+            
+            # Before explicit ref, should pick newest crop
+            self.assertEqual(session.effective_similarity_ref_entry.path, crop_old)
+            
+            # Explicitly set ref to selfie
             session.set_similarity_ref(session.count - 1)  # selfie (non-input)
-            session._reference_index = 0  # generic input ref pointing at plain
-            # Step 2.5 extracted ref must ignore star/generic ref and pick newest crop/front.
-            self.assertEqual(session.extracted_similarity_ref_entry.path, crop_old)
-            os.remove(crop_old)
-            self.assertEqual(session.extracted_similarity_ref_entry.path, front_new)
+            self.assertEqual(session.effective_similarity_ref_entry.path, selfie)
+            
+            # Clear explicit ref, should go back to fallback
+            session.set_similarity_ref(-1)
+            self.assertEqual(session.effective_similarity_ref_entry.path, crop_old)
 
 
 class Expand25CandidateCompositionTests(unittest.TestCase):

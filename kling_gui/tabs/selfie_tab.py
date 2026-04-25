@@ -928,9 +928,12 @@ class SelfieTab(tk.Frame):
         bfl_api_key = config.get("bfl_api_key", "")
         poll_timeout_seconds = config.get("selfie_poll_timeout_seconds", 300)
 
-        image_path = self.image_session.active_image_path
+        # Use the effective similarity ref as the baseline identity for generation
+        sim_ref = self.image_session.effective_similarity_ref_entry
+        image_path = sim_ref.path if sim_ref else self.image_session.active_image_path
+        
         if not image_path:
-            self.log("No image selected in carousel", "warning")
+            self.log("No reference image available", "warning")
             return
 
         # For output folder: use original input image's directory when in "source" mode

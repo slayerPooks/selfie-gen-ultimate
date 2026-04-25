@@ -51,6 +51,7 @@ class ImageEntry:
     similarity_override: bool = False
     similarity_override_note: str = ""
     similarity_override_ts: Optional[str] = None
+    similarity_recalculating: bool = False
     ops: dict = field(default_factory=dict)  # {"pol": 1, "ups": 2, "exp": 1}
 
     def __post_init__(self):
@@ -304,44 +305,33 @@ class ImageSession:
         return None
 
     @property
-    def canonical_similarity_ref_entry(self) -> Optional[ImageEntry]:
-        """Stable similarity reference for gated workflows.
-
-        Priority:
-        1) Stored input reference index (current session reference)
-        2) Most-recent existing input containing "_crop" in filename
-        3) Most-recent existing input containing "front" in filename
-        4) First existing input entry
-        """
-        inputs = [entry for _idx, entry in self.input_images if entry.exists]
-        if not inputs:
-            return None
-
-        ref = self.reference_entry
-        if ref and ref.exists:
-            return ref
-
-        for entry in reversed(inputs):
-            name = entry.filename.lower()
-            if "_crop" in name:
-                return entry
-
-        for entry in reversed(inputs):
-            name = entry.filename.lower()
-            if "front" in name:
-                return entry
-
-        return inputs[0]
+    def effective_similarity_ref_index(self) -> int:
+        """The index of the effective reference image for similarity checks."""
+        entry = self.effective_similarity_ref_entry
+        if entry is None:
+            return -1
+        # Find index
+        for i, e in enumerate(self._images):
+            if e is entry:
+                return i
+        return -1
 
     @property
-    def extracted_similarity_ref_entry(self) -> Optional[ImageEntry]:
-        """Reference used by Step 2.5 gating.
+    def effective_similarity_ref_entry(self) -> Optional[ImageEntry]:
+        """The single source of truth for the baseline image in similarity comparisons.
 
         Priority:
-        1) Newest existing input containing "_crop"
-        2) Newest existing input containing "front"
-        3) First existing input
+        1) Explicit manual ref (★ Ref) if set
+        2) Newest existing input containing "_crop"
+        3) Newest existing input containing "front"
+        4) First existing input
         """
+        # 1. Explicit reference
+        manual_ref = self.similarity_ref_entry
+        if manual_ref and manual_ref.exists:
+            return manual_ref
+
+        # Fallback to defaults
         inputs = [entry for _idx, entry in self.input_images if entry.exists]
         if not inputs:
             return None

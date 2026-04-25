@@ -548,7 +548,7 @@ class ExpandTab(tk.Frame):
         return left, right, top, bottom
 
     def _get_similarity_reference(self) -> Optional[str]:
-        ref = self.image_session.extracted_similarity_ref_entry
+        ref = self.image_session.effective_similarity_ref_entry
         if ref and ref.exists:
             return ref.path
         return None
