@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 import re
+import time
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -596,6 +597,8 @@ class KlingGUIWindow:
         self.root = create_dnd_root()
         self.root.title("Ultimate-Selfie-Gen")
         self.root.configure(bg=COLORS["bg_main"])
+        self._drop_zone_window = None
+        self._drop_zone_open_guard_until = 0.0
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -1290,14 +1293,26 @@ class KlingGUIWindow:
 
     # ── Floating Drop Zone ──────────────────────────────────────────
 
+    def _close_drop_zone(self):
+        """Close floating drop zone window if open."""
+        if self._drop_zone_window is None:
+            return
+        win = self._drop_zone_window
+        self._drop_zone_window = None
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+
     def _toggle_drop_zone(self):
         """Toggle the floating drop zone window."""
-        if hasattr(self, "_drop_zone_window") and self._drop_zone_window is not None:
-            try:
-                self._drop_zone_window.destroy()
-            except Exception:
-                pass
-            self._drop_zone_window = None
+        now = time.monotonic()
+        if self._drop_zone_window is not None:
+            # Guard against immediate re-entry from the same click/release sequence.
+            if now < self._drop_zone_open_guard_until:
+                return
+            self._close_drop_zone()
             return
 
         win = tk.Toplevel(self.root)
@@ -1420,7 +1435,15 @@ class KlingGUIWindow:
             except Exception:
                 pass
 
-        win.protocol("WM_DELETE_WINDOW", self._toggle_drop_zone)
+        self._drop_zone_open_guard_until = time.monotonic() + 0.55
+        win.protocol("WM_DELETE_WINDOW", self._close_drop_zone)
+        win.bind(
+            "<Destroy>",
+            lambda event, this_win=win: setattr(self, "_drop_zone_window", None)
+            if event.widget is this_win
+            else None,
+            add="+",
+        )
         self._drop_zone_window = win
 
     def _on_drop_zone_drop(self, event):
