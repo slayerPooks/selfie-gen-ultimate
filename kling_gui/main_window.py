@@ -590,9 +590,9 @@ class KlingGUIWindow:
         self.root.configure(bg=COLORS["bg_main"])
         self._macos_click_bindtag = "MacClickFix"
         self._macos_patched_button_ids = set()
-        self._macos_bound_button_ids = set()
         self._macos_button_fix_job = None
         self._macos_control_invoke_ts = {}
+        self._macos_pressed_control = None
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -1218,11 +1218,19 @@ class KlingGUIWindow:
         )
         # Some Tk/mac builds dispatch <Button-1> more consistently than split press/release.
         self.root.bind_class(self._macos_click_bindtag, "<Button-1>", self._on_macos_button_release, add=False)
+        self.root.bind_all("<ButtonRelease-1>", self._on_macos_global_button_release, add="+")
 
     @staticmethod
     def _is_macos_clickable_control(widget) -> bool:
         """Return True for Tk clickable controls that need macOS click normalization."""
         return isinstance(widget, (tk.Button, tk.Checkbutton, tk.Radiobutton, tk.Menubutton))
+
+    def _resolve_macos_clickable_control(self, widget):
+        """Walk up parent chain until a clickable control is found."""
+        current = widget
+        while current is not None and not self._is_macos_clickable_control(current):
+            current = getattr(current, "master", None)
+        return current
 
     @staticmethod
     def _apply_widget_patch(widget, patch: dict):
@@ -1244,7 +1252,7 @@ class KlingGUIWindow:
         now = time.monotonic()
         widget_id = id(widget)
         last_ts = self._macos_control_invoke_ts.get(widget_id, 0.0)
-        if now - last_ts < 0.18:
+        if now - last_ts < 0.04:
             return "break"
         self._macos_control_invoke_ts[widget_id] = now
         try:
@@ -1254,18 +1262,44 @@ class KlingGUIWindow:
         return "break"
 
     def _on_macos_button_press(self, event):
-        """Invoke Tk clickable controls on primary press for reliable macOS clicks."""
-        widget = getattr(event, "widget", None)
-        if not self._is_macos_clickable_control(widget):
+        """Track the pressed control; release handler performs deterministic invoke."""
+        widget = self._resolve_macos_clickable_control(getattr(event, "widget", None))
+        if widget is None:
+            return None
+        self._macos_pressed_control = widget
+        return "break"
+
+    def _on_macos_button_release(self, event):
+        """Invoke tracked control on release; fallback to resolved control."""
+        widget = self._resolve_macos_clickable_control(getattr(event, "widget", None))
+        pressed = self._macos_pressed_control
+        self._macos_pressed_control = None
+
+        if pressed is not None:
+            if widget is None or widget is pressed:
+                return self._invoke_macos_control(pressed)
+            # Pointer left control before release; treat as canceled click.
+            return "break"
+
+        if widget is None:
             return None
         return self._invoke_macos_control(widget)
 
-    def _on_macos_button_release(self, event):
-        """Fallback invoke on release for macOS environments that drop press events."""
-        widget = getattr(event, "widget", None)
-        if not self._is_macos_clickable_control(widget):
+    def _on_macos_global_button_release(self, event):
+        """Global fallback for releases that bypass the control's own bindtags."""
+        if not IS_MACOS:
             return None
-        return self._invoke_macos_control(widget)
+        pressed = self._macos_pressed_control
+        if pressed is None:
+            return None
+
+        target = self.root.winfo_containing(getattr(event, "x_root", -1), getattr(event, "y_root", -1))
+        resolved_target = self._resolve_macos_clickable_control(target)
+        if resolved_target is not pressed:
+            self._macos_pressed_control = None
+            return None
+        self._macos_pressed_control = None
+        return self._invoke_macos_control(pressed)
 
     def _apply_macos_button_fixes(self, force: bool = False):
         """Normalize tk.Button readability and hit areas on macOS."""
@@ -1339,14 +1373,6 @@ class KlingGUIWindow:
                             child.bindtags((self._macos_click_bindtag,) + current_tags)
                     except tk.TclError:
                         pass
-                    if button_id not in self._macos_bound_button_ids:
-                        try:
-                            child.bind("<ButtonPress-1>", self._on_macos_button_press, add="+")
-                            child.bind("<ButtonRelease-1>", self._on_macos_button_release, add="+")
-                            self._macos_bound_button_ids.add(button_id)
-                        except tk.TclError:
-                            pass
-
                 _walk(child)
 
         _walk(self.root)
