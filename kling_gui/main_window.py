@@ -2067,6 +2067,14 @@ class KlingGUIWindow:
         )
         new_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
+        sanitize_folder_btn = ttk.Button(
+            header,
+            text="Sanitize Folder",
+            style=TTK_BTN_SECONDARY,
+            command=self._dbcmd("header_sanitize_folder", self._on_sanitize_folder_clicked),
+        )
+        sanitize_folder_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
         # "Add Image" button — browse and add to carousel
         add_image_btn = ttk.Button(
             header,
@@ -2688,6 +2696,72 @@ class KlingGUIWindow:
         if added > 0:
             self._log(f"Added {added} file(s) to queue", "success")
 
+    def _sanitize_folder_with_manifest(self, folder_path: str):
+        """Sanitize one folder tree and always emit a manifest report."""
+        requested_folder = folder_path
+        sanitized_folder, renames = sanitize_tree_names(folder_path, rename_root=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        manifest_name = f"sanitize_manifest_{stamp}.json"
+        manifest_path = os.path.join(sanitized_folder, manifest_name)
+
+        manifest = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "requested_folder": requested_folder,
+            "sanitized_root": sanitized_folder,
+            "change_count": len(renames),
+            "changes": [
+                {
+                    "old_path": old_path,
+                    "new_path": new_path,
+                    "old_name": os.path.basename(old_path),
+                    "new_name": os.path.basename(new_path),
+                }
+                for old_path, new_path in renames
+            ],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, ensure_ascii=False)
+        return sanitized_folder, renames, manifest_path
+
+    def _on_sanitize_folder_clicked(self):
+        """Manually sanitize a folder tree and show a concise report."""
+        folder = filedialog.askdirectory(title="Select Folder to Sanitize")
+        if not folder:
+            return
+        try:
+            sanitized_folder, renames, manifest_path = self._sanitize_folder_with_manifest(folder)
+            if renames:
+                self._log(
+                    f"Sanitize Folder: fixed {len(renames)} file/folder name(s)",
+                    "success",
+                )
+                for old_path, new_path in renames[:25]:
+                    self._log(
+                        f"Renamed: {os.path.basename(old_path)} -> {os.path.basename(new_path)}",
+                        "info",
+                    )
+                if len(renames) > 25:
+                    self._log(f"...and {len(renames) - 25} more rename(s)", "info")
+            else:
+                self._log("Sanitize Folder: no broken names found", "info")
+
+            messagebox.showinfo(
+                "Sanitize Folder Complete",
+                (
+                    f"Folder: {sanitized_folder}\n"
+                    f"Renamed items: {len(renames)}\n"
+                    f"Manifest: {manifest_path}"
+                ),
+                parent=self.root,
+            )
+        except Exception as exc:
+            self._log(f"Sanitize Folder failed: {exc}", "error")
+            messagebox.showerror(
+                "Sanitize Folder Failed",
+                f"Error while sanitizing folder:\n{exc}",
+                parent=self.root,
+            )
+
     def _on_folder_dropped(self, folder_path: str):
         """Handle folder dropped onto the drop zone."""
         if not self.queue_manager:
@@ -2695,7 +2769,7 @@ class KlingGUIWindow:
             return
 
         try:
-            sanitized_folder, renames = sanitize_tree_names(folder_path, rename_root=True)
+            sanitized_folder, renames, manifest_path = self._sanitize_folder_with_manifest(folder_path)
             if renames:
                 self._log(
                     f"Sanitized {len(renames)} file/folder name(s) for cross-platform safety",
@@ -2708,6 +2782,7 @@ class KlingGUIWindow:
                     )
                 if len(renames) > 25:
                     self._log(f"...and {len(renames) - 25} more rename(s)", "info")
+            self._log(f"Sanitize manifest written: {manifest_path}", "info")
             folder_path = sanitized_folder
         except Exception as exc:
             self._log(f"Folder name sanitization failed: {exc}", "error")
