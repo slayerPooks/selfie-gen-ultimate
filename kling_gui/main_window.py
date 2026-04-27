@@ -18,7 +18,15 @@ from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
 # Import path utilities
-from path_utils import get_config_path, get_crash_log_path, get_log_path, get_app_dir, get_user_data_dir
+from path_utils import (
+    get_config_path,
+    get_crash_log_path,
+    get_log_path,
+    get_app_dir,
+    get_user_data_dir,
+    sanitize_path_name,
+    sanitize_tree_names,
+)
 
 from .drop_zone import create_dnd_root, HAS_DND, DND_FILES, parse_dnd_paths
 from .log_display import LogDisplay
@@ -329,6 +337,7 @@ class SessionManagerDialog(tk.Toplevel):
         self._save_config_fn = save_config_fn
         self._log_fn = log_fn
         self._selected_path = None
+        self._selected_record = None
         self._loaded_session_data = None
 
         self._build_ui()
@@ -424,6 +433,7 @@ class SessionManagerDialog(tk.Toplevel):
 
         for text, color, cmd in [
             ("Delete", COLORS["btn_red"], self._on_delete),
+            ("Clear Project Sessions", COLORS["warning"], self._on_clear_project),
             ("Overwrite Save", COLORS["warning"], self._on_overwrite),
             ("Save New", COLORS["btn_green"], self._on_save_new),
         ]:
@@ -450,20 +460,25 @@ class SessionManagerDialog(tk.Toplevel):
         self._sessions = list_sessions(self._app_dir)
         self._listbox.delete(0, tk.END)
         for rec in self._sessions:
-            ts = rec.timestamp[:16].replace("T", " ") if rec.timestamp else "?"
-            self._listbox.insert(tk.END, f"  {rec.name:<40s}  {ts}  {rec.image_count} imgs")
+            ts = rec.updated_at[:16].replace("T", " ") if rec.updated_at else "?"
+            badge = "[AUTOSAVE]" if rec.session_kind == "autosave" else "[MANUAL]"
+            row = f"  {badge:<10s} {rec.project_key:<20s} {ts}  {rec.image_count:>3d} imgs  {rec.name}"
+            self._listbox.insert(tk.END, row)
 
     def _on_select(self, event=None):
         sel = self._listbox.curselection()
         if not sel or sel[0] >= len(self._sessions):
             self._selected_path = None
+            self._selected_record = None
             self._detail_label.config(text="Select a session to view details")
             return
         rec = self._sessions[sel[0]]
+        self._selected_record = rec
         self._selected_path = rec.path
-        ts = rec.timestamp[:19].replace("T", " ") if rec.timestamp else "unknown"
+        ts = rec.updated_at[:19].replace("T", " ") if rec.updated_at else "unknown"
+        kind = "autosave" if rec.session_kind == "autosave" else "manual"
         self._detail_label.config(
-            text=f"Selected: {rec.name} — saved {ts} — {rec.image_count} images"
+            text=f"Selected: {rec.name} — {kind} — project {rec.project_key} — saved {ts} — {rec.image_count} images"
         )
 
     def _on_load(self):
@@ -489,9 +504,40 @@ class SessionManagerDialog(tk.Toplevel):
             delete_session(self._selected_path)
             self._log_fn("Session deleted", "info")
             self._selected_path = None
+            self._selected_record = None
             self._refresh_list()
         except Exception as e:
             self._log_fn(f"Delete failed: {e}", "error")
+
+    def _on_clear_project(self):
+        """Delete all sessions for the selected project (manual + autosave)."""
+        if not self._selected_record:
+            return
+        from .session_manager import delete_project_sessions
+        from tkinter import messagebox
+
+        project_key = self._selected_record.project_key
+        matching = [s for s in self._sessions if s.project_key == project_key]
+        count = len(matching)
+        if count == 0:
+            self._log_fn("No project sessions to clear", "warning")
+            return
+
+        msg = (
+            f"Delete all sessions for project '{project_key}'?\n\n"
+            f"This will remove {count} saved session file(s), including autosaves and manual saves."
+        )
+        if not messagebox.askyesno("Clear Project Sessions", msg, parent=self):
+            return
+        try:
+            removed = delete_project_sessions(self._app_dir, project_key)
+            self._selected_path = None
+            self._selected_record = None
+            self._refresh_list()
+            self._detail_label.config(text="Select a session to view details")
+            self._log_fn(f"Cleared {removed} session(s) for project '{project_key}'", "success")
+        except Exception as e:
+            self._log_fn(f"Clear project failed: {e}", "error")
 
     def _on_overwrite(self):
         """Save current state to the selected session file."""
@@ -582,6 +628,9 @@ class KlingGUIWindow:
         self.generator: Optional["FalAIKlingGenerator"] = None
         self.queue_manager: Optional[QueueManager] = None
         self.image_session = ImageSession()
+        self._autosave_job = None
+        self._autosave_suspended = False
+        self._autosave_debounce_ms = 1200
 
         # Tell Windows this is its own app (not just "python.exe") so the
         # taskbar shows our custom icon instead of the generic Python icon.
@@ -599,6 +648,7 @@ class KlingGUIWindow:
         self.root.configure(bg=COLORS["bg_main"])
         self._drop_zone_window = None
         self._drop_zone_open_guard_until = 0.0
+        self.image_session.add_on_change(self._on_image_session_changed)
 
         # Set app icon (window title bar + taskbar)
         self._set_app_icon()
@@ -1459,14 +1509,7 @@ class KlingGUIWindow:
             splitlist_fn = None
         files = parse_dnd_paths(data, splitlist_fn=splitlist_fn, require_exists=True)
 
-        added = 0
-        for f in files:
-            if os.path.isfile(f):
-                ext = os.path.splitext(f)[1].lower()
-                if ext in VALID_EXTENSIONS:
-                    self.image_session.add_image(f, "input")
-                    self._log(f"Added to carousel: {os.path.basename(f)}", "info")
-                    added += 1
+        added = self._add_input_images_to_session(files)
 
         # Show status on floating drop zone
         if hasattr(self, "_drop_zone_status") and self._drop_zone_status:
@@ -1487,9 +1530,7 @@ class KlingGUIWindow:
             ],
         )
         if files:
-            for f in files:
-                self.image_session.add_image(f, "input")
-                self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+            self._add_input_images_to_session(list(files))
 
     def _apply_ui_config(self):
         """Apply UI layout configuration to existing widgets."""
@@ -2018,6 +2059,14 @@ class KlingGUIWindow:
         )
         save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
+        new_session_btn = ttk.Button(
+            header,
+            text="New Session",
+            style=TTK_BTN_SECONDARY,
+            command=self._dbcmd("header_new_session", self._on_new_session),
+        )
+        new_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
         # "Add Image" button — browse and add to carousel
         add_image_btn = ttk.Button(
             header,
@@ -2492,9 +2541,122 @@ class KlingGUIWindow:
 
     def _on_images_to_carousel(self, files: List[str]):
         """Handle images dropped/browsed in the prompt panel mini drop zone."""
-        for f in files:
-            self.image_session.add_image(f, "input")
-            self._log(f"Added to carousel: {os.path.basename(f)}", "info")
+        self._add_input_images_to_session(files)
+
+    @staticmethod
+    def _is_front_image(path: str) -> bool:
+        """Return True if the filename appears to be a front-image input."""
+        return "front" in os.path.basename(path).lower()
+
+    def _refresh_session_dependent_ui(self):
+        """Refresh tab UI fragments that depend on image session state."""
+        if hasattr(self, "selfie_tab") and self.selfie_tab:
+            try:
+                self.selfie_tab._refresh_result_actions()
+            except Exception:
+                pass
+        if hasattr(self, "expand_tab") and self.expand_tab:
+            try:
+                self.expand_tab.refresh_candidates(select_all_default=True)
+            except Exception:
+                pass
+
+    def _clear_working_session(self, label: str = "new session"):
+        """Clear current working session and refresh dependent UI."""
+        self.image_session.clear()
+        self._refresh_session_dependent_ui()
+        self._log(f"Started {label}", "success")
+
+    def _save_current_session_snapshot(self) -> bool:
+        """Save a manual snapshot of current session, returning success flag."""
+        if not self.image_session.count:
+            return True
+        from .session_manager import save_session, SESSION_KIND_MANUAL
+        try:
+            path = save_session(
+                self.data_dir,
+                self.image_session,
+                self.config,
+                session_kind=SESSION_KIND_MANUAL,
+            )
+            self._log(f"Session saved: {os.path.basename(path)}", "success")
+            return True
+        except Exception as exc:
+            self._log(f"Save failed: {exc}", "error")
+            return False
+
+    def _offer_save_and_start_new_for_front(self, front_path: str) -> bool:
+        """Offer to save current session and start a new one for a front image."""
+        if self.image_session.count == 0:
+            return True
+        folder_name = os.path.basename(os.path.dirname(front_path)) or "untitled"
+        choice = messagebox.askyesnocancel(
+            "New Front Image Detected",
+            (
+                f"Detected a new front image from folder:\n{folder_name}\n\n"
+                "Save current session and start a new session?"
+            ),
+            parent=self.root,
+        )
+        if choice is None:
+            self._log("Image add cancelled", "info")
+            return False
+        if not choice:
+            return True
+        if not self._save_current_session_snapshot():
+            proceed = messagebox.askyesno(
+                "Save Failed",
+                "Current session could not be saved.\nStart a new session anyway?",
+                parent=self.root,
+            )
+            if not proceed:
+                return False
+        self._clear_working_session(label=f"new session for {folder_name}")
+        return True
+
+    def _add_input_images_to_session(self, files: List[str]) -> int:
+        """Add input images to working session with front-image session rollover prompt."""
+        valid_files: List[str] = []
+        for path in files:
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            if ext in VALID_EXTENSIONS:
+                valid_files.append(path)
+        if not valid_files:
+            return 0
+
+        renamed_count = 0
+        sanitized_files: List[str] = []
+        for path in valid_files:
+            try:
+                new_path, changed = sanitize_path_name(path)
+                if changed:
+                    renamed_count += 1
+                    self._log(
+                        f"Renamed source for cross-platform safety: "
+                        f"{os.path.basename(path)} -> {os.path.basename(new_path)}",
+                        "warning",
+                    )
+                sanitized_files.append(new_path)
+            except Exception as exc:
+                self._log(f"Could not sanitize source path {path}: {exc}", "error")
+                sanitized_files.append(path)
+        valid_files = sanitized_files
+        if renamed_count:
+            self._log(f"Sanitized {renamed_count} input source filename(s)", "info")
+
+        front_candidate = next((p for p in valid_files if self._is_front_image(p)), None)
+        if front_candidate and self.image_session.count > 0:
+            if not self._offer_save_and_start_new_for_front(front_candidate):
+                return 0
+
+        added = 0
+        for path in valid_files:
+            self.image_session.add_image(path, "input")
+            self._log(f"Added to carousel: {os.path.basename(path)}", "info")
+            added += 1
+        return added
 
     def _on_files_dropped(self, files: List[str]):
         """Handle files dropped onto the drop zone."""
@@ -2504,6 +2666,17 @@ class KlingGUIWindow:
 
         added = 0
         for file_path in files:
+            try:
+                original_path = file_path
+                file_path, changed = sanitize_path_name(file_path)
+                if changed:
+                    self._log(
+                        f"Renamed source for cross-platform safety: "
+                        f"{os.path.basename(original_path)} -> {os.path.basename(file_path)}",
+                        "warning",
+                    )
+            except Exception as exc:
+                self._log(f"Could not sanitize source path {file_path}: {exc}", "error")
             success, message = self.queue_manager.add_to_queue(file_path)
             if success:
                 added += 1
@@ -2520,6 +2693,24 @@ class KlingGUIWindow:
         if not self.queue_manager:
             self._log("Queue manager not initialized", "error")
             return
+
+        try:
+            sanitized_folder, renames = sanitize_tree_names(folder_path, rename_root=True)
+            if renames:
+                self._log(
+                    f"Sanitized {len(renames)} file/folder name(s) for cross-platform safety",
+                    "warning",
+                )
+                for old_path, new_path in renames[:25]:
+                    self._log(
+                        f"Renamed: {os.path.basename(old_path)} -> {os.path.basename(new_path)}",
+                        "info",
+                    )
+                if len(renames) > 25:
+                    self._log(f"...and {len(renames) - 25} more rename(s)", "info")
+            folder_path = sanitized_folder
+        except Exception as exc:
+            self._log(f"Folder name sanitization failed: {exc}", "error")
 
         pattern = self.config.get("folder_filter_pattern", "").strip()
         match_mode = self.config.get("folder_match_mode", "partial")
@@ -2886,12 +3077,29 @@ class KlingGUIWindow:
         if not self.image_session.count:
             self._log("No images in session to save", "warning")
             return
-        from .session_manager import save_session
-        try:
-            path = save_session(self.data_dir, self.image_session, self.config)
-            self._log(f"Session saved: {os.path.basename(path)}", "success")
-        except Exception as e:
-            self._log(f"Save failed: {e}", "error")
+        self._save_current_session_snapshot()
+
+    def _on_new_session(self):
+        """Prompt to optionally save and then start a new empty session."""
+        if self.image_session.count == 0:
+            self._log("Session already empty", "info")
+            return
+        choice = messagebox.askyesnocancel(
+            "Start New Session",
+            "Save current session before starting a new one?",
+            parent=self.root,
+        )
+        if choice is None:
+            return
+        if choice and not self._save_current_session_snapshot():
+            proceed = messagebox.askyesno(
+                "Save Failed",
+                "Could not save current session.\nStart a new session anyway?",
+                parent=self.root,
+            )
+            if not proceed:
+                return
+        self._clear_working_session(label="new session")
 
     def _on_open_sessions(self):
         """Open the session manager dialog."""
@@ -2910,52 +3118,48 @@ class KlingGUIWindow:
         if not images:
             self._log("Session has no images", "warning")
             return
-        # Suppress auto-calc during restore to avoid scoring every image on load
+        # Suppress auto-calc and autosave burst during restore.
         self.carousel.suppress_auto_calc(True)
-        # Clear and re-populate the LIVE session (preserves tab references)
-        self.image_session.clear()
+        self._autosave_suspended = True
         loaded_count = 0
-        for img in images:
-            path = img.get("path", "")
-            if not os.path.isfile(path):
-                self._log(f"Skipped missing: {os.path.basename(path)}", "warning")
-                continue
-            self.image_session.add_image(
-                path,
-                img.get("source_type", "input"),
-                label=img.get("label", ""),
-                similarity=img.get("similarity"),
-                similarity_score=img.get("similarity_score"),
-                similarity_pass=img.get("similarity_pass"),
-                similarity_override=bool(img.get("similarity_override", False)),
-                similarity_override_note=img.get("similarity_override_note", ""),
-                similarity_override_ts=img.get("similarity_override_ts"),
-                ops=img.get("ops", {}),
-            )
-            loaded_count += 1
-        # Restore indices
-        target_idx = session_data.get("current_index", -1)
-        if 0 <= target_idx < self.image_session.count:
-            self.image_session.navigate_to(target_idx)
-        ref_idx = session_data.get("reference_index", -1)
-        if 0 <= ref_idx < self.image_session.count:
-            self.image_session._reference_index = ref_idx
-        # Restore similarity ref
-        sim_ref_idx = session_data.get("similarity_ref_index", -1)
-        if 0 <= sim_ref_idx < self.image_session.count:
-            self.image_session._similarity_ref_index = sim_ref_idx
-        self.image_session._notify()
-        self.carousel.suppress_auto_calc(False)
-        if hasattr(self, "selfie_tab") and self.selfie_tab:
-            try:
-                self.selfie_tab._refresh_result_actions()
-            except Exception:
-                pass
-        if hasattr(self, "expand_tab") and self.expand_tab:
-            try:
-                self.expand_tab.refresh_candidates(select_all_default=True)
-            except Exception:
-                pass
+        try:
+            # Clear and re-populate the LIVE session (preserves tab references)
+            self.image_session.clear()
+            for img in images:
+                path = img.get("path", "")
+                if not os.path.isfile(path):
+                    self._log(f"Skipped missing: {os.path.basename(path)}", "warning")
+                    continue
+                self.image_session.add_image(
+                    path,
+                    img.get("source_type", "input"),
+                    label=img.get("label", ""),
+                    similarity=img.get("similarity"),
+                    similarity_score=img.get("similarity_score"),
+                    similarity_pass=img.get("similarity_pass"),
+                    similarity_override=bool(img.get("similarity_override", False)),
+                    similarity_override_note=img.get("similarity_override_note", ""),
+                    similarity_override_ts=img.get("similarity_override_ts"),
+                    ops=img.get("ops", {}),
+                )
+                loaded_count += 1
+            # Restore indices
+            target_idx = session_data.get("current_index", -1)
+            if 0 <= target_idx < self.image_session.count:
+                self.image_session.navigate_to(target_idx)
+            ref_idx = session_data.get("reference_index", -1)
+            if 0 <= ref_idx < self.image_session.count:
+                self.image_session._reference_index = ref_idx
+            # Restore similarity ref
+            sim_ref_idx = session_data.get("similarity_ref_index", -1)
+            if 0 <= sim_ref_idx < self.image_session.count:
+                self.image_session._similarity_ref_index = sim_ref_idx
+            self.image_session._notify()
+        finally:
+            self._autosave_suspended = False
+            self.carousel.suppress_auto_calc(False)
+        self._refresh_session_dependent_ui()
+        self._queue_autosave(reason="session_load")
         self._log(f"Session restored: {loaded_count} images loaded", "success")
 
     # ── Auto-save timer ───────────────────────────────────────────────────────
@@ -2978,30 +3182,54 @@ class KlingGUIWindow:
     def _autosave_tick(self):
         """Perform auto-save if session has images, then reschedule."""
         if self.image_session.count > 0:
-            self._maybe_autosave()
+            self._queue_autosave(reason="timer_tick", debounce_ms=350)
         self._start_autosave_timer()  # Reschedule
 
-    def _maybe_autosave(self):
-        """Auto-save to a deterministic per-folder file, always overwriting."""
+    def _on_image_session_changed(self):
+        """Debounced autosave trigger for key session changes."""
+        if self._autosave_suspended:
+            return
+        self._queue_autosave(reason="state_change", debounce_ms=self._autosave_debounce_ms)
+
+    def _queue_autosave(self, reason: str = "state_change", debounce_ms: Optional[int] = None):
+        """Queue one debounced autosave call."""
         if not self.config.get("session_autosave_enabled", True):
             return
         if self.image_session.count == 0:
             return
-        from .session_manager import save_session, get_autosave_path
+        if not hasattr(self, "root") or not self.root.winfo_exists():
+            return
+        delay = self._autosave_debounce_ms if debounce_ms is None else max(0, int(debounce_ms))
+        if self._autosave_job is not None:
+            try:
+                self.root.after_cancel(self._autosave_job)
+            except Exception:
+                pass
+        self._autosave_job = self.root.after(delay, lambda: self._run_debounced_autosave(reason))
 
-        target_path = get_autosave_path(self.data_dir, self.image_session)
-        autosave_name = os.path.splitext(os.path.basename(target_path))[0]
-        overwrite = target_path if os.path.isfile(target_path) else None
+    def _run_debounced_autosave(self, reason: str):
+        """Execute pending autosave callback."""
+        self._autosave_job = None
+        self._maybe_autosave(reason=reason)
+
+    def _maybe_autosave(self, reason: str = "manual"):
+        """Persist a versioned autosave snapshot for the current project."""
+        if not self.config.get("session_autosave_enabled", True):
+            return
+        if self.image_session.count == 0:
+            return
+        from .session_manager import save_session, get_project_key, SESSION_KIND_AUTOSAVE
 
         try:
             save_session(
                 self.data_dir, self.image_session, self.config,
-                name=autosave_name,
-                overwrite_path=overwrite,
+                session_kind=SESSION_KIND_AUTOSAVE,
+                project_key=get_project_key(self.image_session),
+                autosave_retention=int(self.config.get("session_autosave_retention", 10)),
             )
         except Exception as e:
             if self.logger:
-                self.logger.warning("Auto-save failed: %s", e)
+                self.logger.warning("Auto-save failed (%s): %s", reason, e)
 
     def _on_close(self):
         """Handle window close."""
@@ -3039,6 +3267,16 @@ class KlingGUIWindow:
                     self.config.update(tab_widget.get_config_updates())
                 except Exception:
                     pass
+
+        # Flush pending autosave and perform final best-effort save.
+        if self._autosave_job is not None:
+            try:
+                self.root.after_cancel(self._autosave_job)
+            except Exception:
+                pass
+            self._autosave_job = None
+        if self.image_session.count > 0:
+            self._maybe_autosave(reason="close")
 
         # Save layout (geometry + sash positions) before closing
         self._save_layout()

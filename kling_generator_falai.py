@@ -15,6 +15,7 @@ from datetime import datetime
 
 from model_schema_manager import ModelSchemaManager
 from model_metadata import get_prompt_limit
+from path_utils import sanitize_stem
 
 # Setup logging
 logging.basicConfig(
@@ -320,11 +321,12 @@ class FalAIKlingGenerator:
             output_folder = None
 
         model_short = self.get_model_short_name()
+        safe_image_stem = sanitize_stem(image_stem, default="image")
         try:
             slot = max(1, int(getattr(self, "prompt_slot", 1)))
         except (TypeError, ValueError):
             slot = 1
-        prefix = f"{image_stem}_{model_short}_p{slot}_"
+        prefix = f"{safe_image_stem}_{model_short}_p{slot}_"
 
         max_index = 0
         if output_folder:

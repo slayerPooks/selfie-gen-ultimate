@@ -13,7 +13,13 @@ from typing import Callable, Optional, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from path_utils import VALID_EXTENSIONS, get_app_dir, get_gen_images_folder, get_resource_dir
+from path_utils import (
+    VALID_EXTENSIONS,
+    get_app_dir,
+    get_gen_images_folder,
+    get_resource_dir,
+    sanitize_stem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +122,7 @@ def get_output_video_path(
     The index is determined by scanning output_folder for existing files so
     each call returns the next available path for this image+model combination.
     """
-    image_name = Path(image_path).stem
+    image_name = sanitize_stem(Path(image_path).stem, default="image")
     try:
         filename = generator.get_output_filename(image_name, output_folder)
     except (TypeError, AttributeError) as _e:
@@ -151,7 +157,7 @@ def check_video_exists(
     """
     import glob
 
-    image_name = Path(image_path).stem
+    image_name = sanitize_stem(Path(image_path).stem, default="image")
     model_short = _get_model_short_name(generator)
     prompt_slot = (config or {}).get("current_prompt_slot", getattr(generator, "prompt_slot", 1))
     try:
