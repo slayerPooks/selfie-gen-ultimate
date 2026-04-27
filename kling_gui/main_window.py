@@ -28,7 +28,7 @@ from path_utils import (
     sanitize_tree_names,
 )
 
-from .drop_zone import create_dnd_root, HAS_DND, DND_FILES, parse_dnd_paths
+from .drop_zone import DropZone, create_dnd_root, HAS_DND, DND_FILES, parse_dnd_paths
 from .log_display import LogDisplay
 from .config_panel import ConfigPanel
 from .queue_manager import QueueManager, QueueItem
@@ -164,7 +164,13 @@ def sanitize_window_layout(window_config: dict, saved_geometry: str, screen_widt
 
 
 def sanitize_sash_layout(
-    sash_dropzone, sash_prompt_split, sash_queue, sash_log, root_width: int, root_height: int
+    sash_dropzone,
+    sash_prompt_split,
+    sash_queue,
+    sash_log,
+    sash_log_drop_split,
+    root_width: int,
+    root_height: int,
 ) -> tuple[dict, bool]:
     """Clamp sash positions to compact, usable bounds for current window size."""
     safe_w = max(900, int(root_width))
@@ -178,25 +184,31 @@ def sanitize_sash_layout(
     prompt_max = max(prompt_min, safe_w - 260)
     prompt_default = int(safe_w * 0.62)
 
-    queue_min = 250
-    queue_max = max(queue_min, int(safe_w * 0.55))
-    queue_default = int(safe_w * 0.32)
+    queue_min = 300
+    queue_max = max(queue_min, int(safe_w * 0.68))
+    queue_default = int(safe_w * 0.38)
 
     log_min = 110
     log_max = max(log_min, int(safe_h * 0.42))
     log_default = int(safe_h * 0.22)
+
+    log_drop_min = 220
+    log_drop_max = max(log_drop_min, int(safe_w * 0.70))
+    log_drop_default = int(safe_w * 0.50)
 
     sanitized = {
         "sash_dropzone": _clamp_int(sash_dropzone, drop_min, drop_max, drop_default),
         "sash_prompt_split": _clamp_int(sash_prompt_split, prompt_min, prompt_max, prompt_default),
         "sash_queue": _clamp_int(sash_queue, queue_min, queue_max, queue_default),
         "sash_log": _clamp_int(sash_log, log_min, log_max, log_default),
+        "sash_log_drop_split": _clamp_int(sash_log_drop_split, log_drop_min, log_drop_max, log_drop_default),
     }
     changed = (
         sash_dropzone != sanitized["sash_dropzone"]
         or sash_prompt_split != sanitized["sash_prompt_split"]
         or sash_queue != sanitized["sash_queue"]
         or sash_log != sanitized["sash_log"]
+        or sash_log_drop_split != sanitized["sash_log_drop_split"]
     )
     return sanitized, changed
 
@@ -674,6 +686,7 @@ class KlingGUIWindow:
             sash_prompt_split=self.config.get("sash_prompt_split", 620),
             sash_queue=self.config.get("sash_queue", 320),
             sash_log=self.config.get("sash_log", 150),
+            sash_log_drop_split=self.config.get("sash_log_drop_split", 360),
             root_width=sanitized_window["width"],
             root_height=sanitized_window["height"],
         )
@@ -800,6 +813,7 @@ class KlingGUIWindow:
             "sash_dropzone": 500,  # Height of top pane
             "sash_queue": 320,  # Width of left bottom pane
             "sash_log": 150,  # Height of log pane (before history)
+            "sash_log_drop_split": 360,  # Width split in log pane (log | permanent drop zone)
         }
 
         # Layer 1: apply bundled defaults template (prompts, model, etc.)
@@ -981,8 +995,8 @@ class KlingGUIWindow:
             "TNotebook.Tab",
             background=COLORS["bg_input"],
             foreground=COLORS["text_dim"],
-            padding=[14, 6],
-            font=(FONT_FAMILY, 10, "bold"),
+            padding=[10, 5],
+            font=(FONT_FAMILY, 9, "bold"),
         )
         style.map(
             "TNotebook.Tab",
@@ -1189,7 +1203,6 @@ class KlingGUIWindow:
             config=self.config,
             on_config_changed=self._on_config_changed,
             build_prompt=False,
-            on_images_dropped=self._on_images_to_carousel,
         )
 
         self.video_tab.attach_config_panel(self.config_panel)
@@ -1236,13 +1249,13 @@ class KlingGUIWindow:
         )
         self.carousel.pack(fill=tk.BOTH, expand=True)
         self.carousel.set_on_compare(self._toggle_compare)
-        self.bottom_paned.add(carousel_frame, minsize=300)
+        self.bottom_paned.add(carousel_frame, minsize=340)
 
         # Compare panel state (created on demand by _toggle_compare)
         self._compare_frame: Optional[tk.Frame] = None
         self._compare_panel: Optional[ComparePanel] = None
 
-        # Queue panel — lives inside VideoTab (below the drop zone)
+        # Queue panel — lives inside VideoTab (below the top controls)
         self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
         self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
@@ -1258,10 +1271,29 @@ class KlingGUIWindow:
         )
         self.bottom_paned.add(self.right_paned, minsize=200)
 
-        # Log panel (top right pane)
+        # Log panel (top right pane): split into log + permanent drop zone
         log_frame = tk.Frame(self.right_paned, bg=COLORS["bg_main"])
-        self.log_display = LogDisplay(log_frame)
+        self.log_drop_paned = tk.PanedWindow(
+            log_frame,
+            orient=tk.HORIZONTAL,
+            bg=COLORS["bg_input"],
+            sashwidth=6,
+            sashrelief=tk.RAISED,
+            sashpad=1,
+        )
+        self.log_drop_paned.pack(fill=tk.BOTH, expand=True)
+
+        log_panel = tk.Frame(self.log_drop_paned, bg=COLORS["bg_main"])
+        self.log_display = LogDisplay(log_panel)
         self.log_display.pack(fill=tk.BOTH, expand=True)
+        self.log_drop_paned.add(log_panel, minsize=220)
+
+        self.drop_zone = DropZone(
+            self.log_drop_paned,
+            on_files_dropped=self._add_input_images_to_session,
+            on_folder_dropped=None,
+        )
+        self.log_drop_paned.add(self.drop_zone, minsize=220)
         self.right_paned.add(log_frame, minsize=100)
 
         # History panel (bottom right pane)
@@ -1612,6 +1644,8 @@ class KlingGUIWindow:
                 self.bottom_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
             if hasattr(self, "right_paned"):
                 self.right_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
+            if hasattr(self, "log_drop_paned"):
+                self.log_drop_paned.bind("<B1-Motion>", self._on_sash_drag, add="+")
         except Exception:
             pass
 
@@ -1834,6 +1868,12 @@ class KlingGUIWindow:
         except Exception:
             pass
 
+        try:
+            if hasattr(self, "log_drop_paned"):
+                positions["log_drop_sash"] = self.log_drop_paned.sash_coord(0)
+        except Exception:
+            pass
+
         if positions:
             self._show_sash_toast(positions)
 
@@ -1860,7 +1900,8 @@ class KlingGUIWindow:
             text = (
                 f"Drop: {positions.get('dropzone_sash', '')}  |  "
                 f"Queue: {positions.get('queue_sash', '')}  |  "
-                f"Log: {positions.get('log_sash', '')}"
+                f"Log: {positions.get('log_sash', '')}  |  "
+                f"Log/Drop: {positions.get('log_drop_sash', '')}"
             )
 
             frame = tk.Frame(popup, bg="#202225", bd=1, relief=tk.SOLID)
@@ -1967,6 +2008,12 @@ class KlingGUIWindow:
             except Exception:
                 pass
 
+            try:
+                if hasattr(self, "log_drop_paned"):
+                    layout["sash_positions"]["log_drop"] = self.log_drop_paned.sash_coord(0)
+            except Exception:
+                pass
+
             export_path = Path("ui_config_exported.json")
             with open(export_path, "w", encoding="utf-8") as f:
                 json.dump(layout, f, indent=2)
@@ -2038,8 +2085,9 @@ class KlingGUIWindow:
         sessions_btn = ttk.Button(
             header,
             text="Sessions",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("header_sessions", self._on_open_sessions),
+            width=12,
         )
         sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
@@ -2088,11 +2136,12 @@ class KlingGUIWindow:
         self._drop_zone_window = None
         drop_zone_btn = ttk.Button(
             header,
-            text="\u25CE",  # ◎ target icon
-            style=TTK_BTN_COMPACT,
+            text="Drop Zone",
+            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("header_toggle_drop_zone", self._toggle_drop_zone),
+            width=12,
         )
-        drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 3), pady=4)
+        drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
     # -- API key badge helpers ------------------------------------------------
 
@@ -3064,6 +3113,7 @@ class KlingGUIWindow:
                 sash_prompt_split=self.config.get("sash_prompt_split", 620),
                 sash_queue=self.config.get("sash_queue", 320),
                 sash_log=self.config.get("sash_log", 150),
+                sash_log_drop_split=self.config.get("sash_log_drop_split", 360),
                 root_width=self.root.winfo_width(),
                 root_height=self.root.winfo_height(),
             )
@@ -3075,6 +3125,7 @@ class KlingGUIWindow:
             prompt_split = sash_values["sash_prompt_split"]
             queue_pos = sash_values["sash_queue"]
             log_pos = sash_values["sash_log"]
+            log_drop_pos = sash_values["sash_log_drop_split"]
 
             # Restore main paned (top section height)
             if hasattr(self, "main_paned"):
@@ -3091,6 +3142,10 @@ class KlingGUIWindow:
             # Restore right paned (log height)
             if hasattr(self, "right_paned"):
                 self.right_paned.sash_place(0, 0, log_pos)
+
+            # Restore log pane horizontal split (log | permanent drop zone)
+            if hasattr(self, "log_drop_paned"):
+                self.log_drop_paned.sash_place(0, log_drop_pos, 0)
 
         except Exception as e:
             # Sash positions may fail on first run, that's OK
@@ -3139,6 +3194,14 @@ class KlingGUIWindow:
                         self.config["sash_log"] = sash_pos[
                             1
                         ]  # Y position for vertical paned
+                except Exception:
+                    pass
+
+            if hasattr(self, "log_drop_paned"):
+                try:
+                    sash_pos = self.log_drop_paned.sash_coord(0)
+                    if sash_pos:
+                        self.config["sash_log_drop_split"] = sash_pos[0]
                 except Exception:
                     pass
 

@@ -12,8 +12,8 @@ from .theme import (
     COLORS,
     FONT_FAMILY,
     TTK_BTN_COMPACT,
-    TTK_BTN_SECONDARY,
-    TTK_BTN_TAB_NAV,
+    TTK_BTN_DANGER,
+    TTK_BTN_SUCCESS,
     debounce_command,
 )
 from .image_state import ImageSession
@@ -164,9 +164,9 @@ class ImageCarousel(tk.Frame):
         add_btn = ttk.Button(
             header,
             text="+",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SUCCESS,
             command=debounce_command(self._on_add_image, key="carousel_add"),
-            width=2,
+            width=3,
         )
         add_btn.pack(side=tk.RIGHT)
 
@@ -174,9 +174,9 @@ class ImageCarousel(tk.Frame):
         self.remove_btn = ttk.Button(
             header,
             text="-",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_DANGER,
             command=debounce_command(self._on_remove_image, key="carousel_remove"),
-            width=2,
+            width=3,
             state=tk.DISABLED,
         )
         self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
@@ -195,9 +195,9 @@ class ImageCarousel(tk.Frame):
         self.next_btn = ttk.Button(
             header,
             text="\u25B6",
-            style=TTK_BTN_TAB_NAV,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(lambda: self.image_session.navigate(1), key="carousel_next", interval_ms=120),
-            width=1,
+            width=3,
         )
         self.next_btn.pack(side=tk.RIGHT, padx=(1, 3))
 
@@ -213,9 +213,9 @@ class ImageCarousel(tk.Frame):
         self.prev_btn = ttk.Button(
             header,
             text="\u25C0",
-            style=TTK_BTN_TAB_NAV,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(lambda: self.image_session.navigate(-1), key="carousel_prev", interval_ms=120),
-            width=1,
+            width=3,
         )
         self.prev_btn.pack(side=tk.RIGHT)
 
