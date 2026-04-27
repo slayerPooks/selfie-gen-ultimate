@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog
 from typing import Callable, List
 import os
+import sys
 
 from path_utils import VALID_EXTENSIONS
 
@@ -14,7 +15,50 @@ try:
 
     HAS_DND = True
 except ImportError:
+    DND_FILES = None
     HAS_DND = False
+
+# Allow explicit runtime opt-out when troubleshooting drag-and-drop.
+if os.getenv("SELFIEGEN_MAC_DISABLE_DND", "0") == "1":
+    HAS_DND = False
+
+
+def parse_dnd_paths(data: str, splitlist_fn=None, require_exists: bool = True) -> List[str]:
+    """Parse TkDND payload into normalized file paths."""
+    if not data:
+        return []
+
+    raw_items = []
+    parser = splitlist_fn
+    if parser:
+        try:
+            raw_items = list(parser(data))
+        except Exception:
+            raw_items = []
+
+    if not raw_items:
+        # Fallback parser for plain/brace-quoted payloads.
+        import re
+
+        if "{" in data:
+            brace_items = re.findall(r"\{([^}]+)\}", data)
+            raw_items.extend(brace_items)
+            remaining = re.sub(r"\{[^}]+\}", "", data).strip()
+            if remaining:
+                raw_items.extend(remaining.split())
+        else:
+            raw_items.extend(data.split())
+
+    cleaned = []
+    for item in raw_items:
+        path = str(item).strip().strip('"').strip("'")
+        if not path:
+            continue
+        if require_exists and not os.path.exists(path):
+            continue
+        cleaned.append(path)
+
+    return cleaned
 
 
 def create_dnd_root():
@@ -41,6 +85,9 @@ COLORS = {
     "border": "#5A5A5E",
     "accent_blue": "#6496FF",
 }
+
+FONT_FAMILY = "Helvetica" if sys.platform == "darwin" else "Segoe UI"
+EMOJI_FONT_FAMILY = "Apple Color Emoji" if sys.platform == "darwin" else "Segoe UI Emoji"
 
 
 class DropZone(tk.Frame):
@@ -83,7 +130,7 @@ class DropZone(tk.Frame):
         self.icon_label = tk.Label(
             self.content_container,
             text="📥",
-            font=("Segoe UI Emoji", 40),
+            font=(EMOJI_FONT_FAMILY, 40),
             bg=self._default_bg,
             fg=COLORS["accent_blue"],
         )
@@ -93,31 +140,21 @@ class DropZone(tk.Frame):
         self.main_label = tk.Label(
             self.content_container,
             text="DRAG & DROP IMAGES",
-            font=("Segoe UI", 13, "bold"),
+            font=(FONT_FAMILY, 14, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
         self.main_label.pack(pady=2)
 
-        # Sub-instruction label
+        # Sub-instruction label (combined: left click + right click hint on one line)
         self.sub_label = tk.Label(
             self.content_container,
-            text="or click to browse files",
-            font=("Segoe UI", 10),
+            text="Left click to select files  |  Right click for folder",
+            font=(FONT_FAMILY, 11),
             bg=self._default_bg,
             fg=COLORS["text_dim"],
         )
         self.sub_label.pack(pady=(0, 10))
-
-        # Folder hint
-        self.folder_hint = tk.Label(
-            self.content_container,
-            text="Right-click to process a folder",
-            font=("Segoe UI", 8, "italic"),
-            bg=self._default_bg,
-            fg=COLORS["accent_blue"],
-        )
-        self.folder_hint.pack()
 
         # Bind events for hover and click
         for widget in [
@@ -126,7 +163,6 @@ class DropZone(tk.Frame):
             self.main_label,
             self.sub_label,
             self.content_container,
-            self.folder_hint,
         ]:
             widget.bind("<Button-1>", self._on_click_browse)
             widget.bind("<Button-3>", self._on_right_click_browse_folder)
@@ -138,7 +174,7 @@ class DropZone(tk.Frame):
         self.status_label = tk.Label(
             self.drop_frame,
             text="",
-            font=("Segoe UI", 11, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=self._default_bg,
             fg=COLORS["text_light"],
         )
@@ -149,7 +185,7 @@ class DropZone(tk.Frame):
             self._setup_dnd()
         else:
             self.main_label.config(text="CLICK TO SELECT IMAGES")
-            self.sub_label.config(text="Drag-drop not available in this environment")
+            self.sub_label.config(text="Left click to select files  |  Right click for folder")
 
     def _on_mouse_enter(self, event=None):
         """Handle mouse hover enter."""
@@ -158,6 +194,12 @@ class DropZone(tk.Frame):
 
     def _on_mouse_leave(self, event=None):
         """Handle mouse hover leave."""
+        if event:
+            df = self.drop_frame
+            rel_x = event.x_root - df.winfo_rootx()
+            rel_y = event.y_root - df.winfo_rooty()
+            if 0 <= rel_x <= df.winfo_width() and 0 <= rel_y <= df.winfo_height():
+                return  # mouse moved onto a child widget, still inside drop_frame
         self._reset_highlight()
         self.drop_frame.config(highlightbackground=COLORS["border"])
 
@@ -170,13 +212,19 @@ class DropZone(tk.Frame):
             self.sub_label,
             self.content_container,
             self.status_label,
-            self.folder_hint,
         ]:
             widget.config(bg=color)
 
     def _reset_highlight(self):
         """Reset to default colors."""
         self._set_highlight(self._default_bg)
+
+    def _clear_status_later(self):
+        """Clear status text only if the widget still exists."""
+        self.after(
+            2000,
+            lambda: self.status_label.config(text="") if self.winfo_exists() else None,
+        )
 
     def _on_click_browse(self, event=None):
         """Handle left-click to open file browser dialog."""
@@ -224,8 +272,7 @@ class DropZone(tk.Frame):
                     fg=COLORS["drop_invalid"],
                 )
 
-            # Clear status after delay
-            self.after(2000, lambda: self.status_label.config(text=""))
+            self._clear_status_later()
 
     def _browse_folder(self):
         """Open folder browser dialog."""
@@ -236,8 +283,7 @@ class DropZone(tk.Frame):
                 text="Processing folder...", fg=COLORS["text_light"]
             )
             self.on_folder_dropped(folder_path)
-            # Clear status after delay
-            self.after(2000, lambda: self.status_label.config(text=""))
+            self._clear_status_later()
 
     def _on_right_click_browse_folder(self, event=None):
         """Handle right-click to open folder browser dialog."""
@@ -276,7 +322,12 @@ class DropZone(tk.Frame):
         self.status_label.config(text="")
 
         # Parse dropped files/folders
-        items = self._parse_drop_data(event.data)
+        splitlist_fn = None
+        try:
+            splitlist_fn = self.winfo_toplevel().tk.splitlist
+        except Exception:
+            splitlist_fn = None
+        items = parse_dnd_paths(event.data, splitlist_fn=splitlist_fn, require_exists=True)
 
         # Separate files and folders
         valid_files = []
@@ -314,39 +365,18 @@ class DropZone(tk.Frame):
                 fg=COLORS["drop_invalid"],
             )
 
-        # Clear status after delay
-        self.after(2000, lambda: self.status_label.config(text=""))
+        self._clear_status_later()
 
         return event.action
 
     def _parse_drop_data(self, data: str) -> List[str]:
         """Parse the dropped file data into a list of paths."""
-        files = []
-
-        # Handle different formats
-        # Windows typically gives paths in {} braces if they contain spaces
-        if "{" in data:
-            # Parse {path1} {path2} format
-            import re
-
-            matches = re.findall(r"\{([^}]+)\}", data)
-            files.extend(matches)
-            # Also get unbraced paths
-            remaining = re.sub(r"\{[^}]+\}", "", data).strip()
-            if remaining:
-                files.extend(remaining.split())
-        else:
-            # Simple space-separated paths
-            files = data.split()
-
-        # Clean up paths
-        cleaned = []
-        for f in files:
-            f = f.strip()
-            if f and os.path.exists(f):
-                cleaned.append(f)
-
-        return cleaned
+        splitlist_fn = None
+        try:
+            splitlist_fn = self.winfo_toplevel().tk.splitlist
+        except Exception:
+            splitlist_fn = None
+        return parse_dnd_paths(data, splitlist_fn=splitlist_fn, require_exists=True)
 
     def validate_file(self, file_path: str) -> tuple:
         """

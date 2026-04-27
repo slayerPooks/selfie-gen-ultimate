@@ -108,16 +108,16 @@ class KlingAutomationUI:
                         merged["saved_prompts"] = default_config["saved_prompts"]
                     else:
                         for slot in [str(i) for i in range(1, 11)]:
-                            if slot not in merged["saved_prompts"]:
-                                merged["saved_prompts"][slot] = None
+                            if slot not in merged["saved_prompts"] or merged["saved_prompts"][slot] is None:
+                                merged["saved_prompts"][slot] = ""
 
                     # Ensure negative_prompts has all slots (1-10)
                     if "negative_prompts" not in merged:
                         merged["negative_prompts"] = default_config["negative_prompts"]
                     else:
                         for slot in [str(i) for i in range(1, 11)]:
-                            if slot not in merged["negative_prompts"]:
-                                merged["negative_prompts"][slot] = None
+                            if slot not in merged["negative_prompts"] or merged["negative_prompts"][slot] is None:
+                                merged["negative_prompts"][slot] = ""
 
                     return merged
         except Exception:
@@ -1060,8 +1060,8 @@ class KlingAutomationUI:
                 print("\n\033[90mCancelled\033[0m")
                 time.sleep(0.5)
         elif choice == "4":
-            self.config["saved_prompts"][current_slot] = None
-            self.config["negative_prompts"][current_slot] = None
+            self.config["saved_prompts"][current_slot] = ""
+            self.config["negative_prompts"][current_slot] = ""
             self.save_config()
             print("\n\033[93mSlot {} cleared\033[0m".format(current_slot))
             time.sleep(1.5)
@@ -1837,7 +1837,8 @@ class KlingAutomationUI:
 def main():
     """Entry point"""
     try:
-        os.system("color")
+        if os.name == "nt":
+            os.system("color")
 
         # Check dependencies before starting
         try:

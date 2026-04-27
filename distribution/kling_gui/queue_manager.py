@@ -4,53 +4,39 @@ Queue Manager - Thread-safe queue for processing images with status tracking.
 
 import threading
 import os
-import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List
 from pathlib import Path
-from datetime import datetime
 
 from path_utils import VALID_EXTENSIONS
-
-logger = logging.getLogger(__name__)
 
 
 def get_output_video_path(
     image_path: str,
     output_folder: str,
-    generator,
-    config: dict,
-    timestamp: Optional[datetime] = None,
+    model_short: str = "kling",
+    prompt_slot: int = 1,
 ) -> Path:
-    """Get the output video path using new enhanced filename format.
+    """Get the default output video path for an image.
 
     Args:
         image_path: Path to the source image
         output_folder: Folder where video will be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
-
-    Returns:
-        Path to output video with format:
-        {image}-{Model_Name}-{prompt_shorthand}-p{slot}-YYYY-MM-DD.mp4
+        model_short: Short model identifier (e.g., 'k25turbo', 'wan25')
+        prompt_slot: Current prompt slot (1, 2, or 3)
     """
     image_name = Path(image_path).stem
-    filename = generator.get_output_filename(image_name, config, timestamp)
-    return Path(output_folder) / filename
+    return Path(output_folder) / f"{image_name}_kling_{model_short}_p{prompt_slot}.mp4"
 
 
 def check_video_exists(
     image_path: str,
     output_folder: str,
-    generator,
-    config: dict,
-) -> tuple[bool, Optional[str]]:
+    model_short: str = "kling",
+    prompt_slot: int = 1,
+) -> bool:
     """
-    Check if a video already exists for this image (any date variant).
-
-    Since date changes daily, checks for pattern:
-    {image_name}-{model_name}-{prompt_part}-p{slot}-*.mp4
+    Check if a video already exists for this image.
 
     We treat either the base render or its looped sibling as "exists" to
     avoid overwriting/deleting a looped-only output.
@@ -58,151 +44,36 @@ def check_video_exists(
     Args:
         image_path: Path to the source image
         output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-
-    Returns:
-        Tuple of (exists: bool, found_path: str | None)
-        - exists: True if any matching video exists
-        - found_path: Path to the first found video, or None if not found
+        model_short: Short model identifier (e.g., 'k25turbo', 'wan25')
+        prompt_slot: Current prompt slot (1, 2, or 3)
     """
-    import glob
-
-    image_name = Path(image_path).stem
-    model_name = generator.model_display_name.replace(" ", "_")
-    slot_str = str(generator.prompt_slot)
-
-    # Get prompt part
-    prompt_titles = config.get("prompt_titles", {})
-    if slot_str in prompt_titles and prompt_titles[slot_str]:
-        # Sanitize shorthand (same logic as in generator)
-        shorthand = prompt_titles[slot_str]
-        prompt_part = ''.join(
-            c if c.isalnum() or c in ('_', '-', ' ') else ''
-            for c in shorthand
-        ).replace(" ", "_")
-    else:
-        saved_prompts = config.get("saved_prompts", {})
-        prompt_text = saved_prompts.get(slot_str, "")
-        if prompt_text:
-            prompt_part = generator.sanitize_prompt_description(prompt_text)
-        else:
-            prompt_part = "prompt"
-
-    # Build glob pattern (match any date)
-    pattern = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*.mp4"
-    pattern_looped = f"{image_name}-{model_name}-{prompt_part}-p{generator.prompt_slot}-*_looped.mp4"
-
-    # Search for matching files
-    search_pattern = str(Path(output_folder) / pattern)
-    search_pattern_looped = str(Path(output_folder) / pattern_looped)
-
-    matches = glob.glob(search_pattern)
-    matches_looped = glob.glob(search_pattern_looped)
-
-    # Return first found match
-    all_matches = matches + matches_looped
-    if all_matches:
-        return True, all_matches[0]
-    return False, None
-
-
-# Model duration constraints (from fal.ai API documentation)
-# Format: (pattern, allowed_durations, priority)
-# Higher priority patterns are checked first to ensure more specific matches
-MODEL_DURATION_CONSTRAINTS = [
-    # Kling family - most specific patterns first
-    ("kling-video/v2.1", [5, 10], 3),
-    ("kling-video/v2.5", [5, 10], 3),
-    ("kling-video/v2", [5, 10], 2),  # Catch-all for v2.x
-    ("kling-video/v1", [5, 10], 2),
-    ("kling-video/o1", [5, 10], 2),
-
-    # Wan models - specific versions first
-    ("wan/v2.6", [5, 10, 15], 3),  # v2.6 added 15-second support
-    ("wan/v2.5", [5, 10], 3),
-    ("wan-25-preview", [5, 10], 3),
-
-    # Pixverse models - specific versions first
-    ("pixverse/v5.5", [5, 8, 10], 3),
-    ("pixverse/v5", [5, 8], 3),
-
-    # Other models - alphabetically sorted
-    ("haiper-video-v2", [4, 6], 2),
-    ("hunyuan-video", [5, 10], 2),
-    ("ltx-2", [5, 10], 2),
-    ("minimax-video", [6], 2),
-    ("ovi", [5, 10], 2),
-    ("veo3", [5, 6, 7, 8], 2),
-    ("vidu", [2, 3, 4, 5, 6, 7, 8], 2),  # Vidu Q2 supports 2-8 seconds
-]
+    base_path = get_output_video_path(
+        image_path, output_folder, model_short, prompt_slot
+    )
+    loop_path = base_path.with_name(f"{base_path.stem}_looped{base_path.suffix}")
+    return base_path.exists() or loop_path.exists()
 
 
 def validate_duration(model_endpoint: str, duration: int) -> None:
-    """Validate duration against model-specific constraints.
-
-    Uses priority-based pattern matching to ensure more specific model versions
-    are matched before generic patterns (e.g., "kling-video/v2.5" before "kling-video/v2").
-
-    Args:
-        model_endpoint: Full model endpoint (e.g., "fal-ai/kling-video/v2.1/pro/image-to-video")
-        duration: Requested duration in seconds
-
-    Raises:
-        ValueError: If duration is not valid for the model
     """
-    if not isinstance(duration, int) or duration <= 0:
-        raise ValueError(f"Duration must be a positive integer, got: {duration}")
+    Validate duration is permitted for the given model endpoint.
 
-    # Sort constraints by priority (highest first) for most specific matching
-    sorted_constraints = sorted(MODEL_DURATION_CONSTRAINTS, key=lambda x: x[2], reverse=True)
+    Raises ValueError if duration is invalid, preventing bad API requests.
 
-    # Check against known constraints with priority-based matching
-    for pattern, allowed_durations, _ in sorted_constraints:
-        if pattern in model_endpoint:
-            if duration not in allowed_durations:
-                allowed_str = ', '.join(f"{d}s" for d in allowed_durations)
-                model_name = model_endpoint.split('/')[-1] if '/' in model_endpoint else model_endpoint
-                raise ValueError(
-                    f"Duration {duration}s invalid for {model_name}. "
-                    f"Allowed durations: {allowed_str}"
-                )
-            logger.debug(f"Duration {duration}s validated for pattern '{pattern}'")
-            return  # Valid duration found
-
-    # Unknown model - log warning but allow (graceful degradation)
-    logger.warning(
-        f"No duration constraints found for model '{model_endpoint}'. "
-        f"Proceeding with duration {duration}s (may fail at API level if unsupported)."
-    )
-
-
-def get_duration_options_for_model(model_endpoint: str) -> list:
-    """Get available duration options for a given model.
-    
-    Args:
-        model_endpoint: Full model endpoint
-        
-    Returns:
-        List of allowed duration values in seconds, or [5, 10] if unknown
+    Known constraints:
+    - Kling 2.1 Master: only 5 or 10 seconds permitted
     """
-    # Sort constraints by priority for most specific matching
-    sorted_constraints = sorted(MODEL_DURATION_CONSTRAINTS, key=lambda x: x[2], reverse=True)
-    
-    for pattern, allowed_durations, _ in sorted_constraints:
-        if pattern in model_endpoint:
-            return allowed_durations
-    
-    # Default for unknown models
-    return [5, 10]
+    if "v2.1/master" in model_endpoint and duration not in [5, 10]:
+        raise ValueError(
+            f"Duration {duration}s invalid for Kling 2.1 Master (permitted: 5, 10)"
+        )
 
 
 def get_next_available_path(
     image_path: str,
     output_folder: str,
-    generator,
-    config: dict,
-    timestamp: Optional[datetime] = None,
+    model_short: str = "kling",
+    prompt_slot: int = 1,
 ) -> Path:
     """
     Find the next available filename with increment suffix.
@@ -210,32 +81,21 @@ def get_next_available_path(
     Args:
         image_path: Path to the source image
         output_folder: Folder where video would be saved
-        generator: FalAIKlingGenerator instance
-        config: Config dict containing prompt_titles and saved_prompts
-        timestamp: Generation start time (defaults to now)
-
-    Returns:
-        Next available path with increment suffix
+        model_short: Short model identifier (e.g., 'k25turbo', 'wan25')
+        prompt_slot: Current prompt slot (1, 2, or 3)
 
     Examples:
-        Image-Model-Prompt-p2-01-17-2026.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_2.mp4
-        Image-Model-Prompt-p2-01-17-2026_2.mp4 exists ->
-            returns Image-Model-Prompt-p2-01-17-2026_3.mp4
+        selfie_kling_k25turbo_p2.mp4 exists -> returns selfie_kling_k25turbo_p2_2.mp4
+        selfie_kling_k25turbo_p2_2.mp4 exists -> returns selfie_kling_k25turbo_p2_3.mp4
     """
-    base_path = get_output_video_path(
-        image_path, output_folder, generator, config, timestamp
-    )
-
+    image_name = Path(image_path).stem
+    base_name = f"{image_name}_kling_{model_short}_p{prompt_slot}"
     counter = 1
-    while True:
-        if counter == 1:
-            candidate = base_path
-        else:
-            # Insert counter before .mp4 extension
-            candidate = base_path.with_name(f"{base_path.stem}_{counter}{base_path.suffix}")
 
-        candidate_loop = candidate.with_name(f"{candidate.stem}_looped{candidate.suffix}")
+    while True:
+        suffix = "" if counter == 1 else f"_{counter}"
+        candidate = Path(output_folder) / f"{base_name}{suffix}.mp4"
+        candidate_loop = Path(output_folder) / f"{base_name}{suffix}_looped.mp4"
 
         # Return first gap where neither base nor looped variant exists
         if not candidate.exists() and not candidate_loop.exists():
@@ -243,7 +103,7 @@ def get_next_available_path(
 
         counter += 1
         if counter > 999:  # Safety limit
-            raise ValueError(f"Too many versions of {base_path.name}")
+            raise ValueError(f"Too many versions of {base_name}.mp4")
 
 
 @dataclass
@@ -484,9 +344,6 @@ class QueueManager:
             self.log(f"Processing: {item.filename}", "info")
 
             try:
-                # Capture timestamp at start of processing (for consistent filenames)
-                generation_timestamp = datetime.now()
-
                 # Get current config
                 config = self.get_config()
                 use_source_folder = config.get("use_source_folder", True)
@@ -508,6 +365,9 @@ class QueueManager:
 
                 # Update generator's prompt slot for filename generation
                 self.generator.update_prompt_slot(prompt_slot)
+
+                # Get model short name for filename
+                model_short = self.generator.get_model_short_name()
 
                 # Validate duration before making API request
                 try:
@@ -546,17 +406,16 @@ class QueueManager:
                     self.log_verbose(f"  Output: {actual_output}", "debug")
 
                 # Check if video already exists (with current model and prompt slot)
-                video_exists, found_video_path = check_video_exists(
-                    item.path, actual_output, self.generator, config
+                video_exists = check_video_exists(
+                    item.path, actual_output, model_short, prompt_slot
                 )
                 custom_output_path = None
 
                 if video_exists:
                     if not allow_reprocess:
                         # Reprocessing disabled - fail with clear message
-                        # Use the actual found filename instead of generating a new one
-                        existing_path = Path(found_video_path) if found_video_path else get_output_video_path(
-                            item.path, actual_output, self.generator, config, generation_timestamp
+                        existing_path = get_output_video_path(
+                            item.path, actual_output, model_short, prompt_slot
                         )
                         item.status = "failed"
                         item.error_message = f"Video already exists: {existing_path.name}. Enable 'Allow reprocessing' to regenerate."
@@ -574,7 +433,7 @@ class QueueManager:
                     elif reprocess_mode == "overwrite":
                         # Overwrite mode - delete existing file and looped variant
                         existing_path = get_output_video_path(
-                            item.path, actual_output, self.generator, config, generation_timestamp
+                            item.path, actual_output, model_short, prompt_slot
                         )
                         looped_path = existing_path.with_name(
                             f"{existing_path.stem}_looped{existing_path.suffix}"
@@ -600,7 +459,7 @@ class QueueManager:
                         # Increment mode - find next available filename
                         try:
                             next_path = get_next_available_path(
-                                item.path, actual_output, self.generator, config, generation_timestamp
+                                item.path, actual_output, model_short, prompt_slot
                             )
                             custom_output_path = str(next_path)
                             self.log(
@@ -633,7 +492,6 @@ class QueueManager:
                     seed=seed,
                     camera_fixed=camera_fixed,
                     generate_audio=generate_audio,
-                    generation_timestamp=generation_timestamp,
                 )
 
                 if result:
@@ -677,7 +535,6 @@ class QueueManager:
         seed: int = -1,
         camera_fixed: bool = False,
         generate_audio: bool = False,
-        generation_timestamp: Optional[datetime] = None,
     ) -> Optional[str]:
         """
         Generate video using the generator.
@@ -696,7 +553,6 @@ class QueueManager:
             seed: Random seed, -1 for random (default: -1)
             camera_fixed: Lock camera movement (default: False)
             generate_audio: Generate audio track (default: False)
-            generation_timestamp: Generation start time for consistent filenames (default: None)
 
         Returns:
             Output path on success, None on failure
@@ -736,8 +592,6 @@ class QueueManager:
                 seed=seed,
                 camera_fixed=camera_fixed,
                 generate_audio=generate_audio,
-                config=config,
-                timestamp=generation_timestamp,
             )
 
             if result and custom_output_path != result:
@@ -767,8 +621,6 @@ class QueueManager:
                 seed=seed,
                 camera_fixed=camera_fixed,
                 generate_audio=generate_audio,
-                config=config,
-                timestamp=generation_timestamp,
             )
 
     def _loop_video(self, video_path: str, item: QueueItem):

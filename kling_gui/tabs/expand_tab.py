@@ -1,0 +1,831 @@
+"""Step 2.5 Expand tab - gated expansion between selfie generation and video."""
+
+import os
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import messagebox, ttk
+from typing import Callable, List, Optional
+
+from path_utils import get_gen_images_folder
+
+from ..image_state import ImageSession, SIMILARITY_PASS_THRESHOLD, parse_similarity_score
+from ..theme import (
+    COLORS,
+    FONT_FAMILY,
+    TTK_BTN_COMPACT,
+    TTK_BTN_PRIMARY,
+    TTK_BTN_SUCCESS,
+    debounce_command,
+)
+
+
+class ExpandTab(tk.Frame):
+    """Tab 2.5: expand selfie outputs with similarity gate and Step 3 handoff."""
+
+    def __init__(
+        self,
+        parent,
+        image_session: ImageSession,
+        config: dict,
+        config_getter: Callable[[], dict],
+        log_callback: Callable[[str, str], None],
+        on_send_to_video: Optional[Callable[[List[str]], None]] = None,
+        notebook_switcher_video: Optional[Callable[[], None]] = None,
+        config_saver: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
+        self.image_session = image_session
+        self.config = config
+        self.get_config = config_getter
+        self.log = log_callback
+        self._on_send_to_video = on_send_to_video
+        self._notebook_switcher_video = notebook_switcher_video
+        self._config_saver = config_saver
+
+        self._busy = False
+        self._candidate_entries = []
+        self._expanded_paths: List[str] = []
+
+        self._auto_switch_var = tk.BooleanVar(
+            value=self.config.get("expand25_auto_switch", True)
+        )
+        self._expand_mode_var = tk.StringVar(
+            value=self.config.get("outpaint_expand_mode", "percentage")
+        )
+        self._pct_var = tk.IntVar(
+            value=self.config.get("outpaint_expand_percentage", 30)
+        )
+        self._top_var = tk.IntVar(value=self.config.get("outpaint_expand_top", 140))
+        self._bottom_var = tk.IntVar(value=self.config.get("outpaint_expand_bottom", 140))
+        self._left_var = tk.IntVar(value=self.config.get("outpaint_expand_left", 140))
+        self._right_var = tk.IntVar(value=self.config.get("outpaint_expand_right", 140))
+        self._format_var = tk.StringVar(value=self.config.get("outpaint_format", "png"))
+        self._provider_var = tk.StringVar(
+            value=self.config.get(
+                "outpaint_provider", "bfl" if self.config.get("bfl_api_key") else "fal"
+            )
+        )
+
+        self._build_ui()
+        self.refresh_candidates(select_all_default=True)
+
+    def _build_ui(self):
+        candidate_frame = tk.LabelFrame(
+            self,
+            text="Step 2 Selfie Candidates",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        candidate_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(8, 4))
+
+        self._candidate_list = tk.Listbox(
+            candidate_frame,
+            selectmode=tk.EXTENDED,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief=tk.FLAT,
+            height=6,
+            exportselection=False,
+        )
+        candidate_scroll = ttk.Scrollbar(
+            candidate_frame, orient=tk.VERTICAL, command=self._candidate_list.yview
+        )
+        self._candidate_list.configure(yscrollcommand=candidate_scroll.set)
+        self._candidate_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=6)
+        candidate_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 6), pady=6)
+
+        candidate_actions = tk.Frame(self, bg=COLORS["bg_panel"])
+        candidate_actions.pack(fill=tk.X, padx=10, pady=(0, 4))
+        ttk.Button(
+            candidate_actions,
+            text="Refresh Selfies",
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(lambda: self.refresh_candidates(select_all_default=True), key="expand_refresh_candidates"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            candidate_actions,
+            text="Select All",
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._select_all_candidates, key="expand_select_all"),
+        ).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(
+            candidate_actions,
+            text="Select Passing",
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._select_passing_candidates, key="expand_select_passing"),
+        ).pack(side=tk.LEFT, padx=(5, 0))
+        self._candidate_meta = tk.Label(
+            candidate_actions,
+            text="",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._candidate_meta.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+
+        settings_frame = tk.LabelFrame(
+            self,
+            text="Expand Settings",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        settings_frame.pack(fill=tk.X, padx=10, pady=4)
+
+        mode_row = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        mode_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+        tk.Radiobutton(
+            mode_row,
+            text="Percentage",
+            variable=self._expand_mode_var,
+            value="percentage",
+            command=self._apply_mode_ui,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT)
+        tk.Radiobutton(
+            mode_row,
+            text="Pixels",
+            variable=self._expand_mode_var,
+            value="pixels",
+            command=self._apply_mode_ui,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            font=(FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, padx=(12, 0))
+
+        self._pct_frame = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        self._pct_frame.pack(fill=tk.X, padx=6, pady=(0, 4))
+        tk.Label(
+            self._pct_frame,
+            text="Expand all sides:",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT)
+        tk.Scale(
+            self._pct_frame,
+            from_=5,
+            to=100,
+            resolution=5,
+            orient=tk.HORIZONTAL,
+            variable=self._pct_var,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            troughcolor=COLORS["bg_input"],
+            highlightthickness=0,
+            length=200,
+            font=(FONT_FAMILY, 8),
+        ).pack(side=tk.LEFT, padx=(6, 3))
+        tk.Label(
+            self._pct_frame,
+            text="%",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT)
+
+        self._px_frame = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        self._px_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
+        for label, var in (
+            ("Top", self._top_var),
+            ("Bottom", self._bottom_var),
+            ("Left", self._left_var),
+            ("Right", self._right_var),
+        ):
+            tk.Label(
+                self._px_frame,
+                text=f"{label}:",
+                font=(FONT_FAMILY, 8),
+                bg=COLORS["bg_panel"],
+                fg=COLORS["text_light"],
+            ).pack(side=tk.LEFT, padx=(0, 3))
+            tk.Entry(
+                self._px_frame,
+                textvariable=var,
+                width=5,
+                bg=COLORS["bg_input"],
+                fg=COLORS["text_light"],
+                insertbackground=COLORS["text_light"],
+                font=(FONT_FAMILY, 8),
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+        io_row = tk.Frame(settings_frame, bg=COLORS["bg_panel"])
+        io_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        tk.Label(
+            io_row,
+            text="Provider:",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT)
+        provider_combo = ttk.Combobox(
+            io_row,
+            state="readonly",
+            width=12,
+            values=["bfl", "fal"],
+        )
+        provider_combo.set(self._provider_var.get())
+
+        def _on_provider_change(_event=None):
+            self._provider_var.set(provider_combo.get().strip())
+
+        provider_combo.bind("<<ComboboxSelected>>", _on_provider_change)
+        provider_combo.pack(side=tk.LEFT, padx=(5, 10))
+
+        tk.Label(
+            io_row,
+            text="Output:",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT)
+        ttk.Combobox(
+            io_row,
+            textvariable=self._format_var,
+            values=["png", "jpg"],
+            state="readonly",
+            width=6,
+        ).pack(side=tk.LEFT, padx=5)
+
+        run_frame = tk.Frame(self, bg=COLORS["bg_panel"])
+        run_frame.pack(fill=tk.X, padx=10, pady=(4, 4))
+        self._expand_btn = ttk.Button(
+            run_frame,
+            text="Expand Selected",
+            style=TTK_BTN_PRIMARY,
+            command=debounce_command(self._on_expand_selected, key="expand_run"),
+        )
+        self._expand_btn.pack(side=tk.LEFT)
+        self._status_label = tk.Label(
+            run_frame,
+            text="",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor="w",
+        )
+        self._status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
+
+        expanded_frame = tk.LabelFrame(
+            self,
+            text="Expanded Outputs",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        )
+        expanded_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 6))
+
+        self._expanded_list = tk.Listbox(
+            expanded_frame,
+            selectmode=tk.EXTENDED,
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            font=(FONT_FAMILY, 9),
+            relief=tk.FLAT,
+            height=5,
+            exportselection=False,
+        )
+        expanded_scroll = ttk.Scrollbar(
+            expanded_frame, orient=tk.VERTICAL, command=self._expanded_list.yview
+        )
+        self._expanded_list.configure(yscrollcommand=expanded_scroll.set)
+        self._expanded_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=6)
+        expanded_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 6), pady=6)
+
+        send_row = tk.Frame(self, bg=COLORS["bg_panel"])
+        send_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        tk.Checkbutton(
+            send_row,
+            text="Auto-switch to Step 3 after send",
+            variable=self._auto_switch_var,
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+            selectcolor=COLORS["bg_input"],
+            activebackground=COLORS["bg_panel"],
+            activeforeground=COLORS["text_light"],
+            font=(FONT_FAMILY, 8),
+        ).pack(side=tk.LEFT)
+        self._send_btn = ttk.Button(
+            send_row,
+            text="Send Selected Expanded to 3 (Video)",
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_send_to_video_clicked, key="expand_send_video"),
+        )
+        self._send_btn.pack(side=tk.RIGHT)
+
+        self._apply_mode_ui()
+
+    def _apply_mode_ui(self):
+        if self._expand_mode_var.get() == "percentage":
+            self._px_frame.pack_forget()
+            self._pct_frame.pack(fill=tk.X, padx=6, pady=(0, 4))
+        else:
+            self._pct_frame.pack_forget()
+            self._px_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
+
+    @staticmethod
+    def _format_candidate(entry) -> str:
+        score = entry.similarity_score
+        if score is None:
+            score = parse_similarity_score(entry.similarity)
+
+        if score is None:
+            sim_text = "n/a"
+            gate_text = "BLOCKED"
+        else:
+            sim_text = f"{score}%"
+            if score >= SIMILARITY_PASS_THRESHOLD:
+                gate_text = "PASS"
+            elif entry.similarity_override:
+                gate_text = "OVERRIDE"
+            else:
+                gate_text = "BLOCKED"
+        return f"{entry.filename}  |  Sim {sim_text}  |  {gate_text}"
+
+    def _get_all_selfie_entries(self):
+        return [
+            entry
+            for entry in self.image_session.images
+            if entry.source_type == "selfie" and entry.exists
+        ]
+
+    @staticmethod
+    def _dedupe_entries_by_path(entries: List) -> List:
+        deduped = []
+        seen = set()
+        for entry in entries:
+            path = getattr(entry, "path", None)
+            if not path:
+                continue
+            key = os.path.abspath(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+        return deduped
+
+    @classmethod
+    def compose_candidate_entries(cls, selfie_entries: List, active_entry) -> List:
+        """Build Step 2.5 candidates: selfies plus active non-selfie (deduped)."""
+        entries = list(selfie_entries or [])
+        if active_entry and getattr(active_entry, "exists", False):
+            if getattr(active_entry, "source_type", "") != "selfie":
+                entries.append(active_entry)
+        return cls._dedupe_entries_by_path(entries)
+
+    def _get_candidate_entries(self, active_path: Optional[str] = None) -> List:
+        entries = self._get_all_selfie_entries()
+        active_candidate = None
+        active_abs = os.path.abspath(active_path) if active_path else None
+        if active_abs:
+            for entry in self.image_session.images:
+                if not entry.exists:
+                    continue
+                if os.path.abspath(entry.path) == active_abs:
+                    active_candidate = entry
+                    break
+        return self.compose_candidate_entries(entries, active_candidate)
+
+    def _fallback_active_path(self, entries: List) -> Optional[str]:
+        if not entries:
+            return None
+        active_entry = self.image_session.active_entry
+        if active_entry and active_entry.exists:
+            return active_entry.path
+        return entries[-1].path
+
+    def refresh_candidates(
+        self,
+        preselect_paths: Optional[List[str]] = None,
+        active_path: Optional[str] = None,
+        select_all_default: bool = False,
+    ):
+        entries = self._get_candidate_entries(active_path=active_path)
+        self._candidate_entries = entries
+        self._candidate_list.delete(0, tk.END)
+
+        for entry in entries:
+            self._candidate_list.insert(tk.END, self._format_candidate(entry))
+
+        self._candidate_list.selection_clear(0, tk.END)
+        preselect_set = {os.path.abspath(p) for p in preselect_paths or []}
+        if entries:
+            for idx, entry in enumerate(entries):
+                if preselect_set and os.path.abspath(entry.path) in preselect_set:
+                    self._candidate_list.selection_set(idx)
+                elif select_all_default and not preselect_set:
+                    self._candidate_list.selection_set(idx)
+
+        if active_path:
+            active_abs = os.path.abspath(active_path)
+            for idx, entry in enumerate(entries):
+                if os.path.abspath(entry.path) == active_abs:
+                    self._candidate_list.activate(idx)
+                    self._candidate_list.see(idx)
+                    break
+
+        pass_count = 0
+        for entry in entries:
+            score = entry.similarity_score
+            if score is None:
+                score = parse_similarity_score(entry.similarity)
+            if score is not None and score >= SIMILARITY_PASS_THRESHOLD:
+                pass_count += 1
+        selfie_count = sum(1 for entry in entries if entry.source_type == "selfie")
+        extra_count = len(entries) - selfie_count
+        extra_text = f", +{extra_count} active non-selfie" if extra_count else ""
+        self._candidate_meta.config(
+            text=(
+                f"{len(entries)} candidate images ({selfie_count} selfie{extra_text}) - "
+                f"{pass_count} passing (>= {SIMILARITY_PASS_THRESHOLD})"
+            )
+        )
+
+    def receive_from_step2(self, paths: List[str], active_path: Optional[str] = None):
+        """Receive Step 2 handoff; default behavior keeps all session selfies visible."""
+        selfies = [entry.path for entry in self._get_all_selfie_entries()]
+        if not selfies:
+            self.refresh_candidates(preselect_paths=paths, active_path=active_path)
+            return
+        self.refresh_candidates(
+            preselect_paths=selfies,
+            active_path=active_path,
+            select_all_default=True,
+        )
+        self.log(
+            f"Step 2 -> 2.5 handoff: {len(selfies)} session selfie image(s) ready",
+            "info",
+        )
+
+    def _select_all_candidates(self):
+        self._candidate_list.selection_set(0, tk.END)
+
+    def _select_passing_candidates(self):
+        self._candidate_list.selection_clear(0, tk.END)
+        for idx, entry in enumerate(self._candidate_entries):
+            score = entry.similarity_score
+            if score is None:
+                score = parse_similarity_score(entry.similarity)
+            if score is not None and score >= SIMILARITY_PASS_THRESHOLD:
+                self._candidate_list.selection_set(idx)
+
+    def _get_selected_candidate_entries(self):
+        selected = []
+        for idx in self._candidate_list.curselection():
+            if 0 <= idx < len(self._candidate_entries):
+                selected.append(self._candidate_entries[idx])
+        return selected
+
+    def _approve_override_if_needed(self, entry) -> bool:
+        score = entry.similarity_score
+        if score is None:
+            score = parse_similarity_score(entry.similarity)
+            if score is not None:
+                entry.update_similarity(score)
+
+        if score is not None and score >= SIMILARITY_PASS_THRESHOLD:
+            entry.set_similarity_override(False)
+            return True
+
+        if entry.similarity_override:
+            return True
+
+        score_text = "n/a" if score is None else f"{score}%"
+        accepted = messagebox.askyesno(
+            "Low Similarity Override",
+            (
+                f"{entry.filename}\n\n"
+                f"Similarity: {score_text}\n"
+                f"Required pass: >= {SIMILARITY_PASS_THRESHOLD}%\n\n"
+                "This image is below threshold. Expand anyway?"
+            ),
+            parent=self.winfo_toplevel(),
+        )
+        if accepted:
+            entry.set_similarity_override(True, note="manual override in Step 2.5")
+            self.image_session._notify()
+            return True
+        return False
+
+    @staticmethod
+    def _calc_expand_pixels(image_path: str, pct: int, max_per_side: int) -> tuple:
+        from PIL import Image, ImageOps
+
+        with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img)
+            width, height = img.size
+        pct_frac = pct / 100.0
+        left = right = min(max_per_side, int(width * pct_frac))
+        top = bottom = min(max_per_side, int(height * pct_frac))
+        return left, right, top, bottom
+
+    @classmethod
+    def _build_expand_margins(
+        cls,
+        image_path: str,
+        mode: str,
+        pct_value: int,
+        pixel_values: tuple,
+        max_per_side: int,
+    ) -> Optional[tuple]:
+        if mode == "percentage":
+            try:
+                return cls._calc_expand_pixels(image_path, pct_value, max_per_side)
+            except Exception as exc:
+                raise ValueError(f"Could not read image dimensions: {exc}") from exc
+        left, right, top, bottom = pixel_values
+        return left, right, top, bottom
+
+    def _get_similarity_reference(self) -> Optional[str]:
+        ref = self.image_session.effective_similarity_ref_entry
+        if ref and ref.exists:
+            return ref.path
+        return None
+
+    def refresh_from_active_carousel(self):
+        """Default Step 2.5 entry behavior: include and preselect active carousel image."""
+        active_path = self.image_session.active_image_path
+        entries = self._get_candidate_entries(active_path=active_path)
+        if active_path:
+            active_abs = os.path.abspath(active_path)
+            entry_paths = {os.path.abspath(entry.path) for entry in entries}
+            if active_abs not in entry_paths:
+                active_path = self._fallback_active_path(entries)
+        else:
+            active_path = self._fallback_active_path(entries)
+
+        preselect = [active_path] if active_path else None
+        self.refresh_candidates(
+            preselect_paths=preselect,
+            active_path=active_path,
+            select_all_default=not bool(preselect),
+        )
+
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        self._expand_btn.config(
+            state=tk.DISABLED if busy else tk.NORMAL,
+            text="Expanding..." if busy else "Expand Selected",
+        )
+        self._send_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+        self._status_label.config(
+            text="Processing..." if busy else "",
+            fg=COLORS["progress"] if busy else COLORS["text_dim"],
+        )
+
+    def _on_expand_selected(self):
+        if self._busy:
+            return
+
+        targets = self._get_selected_candidate_entries()
+        if not targets:
+            self.log("Select at least one selfie candidate", "warning")
+            return
+
+        approved = []
+        for entry in targets:
+            if self._approve_override_if_needed(entry):
+                approved.append(entry)
+            else:
+                self.log(f"Skipped (gate not overridden): {entry.filename}", "warning")
+
+        if not approved:
+            self.log("No candidates approved for expand", "warning")
+            return
+
+        cfg = self.get_config()
+        api_key = cfg.get("falai_api_key", "")
+        if not api_key:
+            self.log("fal.ai API key required", "error")
+            return
+
+        provider = self._provider_var.get().strip().lower()
+        if provider not in {"fal", "bfl"}:
+            provider = "fal"
+        use_bfl = provider == "bfl"
+        bfl_key = cfg.get("bfl_api_key", "") if use_bfl else ""
+        if use_bfl and not bfl_key:
+            self.log("BFL key missing - switch provider to fal or set BFL API key", "error")
+            return
+
+        max_per_side = 2048 if use_bfl else 700
+        output_format = self._format_var.get()
+        prompt = cfg.get("outpaint_prompt", "")
+        composite_mode = cfg.get("outpaint_composite_mode", "feathered")
+        freeimage_key = cfg.get("freeimage_api_key")
+        ref_path = self._get_similarity_reference()
+        if ref_path:
+            self.log(
+                f"Step 2.5 similarity reference: {ref_path}",
+                "info",
+            )
+        else:
+            self.log("Step 2.5 similarity reference missing: no extracted/front/input image", "error")
+            return
+        mode = self._expand_mode_var.get()
+        try:
+            if mode == "percentage":
+                pct_value = int(self._pct_var.get())
+                pixel_values = (0, 0, 0, 0)
+            else:
+                pct_value = 0
+                pixel_values = (
+                    int(self._left_var.get()),
+                    int(self._right_var.get()),
+                    int(self._top_var.get()),
+                    int(self._bottom_var.get()),
+                )
+        except (tk.TclError, ValueError):
+            self.log("Invalid expand settings", "error")
+            return
+
+        self._set_busy(True)
+        self.log(f"Expanding {len(approved)} image(s) in Step 2.5...", "task")
+
+        def _worker():
+            from outpaint_generator import OutpaintGenerator
+            from kling_gui.tag_utils import build_ops_filename, increment_ops
+            from face_similarity import compute_face_similarity_details
+
+            gen = OutpaintGenerator(
+                api_key,
+                freeimage_key=freeimage_key,
+                bfl_api_key=bfl_key if use_bfl else None,
+            )
+            gen.set_progress_callback(
+                lambda msg, lvl: self.winfo_toplevel().after(
+                    0, lambda m=msg, l=lvl: self.log(m, l)
+                )
+            )
+
+            completed = 0
+            for entry in approved:
+                try:
+                    margins = self._build_expand_margins(
+                        entry.path, mode, pct_value, pixel_values, max_per_side
+                    )
+                except Exception as exc:
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda e=entry, err=exc: self.log(
+                            f"Skipped [{e.filename}]: {err}", "error"
+                        ),
+                    )
+                    continue
+                left, right, top, bottom = margins
+
+                output_dir = get_gen_images_folder(entry.path)
+                os.makedirs(output_dir, exist_ok=True)
+
+                new_ops = increment_ops(entry.ops if entry.ops else {}, "exp")
+                ext = f".{output_format}"
+                stem = Path(entry.path).stem
+                output_name = build_ops_filename(stem, new_ops, ext=ext)
+                output_path = os.path.join(output_dir, output_name)
+                counter = 2
+                while os.path.exists(output_path):
+                    output_path = os.path.join(
+                        output_dir,
+                        build_ops_filename(stem, new_ops, ext=f"_v{counter}{ext}"),
+                    )
+                    counter += 1
+
+                result = None
+                try:
+                    result = gen.outpaint(
+                        image_path=entry.path,
+                        output_folder=output_dir,
+                        expand_left=left,
+                        expand_right=right,
+                        expand_top=top,
+                        expand_bottom=bottom,
+                        prompt=prompt,
+                        output_format=output_format,
+                        composite_mode=composite_mode,
+                        output_path=output_path,
+                    )
+                except Exception as exc:
+                    self.winfo_toplevel().after(
+                        0,
+                        lambda e=entry, err=exc: self.log(
+                            f"Expand failed [{e.filename}]: {err}", "error"
+                        ),
+                    )
+                    continue
+
+                score = None
+                passed = None
+                if result and ref_path:
+                    self.log(
+                        f"Step 2.5 compare pair: ref={ref_path} target={result}",
+                        "debug",
+                    )
+                    details = compute_face_similarity_details(
+                        ref_path, result, report_cb=self.log
+                    )
+                    if not details.get("error"):
+                        score = details.get("score")
+                        passed = details.get("pass")
+                    else:
+                        self.log(
+                            f"Step 2.5 similarity unavailable for {os.path.basename(result)}: {details.get('error')}",
+                            "warning",
+                        )
+
+                completed += 1
+                self.winfo_toplevel().after(
+                    0,
+                    lambda src=entry, path=result, scr=score, ok=passed, ops=new_ops: self._on_single_expand_complete(
+                        src, path, scr, ok, ops
+                    ),
+                )
+
+            self.winfo_toplevel().after(0, lambda: self._on_expand_batch_complete(completed))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_single_expand_complete(self, source_entry, result_path, score, passed, ops):
+        if not result_path:
+            return
+        similarity = f"{score}%" if score is not None else "n/a"
+        basename = os.path.basename(result_path)
+        self.image_session.add_image(
+            result_path,
+            "outpaint",
+            label=basename,
+            similarity=similarity,
+            similarity_score=score,
+            similarity_pass=passed,
+            similarity_override=False,
+            ops=ops,
+        )
+        if result_path not in self._expanded_paths:
+            self._expanded_paths.append(result_path)
+        self._refresh_expanded_list()
+        self.log(f"Expanded: {basename}", "success")
+
+    def _on_expand_batch_complete(self, completed: int):
+        self._set_busy(False)
+        self.refresh_candidates(select_all_default=False)
+        if completed > 0:
+            self.log(f"Step 2.5 expand complete: {completed} image(s)", "success")
+        else:
+            self.log("Step 2.5 expand completed with no outputs", "warning")
+
+    def _refresh_expanded_list(self):
+        self._expanded_list.delete(0, tk.END)
+        valid_paths = []
+        for path in self._expanded_paths:
+            if os.path.isfile(path):
+                valid_paths.append(path)
+                self._expanded_list.insert(tk.END, os.path.basename(path))
+        self._expanded_paths = valid_paths
+
+    def _on_send_to_video_clicked(self):
+        if self._busy:
+            return
+        if not self._on_send_to_video:
+            self.log("No Step 3 queue handler available", "warning")
+            return
+        indexes = list(self._expanded_list.curselection())
+        if not indexes:
+            self.log("Select expanded output(s) to send to Step 3", "warning")
+            return
+        paths = []
+        for idx in indexes:
+            if 0 <= idx < len(self._expanded_paths):
+                p = self._expanded_paths[idx]
+                if os.path.isfile(p):
+                    paths.append(p)
+        if not paths:
+            self.log("Selected expanded output(s) are missing on disk", "warning")
+            return
+
+        self._on_send_to_video(paths)
+        self.log(f"Sent {len(paths)} expanded image(s) to Step 3 queue", "info")
+        if self._auto_switch_var.get() and self._notebook_switcher_video:
+            self._notebook_switcher_video()
+
+    def get_config_updates(self) -> dict:
+        return {
+            "expand25_auto_switch": self._auto_switch_var.get(),
+            "outpaint_expand_mode": self._expand_mode_var.get(),
+            "outpaint_expand_percentage": self._pct_var.get(),
+            "outpaint_expand_top": self._top_var.get(),
+            "outpaint_expand_bottom": self._bottom_var.get(),
+            "outpaint_expand_left": self._left_var.get(),
+            "outpaint_expand_right": self._right_var.get(),
+            "outpaint_format": self._format_var.get(),
+            "outpaint_provider": self._provider_var.get(),
+        }
