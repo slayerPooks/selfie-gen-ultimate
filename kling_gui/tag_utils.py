@@ -2,6 +2,7 @@
 
 import os
 import re
+from path_utils import sanitize_stem, sanitize_filename
 
 _OP_ORDER = ["pol", "ups", "exp"]
 
@@ -59,7 +60,7 @@ def build_ops_filename(base_stem: str, ops: dict, ext: str = ".png") -> str:
         ("1_crop", {"pol": 2, "ups": 1})             -> "1_crop_2-pol_ups.png"
         ("1_crop", {"pol": 1, "ups": 1, "exp": 1})  -> "1_crop_pol_ups_exp.png"
     """
-    parts = [base_stem]
+    parts = [sanitize_stem(base_stem, default="image")]
     for op in _OP_ORDER:
         c = ops.get(op, 0)
         if c == 0:
@@ -68,7 +69,7 @@ def build_ops_filename(base_stem: str, ops: dict, ext: str = ".png") -> str:
             parts.append(op)
         else:
             parts.append(f"{c}-{op}")
-    return "_".join(parts) + ext
+    return sanitize_filename("_".join(parts) + ext, default_stem="image")
 
 
 def increment_ops(current_ops: dict, operation: str) -> dict:

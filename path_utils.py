@@ -4,7 +4,9 @@ Provides functions to get correct paths whether running as script or frozen exe.
 """
 
 import os
+import re
 import sys
+from typing import List, Tuple
 
 
 APP_NAME = "selfie-gen-ultimate"
@@ -134,6 +136,32 @@ def is_frozen() -> bool:
 
 
 _GEN_FOLDER_NAMES = {"gen-images", "gen-videos"}
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+}
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_REPEATED_SEPARATOR_RE = re.compile(r"[_\-\s]{2,}")
 
 
 def _walk_up_past_gen_folders(source_path: str) -> str:
@@ -165,3 +193,106 @@ def get_gen_videos_folder(source_path: str) -> str:
     Each caller is responsible for creating it before writing.
     """
     return os.path.join(_walk_up_past_gen_folders(source_path), "gen-videos")
+
+
+def sanitize_stem(name: str, default: str = "untitled") -> str:
+    """Sanitize a path stem for cross-platform compatibility."""
+    raw = str(name or "")
+    sanitized = _INVALID_FILENAME_CHARS_RE.sub("_", raw)
+    sanitized = sanitized.replace("\n", "_").replace("\r", "_").replace("\t", "_")
+    sanitized = _REPEATED_SEPARATOR_RE.sub("_", sanitized)
+    sanitized = sanitized.strip(" ._")
+    if not sanitized:
+        sanitized = default
+    if sanitized.upper() in _WINDOWS_RESERVED_NAMES:
+        sanitized = f"{sanitized}_file"
+    return sanitized[:180]
+
+
+def sanitize_filename(name: str, default_stem: str = "untitled") -> str:
+    """Sanitize filename while preserving extension when possible."""
+    raw = str(name or "").strip()
+    stem_raw, ext_raw = os.path.splitext(raw)
+    stem = sanitize_stem(stem_raw or raw, default=default_stem)
+    ext = _INVALID_FILENAME_CHARS_RE.sub("", ext_raw or "")
+    ext = ext.replace(" ", "")
+    if ext and not ext.startswith("."):
+        ext = f".{ext}"
+    if len(ext) > 20:
+        ext = ext[:20]
+    if ext == ".":
+        ext = ""
+    return f"{stem}{ext}"
+
+
+def make_unique_name(parent_dir: str, candidate_name: str) -> str:
+    """Return a non-colliding filename in *parent_dir* using numeric suffixes."""
+    candidate_path = os.path.join(parent_dir, candidate_name)
+    if not os.path.exists(candidate_path):
+        return candidate_name
+
+    stem, ext = os.path.splitext(candidate_name)
+    counter = 2
+    while True:
+        next_name = f"{stem}_{counter}{ext}"
+        next_path = os.path.join(parent_dir, next_name)
+        if not os.path.exists(next_path):
+            return next_name
+        counter += 1
+
+
+def sanitize_path_name(path: str) -> Tuple[str, bool]:
+    """Rename one path to a cross-platform-safe name when needed."""
+    parent = os.path.dirname(path)
+    current_name = os.path.basename(path)
+    if not parent or not current_name:
+        return path, False
+
+    if os.path.isdir(path):
+        desired = sanitize_stem(current_name, default="untitled")
+    else:
+        desired = sanitize_filename(current_name, default_stem="untitled")
+
+    if desired == current_name:
+        return path, False
+
+    desired = make_unique_name(parent, desired)
+    new_path = os.path.join(parent, desired)
+    os.rename(path, new_path)
+    return new_path, True
+
+
+def sanitize_tree_names(root_path: str, rename_root: bool = True) -> Tuple[str, List[Tuple[str, str]]]:
+    """Recursively rename files/folders under *root_path* to safe names.
+
+    Returns:
+        (new_root_path, renames) where renames are (old_path, new_path).
+    """
+    if not os.path.isdir(root_path):
+        return root_path, []
+
+    renames: List[Tuple[str, str]] = []
+    for current_dir, dirs, files in os.walk(root_path, topdown=False):
+        for filename in sorted(files):
+            old_path = os.path.join(current_dir, filename)
+            if not os.path.exists(old_path):
+                continue
+            new_path, changed = sanitize_path_name(old_path)
+            if changed:
+                renames.append((old_path, new_path))
+        for dirname in sorted(dirs):
+            old_path = os.path.join(current_dir, dirname)
+            if not os.path.isdir(old_path):
+                continue
+            new_path, changed = sanitize_path_name(old_path)
+            if changed:
+                renames.append((old_path, new_path))
+
+    new_root = root_path
+    if rename_root:
+        renamed_root, changed = sanitize_path_name(root_path)
+        if changed:
+            renames.append((root_path, renamed_root))
+            new_root = renamed_root
+
+    return new_root, renames
