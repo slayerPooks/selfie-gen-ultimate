@@ -13,8 +13,8 @@ from ..image_state import ImageSession, SIMILARITY_PASS_THRESHOLD, parse_similar
 from ..theme import (
     COLORS,
     FONT_FAMILY,
-    TTK_BTN_COMPACT,
     TTK_BTN_PRIMARY,
+    TTK_BTN_SECONDARY,
     TTK_BTN_SUCCESS,
     debounce_command,
 )
@@ -103,19 +103,19 @@ class ExpandTab(tk.Frame):
         ttk.Button(
             candidate_actions,
             text="Refresh Selfies",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(lambda: self.refresh_candidates(select_all_default=True), key="expand_refresh_candidates"),
         ).pack(side=tk.LEFT)
         ttk.Button(
             candidate_actions,
             text="Select All",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._select_all_candidates, key="expand_select_all"),
         ).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(
             candidate_actions,
             text="Select Passing",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._select_passing_candidates, key="expand_select_passing"),
         ).pack(side=tk.LEFT, padx=(5, 0))
         self._candidate_meta = tk.Label(

@@ -4,7 +4,7 @@ Drop Zone Widget - Drag-and-drop area for image files with visual feedback.
 
 import tkinter as tk
 from tkinter import filedialog
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional
 import os
 import sys
 
@@ -98,6 +98,8 @@ class DropZone(tk.Frame):
         parent,
         on_files_dropped: Callable[[List[str]], None],
         on_folder_dropped: Callable[[str], None] = None,
+        compact: bool = False,
+        tint: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
@@ -107,20 +109,49 @@ class DropZone(tk.Frame):
             parent: Parent widget
             on_files_dropped: Callback function that receives list of file paths
             on_folder_dropped: Callback function that receives folder path
+            compact: Render compact single-purpose layout (icon + one title line)
+            tint: Optional color override dict for compact/permanent variants.
+                Supported keys:
+                - bg_drop: drop-zone background color
+                - bg_hover: hover background color
+                - border: border color
+                - accent: accent/icon color
+                - text: primary text color
+                - text_dim: secondary text color
+                - drop_valid: valid-drop highlight color
+                Unknown keys are ignored.
         """
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
         self.on_files_dropped = on_files_dropped
         self.on_folder_dropped = on_folder_dropped
-        self._default_bg = COLORS["bg_drop"]
+        self.compact = compact
+        supported_tint_keys = {
+            "bg_drop",
+            "bg_hover",
+            "border",
+            "accent",
+            "text",
+            "text_dim",
+            "drop_valid",
+        }
+        raw_tint = tint or {}
+        self._tint = {k: v for k, v in raw_tint.items() if k in supported_tint_keys}
+        self._default_bg = self._tint.get("bg_drop", COLORS["bg_drop"])
+        self._hover_bg = self._tint.get("bg_hover", COLORS["bg_hover"])
+        self._border_color = self._tint.get("border", COLORS["border"])
+        self._accent_color = self._tint.get("accent", COLORS["accent_blue"])
+        self._text_color = self._tint.get("text", COLORS["text_light"])
+        self._text_dim_color = self._tint.get("text_dim", COLORS["text_dim"])
+        self._drop_valid_color = self._tint.get("drop_valid", COLORS["drop_valid"])
 
         # Create the drop area
         self.drop_frame = tk.Frame(
             self,
             bg=self._default_bg,
-            highlightbackground=COLORS["border"],
+            highlightbackground=self._border_color,
             highlightthickness=2,
         )
-        self.drop_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        self.drop_frame.pack(fill=tk.BOTH, expand=True, padx=8 if self.compact else 12, pady=8 if self.compact else 12)
 
         # Container for content to help centering
         self.content_container = tk.Frame(self.drop_frame, bg=self._default_bg)
@@ -130,31 +161,32 @@ class DropZone(tk.Frame):
         self.icon_label = tk.Label(
             self.content_container,
             text="📥",
-            font=(EMOJI_FONT_FAMILY, 40),
+            font=(EMOJI_FONT_FAMILY, 30 if self.compact else 40),
             bg=self._default_bg,
-            fg=COLORS["accent_blue"],
+            fg=self._accent_color,
         )
-        self.icon_label.pack(pady=(0, 8))
+        self.icon_label.pack(pady=(0, 5 if self.compact else 8))
 
         # Main instruction label
         self.main_label = tk.Label(
             self.content_container,
-            text="DRAG & DROP IMAGES",
-            font=(FONT_FAMILY, 14, "bold"),
+            text="DROP ZONE" if self.compact else "DRAG & DROP IMAGES",
+            font=(FONT_FAMILY, 11 if self.compact else 14, "bold"),
             bg=self._default_bg,
-            fg=COLORS["text_light"],
+            fg=self._text_color,
         )
-        self.main_label.pack(pady=2)
+        self.main_label.pack(pady=(1 if self.compact else 2))
 
         # Sub-instruction label (combined: left click + right click hint on one line)
         self.sub_label = tk.Label(
             self.content_container,
-            text="Left click to select files  |  Right click for folder",
-            font=(FONT_FAMILY, 11),
+            text="" if self.compact else "Left click to select files  |  Right click for folder",
+            font=(FONT_FAMILY, 9 if self.compact else 11),
             bg=self._default_bg,
-            fg=COLORS["text_dim"],
+            fg=self._text_dim_color,
         )
-        self.sub_label.pack(pady=(0, 10))
+        if not self.compact:
+            self.sub_label.pack(pady=(0, 10))
 
         # Bind events for hover and click
         for widget in [
@@ -164,6 +196,8 @@ class DropZone(tk.Frame):
             self.sub_label,
             self.content_container,
         ]:
+            if widget is self.sub_label and self.compact:
+                continue
             widget.bind("<Button-1>", self._on_click_browse)
             widget.bind("<Button-3>", self._on_right_click_browse_folder)
             widget.bind("<Enter>", self._on_mouse_enter)
@@ -174,23 +208,24 @@ class DropZone(tk.Frame):
         self.status_label = tk.Label(
             self.drop_frame,
             text="",
-            font=(FONT_FAMILY, 11, "bold"),
+            font=(FONT_FAMILY, 9 if self.compact else 11, "bold"),
             bg=self._default_bg,
-            fg=COLORS["text_light"],
+            fg=self._text_color,
         )
-        self.status_label.pack(side=tk.BOTTOM, pady=15)
+        self.status_label.pack(side=tk.BOTTOM, pady=8 if self.compact else 15)
 
         # Register for drag-and-drop if available
         if HAS_DND:
             self._setup_dnd()
         else:
             self.main_label.config(text="CLICK TO SELECT IMAGES")
-            self.sub_label.config(text="Left click to select files  |  Right click for folder")
+            if not self.compact:
+                self.sub_label.config(text="Left click to select files  |  Right click for folder")
 
     def _on_mouse_enter(self, event=None):
         """Handle mouse hover enter."""
-        self._set_highlight(COLORS["bg_hover"])
-        self.drop_frame.config(highlightbackground=COLORS["accent_blue"])
+        self._set_highlight(self._hover_bg)
+        self.drop_frame.config(highlightbackground=self._accent_color)
 
     def _on_mouse_leave(self, event=None):
         """Handle mouse hover leave."""
@@ -201,7 +236,7 @@ class DropZone(tk.Frame):
             if 0 <= rel_x <= df.winfo_width() and 0 <= rel_y <= df.winfo_height():
                 return  # mouse moved onto a child widget, still inside drop_frame
         self._reset_highlight()
-        self.drop_frame.config(highlightbackground=COLORS["border"])
+        self.drop_frame.config(highlightbackground=self._border_color)
 
     def _set_highlight(self, color: str):
         """Set the highlight color for drop/hover feedback."""
@@ -213,6 +248,8 @@ class DropZone(tk.Frame):
             self.content_container,
             self.status_label,
         ]:
+            if widget is self.sub_label and self.compact:
+                continue
             widget.config(bg=color)
 
     def _reset_highlight(self):
@@ -306,8 +343,11 @@ class DropZone(tk.Frame):
 
     def _on_drag_enter(self, event):
         """Handle drag enter - show visual feedback."""
-        self._set_highlight(COLORS["drop_valid"])
-        self.status_label.config(text="DROP TO ADD TO QUEUE", fg=COLORS["text_light"])
+        self._set_highlight(self._drop_valid_color)
+        self.status_label.config(
+            text="DROP TO ADD" if self.compact else "DROP TO ADD TO QUEUE",
+            fg=self._text_color,
+        )
         return event.action
 
     def _on_drag_leave(self, event):

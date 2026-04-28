@@ -550,7 +550,7 @@ class FaceCropTab(tk.Frame):
         ttk.Button(
             polish_row,
             text="Edit Prompt",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._open_polish_prompt_editor, key="facecrop_edit_polish_prompt", interval_ms=120),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
@@ -640,7 +640,7 @@ class FaceCropTab(tk.Frame):
         ttk.Button(
             btn_row,
             text="Edit Prompt",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._open_expand_prompt_editor, key="facecrop_edit_expand_prompt", interval_ms=120),
         ).pack(side=tk.LEFT, padx=(6, 0))
 

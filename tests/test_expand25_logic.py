@@ -1,4 +1,5 @@
 import os
+import os
 import tempfile
 import unittest
 
@@ -65,6 +66,33 @@ class CanonicalSimilarityReferenceTests(unittest.TestCase):
             # Clear explicit ref, should go back to fallback
             session.set_similarity_ref(-1)
             self.assertEqual(session.effective_similarity_ref_entry.path, crop_old)
+
+    def test_effective_ref_source_key_transitions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            crop = self._touch(tmpdir, "subject_crop.jpg")
+            front = self._touch(tmpdir, "front.png")
+            selfie = self._touch(tmpdir, "selfie_sim88_001.png")
+            session = ImageSession()
+            session.add_image(front, "input")
+            session.add_image(crop, "input")
+            session.add_image(selfie, "selfie")
+
+            ref_entry, source_key = session.get_effective_similarity_ref()
+            self.assertIsNotNone(ref_entry)
+            self.assertEqual(ref_entry.path, crop)
+            self.assertEqual(source_key, "auto_crop")
+
+            session.set_similarity_ref(session.count - 1)
+            ref_entry, source_key = session.get_effective_similarity_ref()
+            self.assertIsNotNone(ref_entry)
+            self.assertEqual(ref_entry.path, selfie)
+            self.assertEqual(source_key, "manual_star_ref")
+
+            session.set_similarity_ref(-1)
+            ref_entry, source_key = session.get_effective_similarity_ref()
+            self.assertIsNotNone(ref_entry)
+            self.assertEqual(ref_entry.path, crop)
+            self.assertEqual(source_key, "auto_crop")
 
 
 class Expand25CandidateCompositionTests(unittest.TestCase):

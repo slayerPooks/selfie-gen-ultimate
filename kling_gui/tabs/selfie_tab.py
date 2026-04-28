@@ -131,6 +131,8 @@ class SelfieTab(tk.Frame):
         self._handoff_resolved = False
         self._prompt_template_edit_mode = False
         self._raw_template = self.DEFAULT_PROMPT_TEMPLATE  # overwritten in _build_ui
+        self._run_ref_path = ""
+        self._run_ref_source = "none"
         self._prompt_mode_var = tk.StringVar(
             value=config.get("selfie_prompt_mode", "json_handoff")
         )
@@ -268,7 +270,7 @@ class SelfieTab(tk.Frame):
         self.edit_template_btn = ttk.Button(
             template_actions,
             text="Edit Template",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_edit_prompt_template, key="selfie_edit_template"),
         )
         self.edit_template_btn.pack(side=tk.LEFT)
@@ -332,7 +334,7 @@ class SelfieTab(tk.Frame):
         self._edit_wildcard_btn = ttk.Button(
             wildcard_actions,
             text="Edit Template",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_edit_wildcard_template, key="selfie_edit_wildcard"),
         )
         self._edit_wildcard_btn.pack(side=tk.LEFT)
@@ -918,23 +920,44 @@ class SelfieTab(tk.Frame):
 
         return re.sub(r"\{json\.([a-zA-Z0-9_]+)\}", _replace_json_tag, template)
 
+    @staticmethod
+    def _ref_source_label(source_key: str) -> str:
+        labels = {
+            "manual_star_ref": "manual ★ Ref",
+            "auto_crop": "auto crop fallback",
+            "auto_front": "auto front fallback",
+            "auto_first_input": "auto first-input fallback",
+            "none": "no reference",
+        }
+        return labels.get(source_key, source_key or "unknown")
+
     def _on_generate(self):
         if self._busy:
             return
         self._last_batch_result_paths = []
+        self._run_ref_path = ""
+        self._run_ref_source = "none"
 
         config = self.get_config()
         api_key = config.get("falai_api_key", "")
         bfl_api_key = config.get("bfl_api_key", "")
         poll_timeout_seconds = config.get("selfie_poll_timeout_seconds", 300)
 
-        # Use the effective similarity ref as the baseline identity for generation
-        sim_ref = self.image_session.effective_similarity_ref_entry
+        # Snapshot run baseline once so all selected models use the same identity reference.
+        sim_ref, sim_ref_source = self.image_session.get_effective_similarity_ref()
         image_path = sim_ref.path if sim_ref else self.image_session.active_image_path
         
         if not image_path:
             self.log("No reference image available", "warning")
             return
+        self._run_ref_path = image_path
+        self._run_ref_source = sim_ref_source if sim_ref else "none"
+        ref_name = os.path.basename(image_path)
+        self.log(
+            f"Step 2 baseline: {ref_name} ({self._ref_source_label(self._run_ref_source)})",
+            "info",
+        )
+        self.log(f"Step 2 baseline path: {image_path}", "debug")
 
         # For output folder: use original input image's directory when in "source" mode
         # to avoid saving to %TEMP% when intermediates (face crop, polish, outpaint) are active
@@ -1144,6 +1167,12 @@ class SelfieTab(tk.Frame):
         """Add a single completed result to the carousel immediately."""
         label = model.get("label", model.get("endpoint", "model"))
         similarity = self._extract_similarity_from_result_path(result)
+        if self._run_ref_path:
+            self.log(
+                f"Step 2 compare pair: ref={os.path.basename(self._run_ref_path)} "
+                f"target={os.path.basename(result)}",
+                "debug",
+            )
         self._last_result_path = result
         if result not in self._last_batch_result_paths:
             self._last_batch_result_paths.append(result)
@@ -1166,6 +1195,8 @@ class SelfieTab(tk.Frame):
     def _on_complete_batch(self, results, failed_models, skipped_models=None):
         """Final summary after all models have run (results already shown progressively)."""
         self._set_busy(False)
+        self._run_ref_path = ""
+        self._run_ref_source = "none"
         skipped = skipped_models or []
 
         if not results and not skipped:
