@@ -229,7 +229,7 @@ class PrepTab(tk.Frame):
         self.edit_prompt_btn = ttk.Button(
             prompt_actions,
             text="Edit Prompt",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_edit_system_prompt, key="prep_edit_prompt"),
         )
         self.edit_prompt_btn.pack(side=tk.LEFT)

@@ -326,27 +326,32 @@ class ImageSession:
         3) Newest existing input containing "front"
         4) First existing input
         """
+        entry, _source = self.get_effective_similarity_ref()
+        return entry
+
+    def get_effective_similarity_ref(self) -> Tuple[Optional[ImageEntry], str]:
+        """Return the effective similarity ref and selection source key."""
         # 1. Explicit reference
         manual_ref = self.similarity_ref_entry
         if manual_ref and manual_ref.exists:
-            return manual_ref
+            return manual_ref, "manual_star_ref"
 
         # Fallback to defaults
         inputs = [entry for _idx, entry in self.input_images if entry.exists]
         if not inputs:
-            return None
+            return None, "none"
 
         for entry in reversed(inputs):
             name = entry.filename.lower()
             if "_crop" in name:
-                return entry
+                return entry, "auto_crop"
 
         for entry in reversed(inputs):
             name = entry.filename.lower()
             if "front" in name:
-                return entry
+                return entry, "auto_front"
 
-        return inputs[0]
+        return inputs[0], "auto_first_input"
 
     def set_similarity_ref(self, index: int) -> bool:
         """Set the similarity reference to any image by index. Pass -1 to clear."""

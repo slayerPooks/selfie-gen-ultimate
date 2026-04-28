@@ -349,6 +349,11 @@ class SelfieGenerator:
             return None
 
         # Shared post-processing: similarity + final rename
+        self._report(
+            f"[{resolved_label}] Compare pair: ref={os.path.basename(image_path)} "
+            f"target={os.path.basename(temp_output_path)}",
+            "debug",
+        )
         similarity = self._compute_similarity_percent(image_path, temp_output_path)
         if similarity is None:
             self._report(f"[{resolved_label}] Similarity: n/a", "info")

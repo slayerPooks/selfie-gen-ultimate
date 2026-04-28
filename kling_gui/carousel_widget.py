@@ -13,7 +13,8 @@ from .theme import (
     FONT_FAMILY,
     TTK_BTN_COMPACT,
     TTK_BTN_DANGER_COMPACT,
-    TTK_BTN_SUCCESS,
+    TTK_BTN_SECONDARY,
+    TTK_BTN_SUCCESS_COMPACT,
     debounce_command,
 )
 from .image_state import ImageSession
@@ -182,16 +183,6 @@ class ImageCarousel(tk.Frame):
         )
         self.next_btn.pack(side=tk.LEFT, padx=(0, 4))
 
-        add_btn = ttk.Button(
-            controls,
-            text="+",
-            style=TTK_BTN_SUCCESS,
-            command=debounce_command(self._on_add_image, key="carousel_add"),
-            width=2,
-        )
-        add_btn.pack(side=tk.LEFT)
-
-        # Remove button
         self.remove_btn = ttk.Button(
             controls,
             text="-",
@@ -202,6 +193,15 @@ class ImageCarousel(tk.Frame):
         )
         self.remove_btn.pack(side=tk.LEFT, padx=(0, 2))
 
+        add_btn = ttk.Button(
+            controls,
+            text="+",
+            style=TTK_BTN_SUCCESS_COMPACT,
+            command=debounce_command(self._on_add_image, key="carousel_add"),
+            width=2,
+        )
+        add_btn.pack(side=tk.LEFT, padx=(0, 2))
+
         # Similarity controls row: ★ Ref + Compare + Auto
         sim_row = tk.Frame(self.panel_frame, bg=COLORS["bg_panel"])
         sim_row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 2))
@@ -209,7 +209,7 @@ class ImageCarousel(tk.Frame):
         self._ref_btn = ttk.Button(
             sim_row,
             text="\u2605 Ref",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._toggle_sim_ref, key="carousel_ref"),
             state=tk.DISABLED,
         )
@@ -218,7 +218,7 @@ class ImageCarousel(tk.Frame):
         self.compare_btn = ttk.Button(
             sim_row,
             text="Compare",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_compare, key="carousel_compare"),
             state=tk.DISABLED,
         )
@@ -573,14 +573,16 @@ class ImageCarousel(tk.Frame):
                 and session.similarity_ref_index >= 0):
             session.set_similarity_ref(-1)
             self.log("Similarity reference cleared", "info")
+            recalc_reason = "manual ref cleared"
         else:
             session.set_similarity_ref(session.current_index)
             entry = session.active_entry
             name = entry.filename if entry else "?"
             self.log(f"Similarity reference set: {name}", "info")
+            recalc_reason = "manual ref changed"
         
         # Trigger recompute for all generated images against new effective ref
-        self._calc_all_similarity(auto_triggered=True)
+        self._calc_all_similarity(auto_triggered=True, reason=recalc_reason)
 
     def _calc_similarity(self):
         """Compute similarity for the active image vs ref (context menu)."""
@@ -635,18 +637,27 @@ class ImageCarousel(tk.Frame):
         if score is not None:
             self._sim_log(f"result: {score}%", "info")
 
-    def _calc_all_similarity(self, auto_triggered: bool = False):
+    def _calc_all_similarity(self, auto_triggered: bool = False, reason: str = "manual recalc"):
         """Compute similarity for all non-ref generated images."""
-        ref = self.image_session.effective_similarity_ref_entry
+        ref, ref_source = self.image_session.get_effective_similarity_ref()
         if not ref:
             return
         targets = [e for e in self.image_session.images
                    if e.source_type != "input" and e is not ref and e.exists]
         if not targets:
             return
-            
-        if not auto_triggered:
-            self._sim_log(f"batch: {len(targets)} images", "info")
+        ref_name = os.path.basename(ref.path)
+        source_label = {
+            "manual_star_ref": "manual ★ Ref",
+            "auto_crop": "auto crop fallback",
+            "auto_front": "auto front fallback",
+            "auto_first_input": "auto first-input fallback",
+            "none": "none",
+        }.get(ref_source, ref_source or "unknown")
+        self._sim_log(
+            f"batch start: {len(targets)} images, ref={ref_name}, source={source_label}, reason={reason}",
+            "info" if auto_triggered else "debug",
+        )
             
         for t in targets:
             t.similarity_recalculating = True

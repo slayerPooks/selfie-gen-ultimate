@@ -2319,19 +2319,19 @@ class KlingGUIWindow:
         ttk.Button(
             btn_frame,
             text="Open File",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("history_open_file", self._open_selected_file),
         ).pack(side=tk.LEFT, padx=2)
         ttk.Button(
             btn_frame,
             text="Open Folder",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("history_open_folder", self._open_selected_folder),
         ).pack(side=tk.LEFT, padx=2)
         ttk.Button(
             btn_frame,
             text="Refresh",
-            style=TTK_BTN_COMPACT,
+            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("history_refresh", self._refresh_history_view),
         ).pack(side=tk.LEFT, padx=2)
 
