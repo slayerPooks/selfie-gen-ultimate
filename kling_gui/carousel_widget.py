@@ -12,7 +12,7 @@ from .theme import (
     COLORS,
     FONT_FAMILY,
     TTK_BTN_COMPACT,
-    TTK_BTN_DANGER,
+    TTK_BTN_DANGER_COMPACT,
     TTK_BTN_SUCCESS,
     debounce_command,
 )
@@ -160,66 +160,49 @@ class ImageCarousel(tk.Frame):
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
 
-        # Add button (rightmost)
-        add_btn = ttk.Button(
-            header,
-            text="+",
-            style=TTK_BTN_SUCCESS,
-            command=debounce_command(self._on_add_image, key="carousel_add"),
-            width=3,
-        )
-        add_btn.pack(side=tk.RIGHT)
+        controls = tk.Frame(header, bg=COLORS["bg_panel"])
+        controls.pack(side=tk.RIGHT)
 
-        # Remove button
-        self.remove_btn = ttk.Button(
-            header,
-            text="-",
-            style=TTK_BTN_DANGER,
-            command=debounce_command(self._on_remove_image, key="carousel_remove"),
-            width=3,
-            state=tk.DISABLED,
-        )
-        self.remove_btn.pack(side=tk.RIGHT, padx=(0, 2))
-
-        # Compare button
-        self.compare_btn = ttk.Button(
-            header,
-            text="Compare",
-            style=TTK_BTN_COMPACT,
-            command=debounce_command(self._on_compare, key="carousel_compare"),
-            state=tk.DISABLED,
-        )
-        self.compare_btn.pack(side=tk.RIGHT, padx=(0, 4))
-
-        # Nav buttons + counter
-        self.next_btn = ttk.Button(
-            header,
-            text="\u25B6",
-            style=TTK_BTN_COMPACT,
-            command=debounce_command(lambda: self.image_session.navigate(1), key="carousel_next", interval_ms=120),
-            width=3,
-        )
-        self.next_btn.pack(side=tk.RIGHT, padx=(1, 3))
-
-        self.counter_label = tk.Label(
-            header,
-            text="",
-            font=(FONT_FAMILY, 8),
-            bg=COLORS["bg_panel"],
-            fg=COLORS["text_dim"],
-        )
-        self.counter_label.pack(side=tk.RIGHT, padx=2)
-
+        # Prev/next + remove/add controls
         self.prev_btn = ttk.Button(
-            header,
+            controls,
             text="\u25C0",
             style=TTK_BTN_COMPACT,
             command=debounce_command(lambda: self.image_session.navigate(-1), key="carousel_prev", interval_ms=120),
-            width=3,
+            width=2,
         )
-        self.prev_btn.pack(side=tk.RIGHT)
+        self.prev_btn.pack(side=tk.LEFT, padx=(0, 2))
 
-        # Similarity controls row (slim: ★ Ref + Auto checkbox)
+        self.next_btn = ttk.Button(
+            controls,
+            text="\u25B6",
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(lambda: self.image_session.navigate(1), key="carousel_next", interval_ms=120),
+            width=2,
+        )
+        self.next_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        add_btn = ttk.Button(
+            controls,
+            text="+",
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._on_add_image, key="carousel_add"),
+            width=2,
+        )
+        add_btn.pack(side=tk.LEFT)
+
+        # Remove button
+        self.remove_btn = ttk.Button(
+            controls,
+            text="-",
+            style=TTK_BTN_DANGER_COMPACT,
+            command=debounce_command(self._on_remove_image, key="carousel_remove"),
+            width=2,
+            state=tk.DISABLED,
+        )
+        self.remove_btn.pack(side=tk.LEFT, padx=(0, 2))
+
+        # Similarity controls row: ★ Ref + Compare + Auto
         sim_row = tk.Frame(self.panel_frame, bg=COLORS["bg_panel"])
         sim_row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 2))
 
@@ -231,6 +214,15 @@ class ImageCarousel(tk.Frame):
             state=tk.DISABLED,
         )
         self._ref_btn.pack(side=tk.LEFT)
+
+        self.compare_btn = ttk.Button(
+            sim_row,
+            text="Compare",
+            style=TTK_BTN_COMPACT,
+            command=debounce_command(self._on_compare, key="carousel_compare"),
+            state=tk.DISABLED,
+        )
+        self.compare_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         self._auto_chk = tk.Checkbutton(
             sim_row,
@@ -258,7 +250,7 @@ class ImageCarousel(tk.Frame):
         self.sim_label = tk.Label(
             self.meta_frame,
             text="",
-            font=(FONT_FAMILY, 12, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
             anchor=tk.E,
@@ -349,7 +341,6 @@ class ImageCarousel(tk.Frame):
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")
 
         if n == 0:
-            self.counter_label.config(text="")
             self.info_label.config(text="Add images to start", fg=COLORS["text_dim"])
             self.meta_label.config(text="")
             self.sim_label.config(text="")
@@ -363,9 +354,6 @@ class ImageCarousel(tk.Frame):
                 font=(FONT_FAMILY, 10),
             )
             return
-
-        # Counter
-        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
 
         # Show the active image
         if entry and entry.exists:

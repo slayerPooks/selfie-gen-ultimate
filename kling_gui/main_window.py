@@ -39,6 +39,7 @@ from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
 from .theme import (
     TTK_BTN_COMPACT,
     TTK_BTN_DANGER,
+    TTK_BTN_DANGER_COMPACT,
     TTK_BTN_PRIMARY,
     TTK_BTN_SECONDARY,
     TTK_BTN_SUCCESS,
@@ -1058,6 +1059,19 @@ class KlingGUIWindow:
             foreground=[("disabled", "#9D9D9D")],
         )
         style.configure(
+            TTK_BTN_DANGER_COMPACT,
+            font=(FONT_FAMILY, 8, "bold"),
+            foreground="white",
+            background=COLORS["btn_red"],
+            borderwidth=1,
+            padding=(7, 4),
+        )
+        style.map(
+            TTK_BTN_DANGER_COMPACT,
+            background=[("active", "#C24444"), ("pressed", "#862525"), ("disabled", "#7E2424")],
+            foreground=[("disabled", "#F2D8D8")],
+        )
+        style.configure(
             TTK_BTN_COMPACT,
             font=(FONT_FAMILY, 8, "bold"),
             foreground=COLORS["text_light"],
@@ -1082,6 +1096,19 @@ class KlingGUIWindow:
             TTK_BTN_TAB_NAV,
             background=[("active", COLORS["bg_hover"]), ("pressed", COLORS["bg_main"]), ("disabled", "#3A3A3A")],
             foreground=[("disabled", "#8C8C8C")],
+        )
+        style.configure(
+            "DropZone.TButton",
+            font=(FONT_FAMILY, 9, "bold"),
+            foreground="white",
+            background="#6953C6",
+            borderwidth=1,
+            padding=(10, 6),
+        )
+        style.map(
+            "DropZone.TButton",
+            background=[("active", "#7A67D4"), ("pressed", "#523DA8"), ("disabled", "#45397C")],
+            foreground=[("disabled", "#CCC7E9")],
         )
 
         # Header
@@ -1292,6 +1319,16 @@ class KlingGUIWindow:
             self.log_drop_paned,
             on_files_dropped=self._add_input_images_to_session,
             on_folder_dropped=None,
+            compact=True,
+            tint={
+                "bg_drop": "#4C4566",
+                "bg_hover": "#5D537D",
+                "border": "#7464C0",
+                "accent": "#8D7EE2",
+                "text": COLORS["text_light"],
+                "text_dim": "#C3BDE2",
+                "drop_valid": "#6A58C6",
+            },
         )
         self.log_drop_paned.add(self.drop_zone, minsize=220)
         self.right_paned.add(log_frame, minsize=100)
@@ -1424,7 +1461,7 @@ class KlingGUIWindow:
         icon_label = tk.Label(
             content,
             text="\U0001F4E5",
-            font=(EMOJI_FONT_FAMILY, 36),
+            font=(EMOJI_FONT_FAMILY, 32),
             bg=bg,
             fg=COLORS["accent_blue"],
         )
@@ -1434,7 +1471,7 @@ class KlingGUIWindow:
         main_label = tk.Label(
             content,
             text="DRAG & DROP IMAGES",
-            font=(FONT_FAMILY, 13, "bold"),
+            font=(FONT_FAMILY, 12, "bold"),
             bg=bg,
             fg=COLORS["text_light"],
         )
@@ -2137,7 +2174,7 @@ class KlingGUIWindow:
         drop_zone_btn = ttk.Button(
             header,
             text="Drop Zone",
-            style=TTK_BTN_SECONDARY,
+            style="DropZone.TButton",
             command=self._dbcmd("header_toggle_drop_zone", self._toggle_drop_zone),
             width=12,
         )
