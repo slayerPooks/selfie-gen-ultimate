@@ -25,7 +25,7 @@ from path_utils import (
     get_app_dir,
     get_user_data_dir,
     sanitize_path_name,
-    sanitize_tree_names,
+    sanitize_tree_names_report,
 )
 
 from .drop_zone import DropZone, create_dnd_root, HAS_DND, DND_FILES, parse_dnd_paths
@@ -43,6 +43,7 @@ from .theme import (
     TTK_BTN_PRIMARY,
     TTK_BTN_SECONDARY,
     TTK_BTN_SUCCESS,
+    TTK_BTN_SUCCESS_COMPACT,
     TTK_BTN_TAB_NAV,
     debounce_command,
 )
@@ -1044,6 +1045,19 @@ class KlingGUIWindow:
             TTK_BTN_SUCCESS,
             background=[("active", "#3CAD3C"), ("pressed", "#267826"), ("disabled", "#3E3E3E")],
             foreground=[("disabled", "#9D9D9D")],
+        )
+        style.configure(
+            TTK_BTN_SUCCESS_COMPACT,
+            font=(FONT_FAMILY, 8, "bold"),
+            foreground="white",
+            background=COLORS["btn_green"],
+            borderwidth=1,
+            padding=(7, 4),
+        )
+        style.map(
+            TTK_BTN_SUCCESS_COMPACT,
+            background=[("active", "#3CAD3C"), ("pressed", "#267826"), ("disabled", "#245E24")],
+            foreground=[("disabled", "#D9F1D9")],
         )
         style.configure(
             TTK_BTN_DANGER,
@@ -2782,32 +2796,63 @@ class KlingGUIWindow:
         if added > 0:
             self._log(f"Added {added} file(s) to queue", "success")
 
+    def _describe_sanitize_reason(self, reason: str) -> str:
+        """Translate sanitize reason keys into user-facing text."""
+        labels = {
+            "invalid_characters": "invalid characters",
+            "control_whitespace": "control whitespace",
+            "edge_spaces_or_dots": "edge spaces/dots",
+            "repeated_underscores": "repeated underscores",
+            "windows_reserved_name": "Windows reserved name",
+            "length_limit": "name too long",
+            "normalized": "normalized",
+        }
+        parts = [labels.get(part.strip(), part.strip()) for part in (reason or "").split(",")]
+        parts = [part for part in parts if part]
+        return ", ".join(parts) if parts else "normalized"
+
     def _sanitize_folder_with_manifest(self, folder_path: str):
         """Sanitize one folder tree and always emit a manifest report."""
         requested_folder = folder_path
-        sanitized_folder, renames = sanitize_tree_names(folder_path, rename_root=True)
+        sanitized_folder, renames, failures, changes = sanitize_tree_names_report(
+            folder_path, rename_root=True
+        )
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         manifest_name = f"sanitize_manifest_{stamp}.json"
-        manifest_path = os.path.join(sanitized_folder, manifest_name)
 
         manifest = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "requested_folder": requested_folder,
             "sanitized_root": sanitized_folder,
             "change_count": len(renames),
-            "changes": [
-                {
-                    "old_path": old_path,
-                    "new_path": new_path,
-                    "old_name": os.path.basename(old_path),
-                    "new_name": os.path.basename(new_path),
-                }
-                for old_path, new_path in renames
-            ],
+            "failure_count": len(failures),
+            "changes": changes,
+            "failures": failures,
         }
-        with open(manifest_path, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, ensure_ascii=False)
-        return sanitized_folder, renames, manifest_path
+        write_roots = [sanitized_folder, requested_folder, get_user_data_dir()]
+        manifest_path = ""
+        last_error = None
+        for root in write_roots:
+            if not root:
+                continue
+            try:
+                os.makedirs(root, exist_ok=True)
+                candidate = os.path.join(root, manifest_name)
+                with open(candidate, "w", encoding="utf-8") as handle:
+                    json.dump(manifest, handle, indent=2, ensure_ascii=False)
+                manifest_path = candidate
+                break
+            except OSError as exc:
+                last_error = exc
+                continue
+
+        if not manifest_path:
+            raise OSError(
+                f"Could not write sanitize manifest to any target root: "
+                f"{[p for p in write_roots if p]}"
+            ) from last_error
+
+        return sanitized_folder, renames, failures, changes, manifest_path
 
     def _on_sanitize_folder_clicked(self):
         """Manually sanitize a folder tree and show a concise report."""
@@ -2815,38 +2860,47 @@ class KlingGUIWindow:
         if not folder:
             return
         try:
-            sanitized_folder, renames, manifest_path = self._sanitize_folder_with_manifest(folder)
+            sanitized_folder, renames, failures, changes, manifest_path = (
+                self._sanitize_folder_with_manifest(folder)
+            )
             if renames:
                 self._log(
-                    f"Sanitize Folder: fixed {len(renames)} file/folder name(s)",
-                    "success",
+                    f"Sanitize Folder complete: renamed {len(renames)} item(s), skipped {len(failures)} item(s)",
+                    "success" if not failures else "warning",
                 )
-                for old_path, new_path in renames[:25]:
+                for change in changes[:25]:
+                    old_name = change.get("old_name", "")
+                    new_name = change.get("new_name", "")
+                    reason = self._describe_sanitize_reason(change.get("reason", ""))
                     self._log(
-                        f"Renamed: {os.path.basename(old_path)} -> {os.path.basename(new_path)}",
+                        f"Renamed: {old_name} -> {new_name} (reason: {reason})",
                         "info",
                     )
-                if len(renames) > 25:
-                    self._log(f"...and {len(renames) - 25} more rename(s)", "info")
+                if len(changes) > 25:
+                    self._log(f"...and {len(changes) - 25} more rename(s)", "info")
             else:
-                self._log("Sanitize Folder: no broken names found", "info")
+                self._log(
+                    "Sanitize Folder complete: no cross-platform rename needed",
+                    "success",
+                )
 
-            messagebox.showinfo(
-                "Sanitize Folder Complete",
-                (
-                    f"Folder: {sanitized_folder}\n"
-                    f"Renamed items: {len(renames)}\n"
-                    f"Manifest: {manifest_path}"
-                ),
-                parent=self.root,
-            )
+            if failures:
+                self._log(
+                    f"Skipped {len(failures)} locked/inaccessible item(s); remaining items still processed",
+                    "warning",
+                )
+                for failed in failures[:25]:
+                    self._log(
+                        f"Skipped: {os.path.basename(failed.get('path', ''))} - "
+                        f"{failed.get('error_type', 'OSError')}: {failed.get('error_message', '')}",
+                        "warning",
+                    )
+                if len(failures) > 25:
+                    self._log(f"...and {len(failures) - 25} more skip(s)", "warning")
+
+            self._log(f"Sanitize manifest written: {manifest_path}", "info")
         except Exception as exc:
             self._log(f"Sanitize Folder failed: {exc}", "error")
-            messagebox.showerror(
-                "Sanitize Folder Failed",
-                f"Error while sanitizing folder:\n{exc}",
-                parent=self.root,
-            )
 
     def _on_folder_dropped(self, folder_path: str):
         """Handle folder dropped onto the drop zone."""
@@ -2855,19 +2909,37 @@ class KlingGUIWindow:
             return
 
         try:
-            sanitized_folder, renames, manifest_path = self._sanitize_folder_with_manifest(folder_path)
+            sanitized_folder, renames, failures, changes, manifest_path = (
+                self._sanitize_folder_with_manifest(folder_path)
+            )
             if renames:
                 self._log(
                     f"Sanitized {len(renames)} file/folder name(s) for cross-platform safety",
                     "warning",
                 )
-                for old_path, new_path in renames[:25]:
+                for change in changes[:25]:
+                    old_name = change.get("old_name", "")
+                    new_name = change.get("new_name", "")
+                    reason = self._describe_sanitize_reason(change.get("reason", ""))
                     self._log(
-                        f"Renamed: {os.path.basename(old_path)} -> {os.path.basename(new_path)}",
+                        f"Renamed: {old_name} -> {new_name} (reason: {reason})",
                         "info",
                     )
-                if len(renames) > 25:
-                    self._log(f"...and {len(renames) - 25} more rename(s)", "info")
+                if len(changes) > 25:
+                    self._log(f"...and {len(changes) - 25} more rename(s)", "info")
+            if failures:
+                self._log(
+                    f"Skipped {len(failures)} locked/inaccessible item(s) during sanitize",
+                    "warning",
+                )
+                for failed in failures[:25]:
+                    self._log(
+                        f"Skipped: {os.path.basename(failed.get('path', ''))} - "
+                        f"{failed.get('error_type', 'OSError')}: {failed.get('error_message', '')}",
+                        "warning",
+                    )
+                if len(failures) > 25:
+                    self._log(f"...and {len(failures) - 25} more skip(s)", "warning")
             self._log(f"Sanitize manifest written: {manifest_path}", "info")
             folder_path = sanitized_folder
         except Exception as exc:

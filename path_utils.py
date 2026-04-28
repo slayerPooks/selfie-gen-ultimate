@@ -6,7 +6,7 @@ Provides functions to get correct paths whether running as script or frozen exe.
 import os
 import re
 import sys
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 
 APP_NAME = "selfie-gen-ultimate"
@@ -161,7 +161,7 @@ _WINDOWS_RESERVED_NAMES = {
     "LPT9",
 }
 _INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_REPEATED_SEPARATOR_RE = re.compile(r"[_\-\s]{2,}")
+_REPEATED_UNDERSCORE_RE = re.compile(r"_{2,}")
 
 
 def _walk_up_past_gen_folders(source_path: str) -> str:
@@ -199,14 +199,32 @@ def sanitize_stem(name: str, default: str = "untitled") -> str:
     """Sanitize a path stem for cross-platform compatibility."""
     raw = str(name or "")
     sanitized = _INVALID_FILENAME_CHARS_RE.sub("_", raw)
-    sanitized = sanitized.replace("\n", "_").replace("\r", "_").replace("\t", "_")
-    sanitized = _REPEATED_SEPARATOR_RE.sub("_", sanitized)
-    sanitized = sanitized.strip(" ._")
+    sanitized = sanitized.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    sanitized = _REPEATED_UNDERSCORE_RE.sub("_", sanitized)
+    sanitized = sanitized.strip(" .")
     if not sanitized:
         sanitized = default
     if sanitized.upper() in _WINDOWS_RESERVED_NAMES:
         sanitized = f"{sanitized}_file"
     return sanitized[:180]
+
+
+def _sanitize_reasons(current_name: str, desired_name: str) -> str:
+    """Return a compact reason summary for a sanitize rename."""
+    reasons: List[str] = []
+    if _INVALID_FILENAME_CHARS_RE.search(current_name):
+        reasons.append("invalid_characters")
+    if any(ch in current_name for ch in ("\n", "\r", "\t")):
+        reasons.append("control_whitespace")
+    if current_name != current_name.strip(" ."):
+        reasons.append("edge_spaces_or_dots")
+    if "__" in current_name and "__" not in desired_name:
+        reasons.append("repeated_underscores")
+    if current_name.upper() in _WINDOWS_RESERVED_NAMES:
+        reasons.append("windows_reserved_name")
+    if not reasons:
+        reasons.append("normalized")
+    return ",".join(reasons)
 
 
 def sanitize_filename(name: str, default_stem: str = "untitled") -> str:
@@ -268,31 +286,91 @@ def sanitize_tree_names(root_path: str, rename_root: bool = True) -> Tuple[str, 
     Returns:
         (new_root_path, renames) where renames are (old_path, new_path).
     """
+    new_root, renames, _failures, _changes = sanitize_tree_names_report(
+        root_path=root_path,
+        rename_root=rename_root,
+    )
+    return new_root, renames
+
+
+def sanitize_tree_names_report(
+    root_path: str, rename_root: bool = True
+) -> Tuple[str, List[Tuple[str, str]], List[Dict[str, str]], List[Dict[str, str]]]:
+    """Recursively rename files/folders under *root_path* and report failures.
+
+    Returns:
+        (new_root_path, renames, failures, changes)
+        - renames: list[(old_path, new_path)]
+        - failures: list[{
+              "path", "desired_path", "error_type", "error_message"
+          }]
+        - changes: list[{
+              "old_path", "new_path", "old_name", "new_name", "reason"
+          }]
+    """
     if not os.path.isdir(root_path):
-        return root_path, []
+        return root_path, [], [], []
 
     renames: List[Tuple[str, str]] = []
+    failures: List[Dict[str, str]] = []
+    changes: List[Dict[str, str]] = []
+
+    def _attempt_rename(old_path: str):
+        parent = os.path.dirname(old_path)
+        current_name = os.path.basename(old_path)
+        if not parent or not current_name:
+            return
+
+        if os.path.isdir(old_path):
+            desired = sanitize_stem(current_name, default="untitled")
+        else:
+            desired = sanitize_filename(current_name, default_stem="untitled")
+
+        if desired == current_name:
+            return
+
+        desired = make_unique_name(parent, desired)
+        desired_path = os.path.join(parent, desired)
+        reason = _sanitize_reasons(current_name=current_name, desired_name=desired)
+        try:
+            os.rename(old_path, desired_path)
+            renames.append((old_path, desired_path))
+            changes.append(
+                {
+                    "old_path": old_path,
+                    "new_path": desired_path,
+                    "old_name": current_name,
+                    "new_name": desired,
+                    "reason": reason,
+                }
+            )
+        except OSError as exc:
+            failures.append(
+                {
+                    "path": old_path,
+                    "desired_path": desired_path,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                }
+            )
+
     for current_dir, dirs, files in os.walk(root_path, topdown=False):
         for filename in sorted(files):
             old_path = os.path.join(current_dir, filename)
             if not os.path.exists(old_path):
                 continue
-            new_path, changed = sanitize_path_name(old_path)
-            if changed:
-                renames.append((old_path, new_path))
+            _attempt_rename(old_path)
         for dirname in sorted(dirs):
             old_path = os.path.join(current_dir, dirname)
             if not os.path.isdir(old_path):
                 continue
-            new_path, changed = sanitize_path_name(old_path)
-            if changed:
-                renames.append((old_path, new_path))
+            _attempt_rename(old_path)
 
     new_root = root_path
     if rename_root:
-        renamed_root, changed = sanitize_path_name(root_path)
-        if changed:
-            renames.append((root_path, renamed_root))
-            new_root = renamed_root
+        old_root = root_path
+        _attempt_rename(old_root)
+        if renames and renames[-1][0] == old_root:
+            new_root = renames[-1][1]
 
-    return new_root, renames
+    return new_root, renames, failures, changes
