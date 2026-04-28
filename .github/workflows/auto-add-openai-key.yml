@@ -112,7 +112,7 @@ jobs:
             - ✅ Security vulnerability detection
             - ✅ Code quality checks
 
-            See [CODEX-GITHUB-SETUP.md](https://github.com/${{ github.repository }}/blob/master/CODEX-GITHUB-SETUP.md) for details.
+            See [CODEX-GITHUB-SETUP.md](https://github.com/${{ github.repository }}/blob/main/CODEX-GITHUB-SETUP.md) for details.
             `,
               labels: ['setup-required', 'automation']
             });

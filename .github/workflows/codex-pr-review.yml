@@ -6,7 +6,7 @@ on:
     # Exclude draft PRs to save API costs
     branches:
       - main
-      - master
+      - main
       - develop
 
 permissions:
