@@ -69,6 +69,7 @@ TTK_BTN_SECONDARY = "Secondary.TButton"
 TTK_BTN_DANGER = "Danger.TButton"
 TTK_BTN_DANGER_COMPACT = "DangerCompact.TButton"
 TTK_BTN_SUCCESS = "Success.TButton"
+TTK_BTN_SUCCESS_COMPACT = "SuccessCompact.TButton"
 TTK_BTN_COMPACT = "Compact.TButton"
 TTK_BTN_TAB_NAV = "TabNav.TButton"
 

@@ -4,7 +4,7 @@ Drop Zone Widget - Drag-and-drop area for image files with visual feedback.
 
 import tkinter as tk
 from tkinter import filedialog
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional
 import os
 import sys
 
@@ -99,7 +99,7 @@ class DropZone(tk.Frame):
         on_files_dropped: Callable[[List[str]], None],
         on_folder_dropped: Callable[[str], None] = None,
         compact: bool = False,
-        tint: dict | None = None,
+        tint: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         """
@@ -110,13 +110,32 @@ class DropZone(tk.Frame):
             on_files_dropped: Callback function that receives list of file paths
             on_folder_dropped: Callback function that receives folder path
             compact: Render compact single-purpose layout (icon + one title line)
-            tint: Optional color override dict for compact/permanent variants
+            tint: Optional color override dict for compact/permanent variants.
+                Supported keys:
+                - bg_drop: drop-zone background color
+                - bg_hover: hover background color
+                - border: border color
+                - accent: accent/icon color
+                - text: primary text color
+                - text_dim: secondary text color
+                - drop_valid: valid-drop highlight color
+                Unknown keys are ignored.
         """
         super().__init__(parent, bg=COLORS["bg_panel"], **kwargs)
         self.on_files_dropped = on_files_dropped
         self.on_folder_dropped = on_folder_dropped
         self.compact = compact
-        self._tint = tint or {}
+        supported_tint_keys = {
+            "bg_drop",
+            "bg_hover",
+            "border",
+            "accent",
+            "text",
+            "text_dim",
+            "drop_valid",
+        }
+        raw_tint = tint or {}
+        self._tint = {k: v for k, v in raw_tint.items() if k in supported_tint_keys}
         self._default_bg = self._tint.get("bg_drop", COLORS["bg_drop"])
         self._hover_bg = self._tint.get("bg_hover", COLORS["bg_hover"])
         self._border_color = self._tint.get("border", COLORS["border"])
@@ -174,6 +193,7 @@ class DropZone(tk.Frame):
             self.drop_frame,
             self.icon_label,
             self.main_label,
+            self.sub_label,
             self.content_container,
         ]:
             if widget is self.sub_label and self.compact:
