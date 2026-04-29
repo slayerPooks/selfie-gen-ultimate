@@ -47,6 +47,29 @@ if PYTHON_CMD="$(pick_python)"; then
   :
 fi
 
+ensure_deps() {
+  local py_cmd="$1"
+  if "$py_cmd" -c "import cv2, numpy" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ "${OLDCAM_SKIP_AUTO_INSTALL:-0}" = "1" ]; then
+    return 1
+  fi
+
+  if [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
+    return 1
+  fi
+
+  echo "Missing dependencies detected (cv2/numpy). Attempting auto-install..."
+  if ! "$py_cmd" -m pip install -r "$SCRIPT_DIR/requirements.txt"; then
+    echo "Automatic dependency install failed."
+    return 1
+  fi
+
+  "$py_cmd" -c "import cv2, numpy" >/dev/null 2>&1
+}
+
 pause_if_needed() {
   if [ -z "${OLDCAM_NO_PAUSE:-}" ]; then
     printf "\nPress Enter to exit..."
@@ -57,6 +80,13 @@ pause_if_needed() {
 if [ -z "$PYTHON_CMD" ]; then
   echo "Could not find a Python interpreter with both cv2 and numpy installed."
   echo "Install dependencies with: python3 -m pip install -r requirements.txt"
+  pause_if_needed
+  exit 1
+fi
+
+if ! ensure_deps "$PYTHON_CMD"; then
+  echo "Dependencies are still missing for selected Python: $PYTHON_CMD"
+  echo "Try manually: \"$PYTHON_CMD\" -m pip install -r \"$SCRIPT_DIR/requirements.txt\""
   pause_if_needed
   exit 1
 fi
