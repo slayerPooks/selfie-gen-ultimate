@@ -344,7 +344,7 @@ class FalAIKlingGenerator:
             self._progress_callback(message, level)
 
     def upload_to_freeimage(self, image_path: str) -> Optional[str]:
-        """Upload image using fal CDN primary with freeimage fallback."""
+        """Upload image via freeimage.host."""
         from fal_utils import upload_reference_image
         try:
             image_url, _, provider = upload_reference_image(

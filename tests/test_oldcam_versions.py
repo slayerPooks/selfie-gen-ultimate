@@ -38,12 +38,32 @@ def test_oldcam_version_defaults_to_v7_for_missing_or_invalid_config():
     assert manager._get_oldcam_version() == "v7"
 
 
+def test_oldcam_version_accepts_all_mode():
+    manager, _ = make_queue_manager({"oldcam_version": "all"})
+    assert manager._get_oldcam_version() == "all"
+
+
 def test_oldcam_output_path_uses_versioned_suffixes():
     manager, _ = make_queue_manager({"oldcam_version": "v7"})
     source = Path("clip_looped.mp4")
 
     assert manager._build_oldcam_output_path(source, "v7") == Path("clip_looped-oldcam-v7.mp4")
     assert manager._build_oldcam_output_path(source, "v8") == Path("clip_looped-oldcam-v8.mp4")
+
+
+def test_discover_oldcam_versions_includes_future_version(tmp_path):
+    for version in ("7", "8", "9"):
+        folder = tmp_path / f"oldcam-v{version}"
+        folder.mkdir()
+        (folder / "launcher.py").write_text("pass", encoding="utf-8")
+
+    manager, _ = make_queue_manager({"oldcam_version": "all"})
+    with mock.patch("kling_gui.queue_manager.get_app_dir", return_value=str(tmp_path)), \
+        mock.patch("kling_gui.queue_manager.get_resource_dir", return_value=str(tmp_path)):
+        versions = manager._discover_oldcam_versions()
+
+    assert "v9" in versions
+    assert versions[-1] == "v9"
 
 
 def test_queue_manager_selects_oldcam_version_folder_and_output(tmp_path):
@@ -72,6 +92,38 @@ def test_queue_manager_selects_oldcam_version_folder_and_output(tmp_path):
     assert result == str(output_path)
     resolve_mock.assert_called_once_with("v8")
     assert any("v8" in message for message, _level in logs)
+
+
+def test_oldcam_all_mode_runs_all_versions_and_returns_highest():
+    manager, _ = make_queue_manager({"oldcam_version": "all"})
+    source = Path("clip.mp4")
+    expected_paths = {
+        "v7": str(source.with_name("clip-oldcam-v7.mp4")),
+        "v8": str(source.with_name("clip-oldcam-v8.mp4")),
+        "v9": str(source.with_name("clip-oldcam-v9.mp4")),
+    }
+    calls = []
+
+    def _fake_run(_path, version):
+        calls.append(version)
+        return expected_paths[version]
+
+    with mock.patch.object(manager, "_get_oldcam_versions_to_run", return_value=["v7", "v8", "v9"]), \
+        mock.patch.object(manager, "_get_oldcam_version", return_value="all"), \
+        mock.patch.object(manager, "_run_oldcam_version", side_effect=_fake_run):
+        result = manager._oldcam_video(str(source), QueueItem(str(source)))
+
+    assert calls == ["v7", "v8", "v9"]
+    assert result == expected_paths["v9"]
+
+
+def test_generation_error_message_prefers_generator_last_error():
+    manager, _ = make_queue_manager({})
+    manager.generator = SimpleNamespace(last_error_message="Submit failed: HTTP 422 — prompt too long")
+    assert manager._get_generation_error_message() == "Submit failed: HTTP 422 — prompt too long"
+
+    manager.generator = SimpleNamespace(last_error_message="")
+    assert manager._get_generation_error_message() == "Generation failed"
 
 
 def test_v7_default_output_path_uses_v7_suffix():

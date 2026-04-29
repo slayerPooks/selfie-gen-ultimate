@@ -5,9 +5,8 @@ import time
 import threading
 import requests
 import logging
-import tempfile
 from pathlib import Path
-from typing import Optional, Callable, Tuple, Any
+from typing import Optional, Callable, Tuple
 from PIL import Image, ImageOps
 import io
 import base64
@@ -18,12 +17,6 @@ ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
 # Freeimage.host API key from environment (optional)
 _FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
-_FAL_CLIENT_IMPORT_ERROR = ""
-try:
-    import fal_client  # type: ignore
-except Exception as exc:  # pragma: no cover - tested via runtime fallback behavior
-    fal_client = None
-    _FAL_CLIENT_IMPORT_ERROR = str(exc)
 
 
 def _extract_http_error_detail(resp: requests.Response, limit: int = 500) -> str:
@@ -86,42 +79,6 @@ def _prepare_image_for_upload(image_path: str, max_size: int = 1200) -> Tuple[by
     return jpeg_bytes, decoded
 
 
-def _fal_upload_jpeg_bytes(jpeg_bytes: bytes, api_key: str) -> str:
-    """Upload bytes through fal client using sync APIs and return public URL."""
-    if fal_client is None:
-        raise RuntimeError(f"fal_client unavailable: {_FAL_CLIENT_IMPORT_ERROR or 'not installed'}")
-
-    api_key = (api_key or "").strip()
-    if api_key:
-        os.environ["FAL_KEY"] = api_key
-
-    temp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            temp_path = tmp.name
-            tmp.write(jpeg_bytes)
-
-        for method_name in ("upload_file", "upload_image", "upload"):
-            method = getattr(fal_client, method_name, None)
-            if not callable(method):
-                continue
-            result = method(temp_path)
-            if isinstance(result, str) and result.strip():
-                return result.strip()
-            if isinstance(result, dict):
-                for key in ("url", "file_url"):
-                    value = result.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
-        raise RuntimeError("fal_client upload returned no URL")
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-
-
 def upload_to_freeimage(
     image_path: str,
     max_size: int = 1200,
@@ -174,10 +131,16 @@ def upload_to_freeimage(
                 if progress_cb:
                     progress_cb(f"Uploaded: {url}", "upload")
                 return url, img
+            detail = str(result.get("status_txt") or result.get("error") or result)[:500]
+            logger.error("Upload failed: API status_code=%s detail=%s", result.get("status_code"), detail)
+            if progress_cb:
+                progress_cb(f"Upload failed: {detail}", "error")
+            return None, None
 
-        logger.error("Upload failed: %s", response.status_code)
+        detail = _extract_http_error_detail(response)
+        logger.error("Upload failed: HTTP %s — %s", response.status_code, detail)
         if progress_cb:
-            progress_cb(f"Upload failed: HTTP {response.status_code}", "error")
+            progress_cb(f"Upload failed: HTTP {response.status_code} — {detail}", "error")
         return None, None
 
     except Exception as e:
@@ -194,29 +157,10 @@ def upload_reference_image(
     progress_cb: ProgressCallback = None,
     freeimage_api_key: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[Image.Image], Optional[str]]:
-    """Upload reference image using fal CDN first, then fallback to freeimage."""
-    try:
-        if progress_cb:
-            progress_cb(f"Preparing {Path(image_path).name} for upload...", "upload")
-        jpeg_bytes, processed_img = _prepare_image_for_upload(image_path=image_path, max_size=max_size)
-    except Exception as exc:
-        logger.error("Failed to prepare image for upload: %s", exc)
-        if progress_cb:
-            progress_cb(f"Image preparation failed: {exc}", "error")
-        return None, None, None
-
-    try:
-        if progress_cb:
-            progress_cb("Uploading via fal CDN...", "upload")
-        fal_url = _fal_upload_jpeg_bytes(jpeg_bytes=jpeg_bytes, api_key=fal_api_key)
-        if progress_cb:
-            progress_cb("Uploaded via fal CDN", "upload")
-        return fal_url, processed_img, "fal_cdn"
-    except Exception as fal_exc:
-        logger.warning("fal CDN upload failed; falling back to freeimage: %s", fal_exc)
-        if progress_cb:
-            progress_cb(f"fal CDN upload failed, falling back: {fal_exc}", "warning")
-
+    """Upload reference image via freeimage.host and return provider metadata."""
+    del fal_api_key
+    if progress_cb:
+        progress_cb(f"Preparing {Path(image_path).name} for upload...", "upload")
     freeimage_url, freeimage_img = upload_to_freeimage(
         image_path=image_path,
         max_size=max_size,
@@ -224,8 +168,6 @@ def upload_reference_image(
         api_key=freeimage_api_key,
     )
     if freeimage_url:
-        if progress_cb:
-            progress_cb("Uploaded via freeimage fallback", "upload")
         return freeimage_url, freeimage_img, "freeimage"
 
     return None, None, None

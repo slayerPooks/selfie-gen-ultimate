@@ -16,6 +16,7 @@ from kling_gui.main_window import KlingGUIWindow
 from kling_gui import theme
 from kling_gui.carousel_widget import ImageCarousel
 from kling_gui.config_panel import ConfigPanel
+from kling_gui.queue_manager import QueueItem
 from kling_gui.tabs.selfie_tab import SelfieTab
 from kling_gui.tabs.video_tab import VideoTab
 from kling_gui.drop_zone import DropZone
@@ -253,12 +254,28 @@ class OldcamRerunFlowTests(unittest.TestCase):
         rerun_pos = src.find("self.oldcam_rerun_btn")
         self.assertTrue(version_pos >= 0 and rerun_pos > version_pos)
 
+    def test_config_panel_oldcam_versions_include_all(self):
+        src = inspect.getsource(ConfigPanel._setup_ui)
+        self.assertIn('values=("v7", "v8", "all")', src)
+
     def test_resolve_oldcam_rerun_source_prefers_base_video_when_available(self):
         window = KlingGUIWindow.__new__(KlingGUIWindow)
         window._log = mock.Mock()
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir) / "clip_looped.mp4"
             oldcam = Path(tmpdir) / "clip_looped-oldcam-v8.mp4"
+            base.write_bytes(b"base")
+            oldcam.write_bytes(b"oldcam")
+            resolved = window._resolve_oldcam_rerun_source(str(oldcam))
+        self.assertEqual(resolved, str(base))
+        window._log.assert_not_called()
+
+    def test_resolve_oldcam_rerun_source_supports_future_version_suffix(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "clip_looped.mp4"
+            oldcam = Path(tmpdir) / "clip_looped-oldcam-v9.mp4"
             base.write_bytes(b"base")
             oldcam.write_bytes(b"oldcam")
             resolved = window._resolve_oldcam_rerun_source(str(oldcam))
@@ -299,6 +316,22 @@ class OldcamRerunFlowTests(unittest.TestCase):
 
         args, _kwargs = window.queue_manager.rerun_oldcam_only.call_args
         self.assertEqual(args[0], str(latest))
+
+    def test_on_item_complete_does_not_emit_duplicate_failed_log(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        logs = []
+        window._log = lambda message, level="info": logs.append((message, level))
+        window.history = []
+        window._save_history = lambda: None
+        window._refresh_history_view = lambda: None
+        window.queue_manager = None
+        window.generator = None
+        window.config = {}
+        item = QueueItem(path="C:/tmp/input.png", status="failed", error_message="Request failed: HTTP 422")
+
+        window._on_item_complete(item)
+
+        self.assertFalse(any(message.startswith("Failed ") for message, _level in logs))
 
 
 class CarouselFolderButtonTests(unittest.TestCase):

@@ -9,6 +9,7 @@ import os
 import sys
 import logging
 import time
+import re
 from copy import deepcopy
 import webbrowser
 from logging.handlers import RotatingFileHandler
@@ -715,13 +716,14 @@ class KlingGUIWindow:
             "video_duration": 10,
             "loop_videos": True,  # Loop videos ON by default
             "oldcam_videos": True,  # Oldcam Finish ON by default
+            "oldcam_version": "v7",
             "allow_reprocess": True,
             "reprocess_mode": "increment",
             "custom_models": [],
             "hidden_models": [],
             "freeimage_api_key": "",
             "bfl_api_key": "",
-            "upload_provider_order": ["fal_cdn", "freeimage"],
+            "upload_provider_order": ["freeimage"],
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
@@ -2584,16 +2586,16 @@ class KlingGUIWindow:
         if not candidate:
             return ""
         stem = candidate.stem
-        for suffix in ("-oldcam-v7", "-oldcam-v8"):
-            if stem.endswith(suffix):
-                base = candidate.with_name(f"{stem[:-len(suffix)]}{candidate.suffix}")
-                if base.exists():
-                    return str(base)
-                self._log(
-                    f"Base video not found for {candidate.name}; using selected output as source",
-                    "warning",
-                )
-                return str(candidate)
+        match = re.search(r"-oldcam-v\d+$", stem, re.IGNORECASE)
+        if match:
+            base = candidate.with_name(f"{stem[:match.start()]}{candidate.suffix}")
+            if base.exists():
+                return str(base)
+            self._log(
+                f"Base video not found for {candidate.name}; using selected output as source",
+                "warning",
+            )
+            return str(candidate)
         return str(candidate)
 
     def _on_oldcam_rerun_requested(self):
@@ -3236,10 +3238,6 @@ class KlingGUIWindow:
             self._log(
                 f"Finished {os.path.basename(item.path)} → {item.output_path}",
                 "success",
-            )
-        elif status == "failed":
-            self._log(
-                f"Failed {os.path.basename(item.path)}: {item.error_message}", "error"
             )
 
         # Sync generator with latest config when queue becomes empty

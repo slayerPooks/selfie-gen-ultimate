@@ -503,9 +503,9 @@ class ConfigPanel(tk.Frame):
         self.oldcam_version_combo = ttk.Combobox(
             rA,
             textvariable=self.oldcam_version_var,
-            values=("v7", "v8"),
+            values=("v7", "v8", "all"),
             state="readonly",
-            width=4,
+            width=5,
             font=(FONT_FAMILY, 9),
             style="Dark.TCombobox",
         )
@@ -1041,7 +1041,7 @@ class ConfigPanel(tk.Frame):
         self._check_ffmpeg_status()
         self.oldcam_video_var.set(self.config.get("oldcam_videos", True))
         oldcam_version = self.config.get("oldcam_version", "v7")
-        if oldcam_version not in ("v7", "v8"):
+        if oldcam_version not in ("v7", "v8", "all"):
             oldcam_version = "v7"
             self.config["oldcam_version"] = oldcam_version
         self.oldcam_version_var.set(oldcam_version)
@@ -1335,7 +1335,7 @@ class ConfigPanel(tk.Frame):
         """Handle oldcam version dropdown change."""
         del event
         version = self.oldcam_version_var.get()
-        if version not in ("v7", "v8"):
+        if version not in ("v7", "v8", "all"):
             version = "v7"
             self.oldcam_version_var.set(version)
         self.config["oldcam_version"] = version

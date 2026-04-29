@@ -516,15 +516,70 @@ class QueueManager:
                 "total": len(self.items),
             }
 
-    def _get_next_incremented_oldcam_input(self, source_video: Path, version: str) -> Path:
-        """Return a copied input path whose derived oldcam output does not exist."""
+    @staticmethod
+    def _oldcam_version_key(version: str) -> int:
+        """Sortable numeric key for versions like v7, v8, v10."""
+        match = re.fullmatch(r"v(\d+)", str(version or "").strip().lower())
+        if not match:
+            return -1
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return -1
+
+    def _discover_oldcam_versions(self) -> List[str]:
+        """Discover available oldcam folders like oldcam-v7, oldcam-v8."""
+        roots = [
+            Path(get_app_dir()),
+            Path(get_resource_dir()),
+            Path(__file__).parent.parent.resolve(),
+        ]
+        found = set()
+        for root in roots:
+            if not root.exists():
+                continue
+            try:
+                for candidate in root.iterdir():
+                    if not candidate.is_dir():
+                        continue
+                    match = re.fullmatch(r"oldcam-v(\d+)", candidate.name.lower())
+                    if not match:
+                        continue
+                    if (candidate / "launcher.py").exists():
+                        found.add(f"v{int(match.group(1))}")
+            except OSError:
+                continue
+
+        if not found:
+            return ["v7", "v8"]
+        return sorted(found, key=self._oldcam_version_key)
+
+    def _get_oldcam_versions_to_run(self) -> List[str]:
+        """Return selected oldcam versions in ascending order."""
+        available = self._discover_oldcam_versions()
+        selected = self._get_oldcam_version()
+        if selected == "all":
+            return available
+        if selected in available:
+            return [selected]
+        # Backward-safe fallback
+        return [available[-1]] if available else ["v7"]
+
+    def _get_next_incremented_oldcam_input(self, source_video: Path, versions: List[str]) -> Path:
+        """Return copied input whose derived oldcam outputs do not exist for any selected version."""
         counter = 2
         while True:
             candidate_input = source_video.with_name(
                 f"{source_video.stem}_{counter}{source_video.suffix}"
             )
-            candidate_output = self._build_oldcam_output_path(candidate_input, version)
-            if not candidate_input.exists() and not candidate_output.exists():
+            candidate_outputs = [
+                self._build_oldcam_output_path(candidate_input, version)
+                for version in versions
+            ]
+            if (
+                not candidate_input.exists()
+                and all(not candidate_output.exists() for candidate_output in candidate_outputs)
+            ):
                 shutil.copy2(source_video, candidate_input)
                 return candidate_input
             counter += 1
@@ -568,16 +623,24 @@ class QueueManager:
             temp_input: Optional[Path] = None
             try:
                 config = self.get_config()
+                versions_to_run = self._get_oldcam_versions_to_run()
                 version = self._get_oldcam_version()
+                primary_version = max(versions_to_run, key=self._oldcam_version_key)
                 allow_reprocess = bool(config.get("allow_reprocess", False))
                 reprocess_mode = str(config.get("reprocess_mode", "increment") or "increment").lower()
-                expected_output = self._build_oldcam_output_path(source_video, version)
+                expected_output = self._build_oldcam_output_path(source_video, primary_version)
                 run_input = source_video
+                existing_outputs = [
+                    self._build_oldcam_output_path(source_video, run_version)
+                    for run_version in versions_to_run
+                    if self._build_oldcam_output_path(source_video, run_version).exists()
+                ]
 
-                if expected_output.exists():
+                if existing_outputs:
                     if not allow_reprocess:
+                        existing_names = ", ".join(path.name for path in existing_outputs)
                         message = (
-                            f"Oldcam {version} output already exists: {expected_output.name}. "
+                            f"Oldcam output already exists ({existing_names}). "
                             "Enable 'Allow reprocessing' to rerun."
                         )
                         self.log(message, "warning")
@@ -586,19 +649,23 @@ class QueueManager:
                         return
 
                     if reprocess_mode == "overwrite":
-                        try:
-                            expected_output.unlink()
-                            self.log(f"Deleted existing Oldcam output: {expected_output.name}", "warning")
-                        except Exception as exc:
-                            message = f"Could not delete existing Oldcam output: {exc}"
-                            self.log(message, "error")
-                            if completion_callback:
-                                completion_callback(False, str(source_video), None, message)
-                            return
+                        for existing_output in existing_outputs:
+                            try:
+                                existing_output.unlink()
+                                self.log(
+                                    f"Deleted existing Oldcam output: {existing_output.name}",
+                                    "warning",
+                                )
+                            except Exception as exc:
+                                message = f"Could not delete existing Oldcam output: {exc}"
+                                self.log(message, "error")
+                                if completion_callback:
+                                    completion_callback(False, str(source_video), None, message)
+                                return
                     else:
-                        temp_input = self._get_next_incremented_oldcam_input(source_video, version)
+                        temp_input = self._get_next_incremented_oldcam_input(source_video, versions_to_run)
                         run_input = temp_input
-                        expected_output = self._build_oldcam_output_path(run_input, version)
+                        expected_output = self._build_oldcam_output_path(run_input, primary_version)
                         self.log(f"Oldcam rerun increment target: {expected_output.name}", "info")
 
                 self.log(
@@ -847,8 +914,8 @@ class QueueManager:
                     self.log(f"Saved to: {final_video}", "info")
                 else:
                     item.status = "failed"
-                    item.error_message = "Generation failed"
-                    self.log(f"Failed: {item.filename}", "error")
+                    item.error_message = self._get_generation_error_message()
+                    self.log(f"Failed {item.filename}: {item.error_message}", "error")
 
             except Exception as e:
                 item.status = "failed"
@@ -971,6 +1038,12 @@ class QueueManager:
                 timestamp=generation_timestamp,
             )
 
+    def _get_generation_error_message(self) -> str:
+        """Get most specific generator failure message available."""
+        raw = getattr(self.generator, "last_error_message", "")
+        message = str(raw or "").strip()
+        return message if message else "Generation failed"
+
     def _loop_video(self, video_path: str, item: QueueItem):
         """
         Create a looped version of the generated video.
@@ -1011,16 +1084,19 @@ class QueueManager:
     def _get_oldcam_version(self) -> str:
         """Return configured Oldcam version with backward-compatible default."""
         version = str(self.get_config().get("oldcam_version", "v7")).lower()
-        return version if version in ("v7", "v8") else "v7"
+        if version == "all":
+            return version
+        available = self._discover_oldcam_versions()
+        return version if version in available else "v7"
 
     def _build_oldcam_output_path(self, input_path: Path, version: str) -> Path:
         """Build versioned Oldcam output path next to input video."""
-        suffix = "-oldcam-v8" if version == "v8" else "-oldcam-v7"
+        suffix = f"-oldcam-{str(version).lower()}"
         return input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
 
     def _resolve_oldcam_dir(self, version: str = "v7") -> Path:
         """Resolve selected oldcam directory for script and frozen builds."""
-        folder_name = "oldcam-v8" if version == "v8" else "oldcam-v7"
+        folder_name = f"oldcam-{str(version).lower()}"
         app_dir = Path(get_app_dir())
         resource_dir = Path(get_resource_dir())
         candidates = [
@@ -1032,6 +1108,43 @@ class QueueManager:
             if candidate.exists():
                 return candidate
         return app_dir / folder_name
+
+    def _run_oldcam_version(self, video_path: str, version: str) -> Optional[str]:
+        """Run one oldcam version and return output path if successful."""
+        oldcam_dir = self._resolve_oldcam_dir(version)
+        launcher_path = oldcam_dir / "launcher.py"
+        if not launcher_path.exists():
+            self.log(f"Oldcam {version} launcher not found", "warning")
+            return None
+
+        if not self._ensure_oldcam_dependencies(oldcam_dir):
+            self.log(f"Skipping Oldcam {version} Finish due to missing dependencies", "warning")
+            return None
+
+        self.log(f"Applying Oldcam {version} Finish...", "info")
+        run_cmd = [sys.executable, "-u", str(launcher_path), video_path]
+        completed = subprocess.run(
+            run_cmd,
+            cwd=str(oldcam_dir),
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+        if completed.returncode == 0:
+            input_path = Path(video_path)
+            oldcam_output = self._build_oldcam_output_path(input_path, version)
+            if oldcam_output.exists():
+                self.log(f"Oldcam {version} Finish applied: {oldcam_output.name}", "success")
+                return str(oldcam_output)
+            self.log(f"Oldcam {version} process completed but output file was not found", "warning")
+            return None
+
+        self.log(f"Oldcam {version} Finish failed (code {completed.returncode})", "warning")
+        err = (completed.stderr or completed.stdout or "").strip()
+        if err:
+            self.log(err.splitlines()[-1], "warning")
+        return None
 
     def _ensure_oldcam_dependencies(self, oldcam_dir: Path) -> bool:
         """Check Oldcam requirements in current interpreter and emit install guidance."""
@@ -1070,41 +1183,24 @@ class QueueManager:
         """
         del item  # Reserved for future per-item status hooks
         try:
-            version = self._get_oldcam_version()
-            oldcam_dir = self._resolve_oldcam_dir(version)
-            launcher_path = oldcam_dir / "launcher.py"
-            if not launcher_path.exists():
-                self.log(f"Oldcam {version} launcher not found", "warning")
+            versions_to_run = self._get_oldcam_versions_to_run()
+            selected = self._get_oldcam_version()
+            if selected == "all":
+                self.log(
+                    "Oldcam all selected: running "
+                    + ", ".join(versions_to_run),
+                    "info",
+                )
+            outputs: List[Tuple[str, str]] = []
+            for version in versions_to_run:
+                output_path = self._run_oldcam_version(video_path, version)
+                if output_path:
+                    outputs.append((version, output_path))
+            if not outputs:
                 return None
-
-            if not self._ensure_oldcam_dependencies(oldcam_dir):
-                self.log(f"Skipping Oldcam {version} Finish due to missing dependencies", "warning")
-                return None
-
-            self.log(f"Applying Oldcam {version} Finish...", "info")
-            run_cmd = [sys.executable, "-u", str(launcher_path), video_path]
-            completed = subprocess.run(
-                run_cmd,
-                cwd=str(oldcam_dir),
-                capture_output=True,
-                text=True,
-                timeout=600,
-                check=False,
-            )
-            if completed.returncode == 0:
-                input_path = Path(video_path)
-                oldcam_output = self._build_oldcam_output_path(input_path, version)
-                if oldcam_output.exists():
-                    self.log(f"Oldcam {version} Finish applied: {oldcam_output.name}", "success")
-                    return str(oldcam_output)
-                self.log(f"Oldcam {version} process completed but output file was not found", "warning")
-                return None
-
-            self.log(f"Oldcam {version} Finish failed (code {completed.returncode})", "warning")
-            err = (completed.stderr or completed.stdout or "").strip()
-            if err:
-                self.log(err.splitlines()[-1], "warning")
-            return None
+            # Primary output is highest version number among successful runs.
+            primary = max(outputs, key=lambda entry: self._oldcam_version_key(entry[0]))
+            return primary[1]
         except Exception as e:
             self.log(f"Error applying Oldcam Finish: {e}", "warning")
             return None
