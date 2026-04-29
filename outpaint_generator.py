@@ -8,7 +8,7 @@ import logging
 from io import BytesIO
 from typing import Optional, Callable, Tuple
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter, ImageDraw
+from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -275,11 +275,11 @@ class OutpaintGenerator:
         if output_path is None:
             stem = Path(image_path).stem
             ext = f".{output_format}"
-            output_path = os.path.join(output_folder, f"{stem}_outpaint{ext}")
+            output_path = os.path.join(output_folder, f"{stem}-expanded{ext}")
             counter = 1
             while os.path.exists(output_path):
                 output_path = os.path.join(
-                    output_folder, f"{stem}_outpaint_{counter}{ext}"
+                    output_folder, f"{stem}-expanded_v{counter}{ext}"
                 )
                 counter += 1
 
@@ -320,84 +320,88 @@ class OutpaintGenerator:
         output_format: str,
         composite_mode: str,
     ) -> None:
-        """Paste the original sharp image over the AI-generated center.
-
-        Works for both fal.ai and BFL outputs. Handles dimension mismatches
-        by proportionally adjusting paste coords.
-        """
         if composite_mode == "none":
             self._report("Composite: none — using raw AI output", "progress")
-            self._report(f"Saved: {os.path.basename(output_path)}", "success")
             return
 
         try:
-            self._report(f"Compositing original over AI result (mode={composite_mode})...", "progress")
-            result_img = Image.open(output_path)
+            import cv2
+            import numpy as np
+            from PIL import ImageFilter, ImageDraw
 
+            self._report(f"Compositing original over AI result (mode={composite_mode})...", "progress")
+            result_img = Image.open(output_path).convert("RGB")
+            orig_rgb = orig.convert("RGB")
+
+            # --- 1. INITIAL MATH ESTIMATE ---
             expected_w = orig.width + margin_left + margin_right
-            expected_h = orig.height + margin_top + margin_bottom
             actual_w, actual_h = result_img.size
 
-            if (actual_w, actual_h) == (expected_w, expected_h):
-                paste_left = margin_left
-                paste_top = margin_top
+            if actual_w == expected_w:
+                math_left, math_top = margin_left, margin_top
             else:
-                # API rounded dimensions — distribute delta proportionally
                 total_h_margin = actual_w - orig.width
                 total_v_margin = actual_h - orig.height
                 h_sum = margin_left + margin_right
                 v_sum = margin_top + margin_bottom
-                if h_sum > 0:
-                    paste_left = round(total_h_margin * margin_left / h_sum)
-                else:
-                    paste_left = total_h_margin // 2
-                if v_sum > 0:
-                    paste_top = round(total_v_margin * margin_top / v_sum)
-                else:
-                    paste_top = total_v_margin // 2
-                self._report(
-                    f"Composite: API returned {actual_w}x{actual_h} "
-                    f"(expected {expected_w}x{expected_h}), "
-                    f"adjusted paste to ({paste_left}, {paste_top})",
-                    "progress",
-                )
+                math_left = round(total_h_margin * margin_left / h_sum) if h_sum > 0 else total_h_margin // 2
+                math_top = round(total_v_margin * margin_top / v_sum) if v_sum > 0 else total_v_margin // 2
 
-            # Safety guard: skip composite if original doesn't fit
+            # --- 2. EXACT ALIGNMENT (Fixing VAE Shift) ---
+            orig_cv = cv2.cvtColor(np.array(orig_rgb), cv2.COLOR_RGB2BGR)
+            res_cv = cv2.cvtColor(np.array(result_img), cv2.COLOR_RGB2BGR)
+
+            search_margin = 15
+            search_x1 = max(0, math_left - search_margin)
+            search_y1 = max(0, math_top - search_margin)
+            search_x2 = min(res_cv.shape[1], math_left + orig.width + search_margin)
+            search_y2 = min(res_cv.shape[0], math_top + orig.height + search_margin)
+
+            search_area = res_cv[search_y1:search_y2, search_x1:search_x2]
+
+            try:
+                match = cv2.matchTemplate(search_area, orig_cv, cv2.TM_CCOEFF_NORMED)
+                _, _, _, max_loc = cv2.minMaxLoc(match)
+                paste_left = search_x1 + max_loc[0]
+                paste_top = search_y1 + max_loc[1]
+                if (paste_left != math_left) or (paste_top != math_top):
+                    self._report(
+                        f"Auto-aligned paste shifted by X:{paste_left-math_left} Y:{paste_top-math_top}px to fix VAE drift",
+                        "debug",
+                    )
+            except Exception as e:
+                self._report(f"Auto-align failed ({e}), falling back to mathematical placement", "warning")
+                paste_left, paste_top = math_left, math_top
+
+            # Safety guard
             if (paste_left + orig.width > actual_w) or (paste_top + orig.height > actual_h):
                 self._report("Original doesn't fit in AI result — using raw output", "warning")
-                self._report(f"Saved: {os.path.basename(output_path)}", "success")
                 return
 
+            # --- 3. APPLY TIGHT MASK (Fixing Destructive Bleed) ---
             if composite_mode == "hard":
                 result_img.paste(orig, (paste_left, paste_top))
                 self._report("Hard composite applied (no feather)", "progress")
             else:
-                # Feathered mask — solid center preserves orig pixels exactly,
-                # edges fade to hide the transition between original and AI-generated border.
-                # Scale feather with margin size: up to 24px for large margins.
-                ml = paste_left
-                mt = paste_top
-                mr = actual_w - paste_left - orig.width
-                mb = actual_h - paste_top - orig.height
-                min_m = max(1, min(ml, mt, mr, mb))
-                feather_px = max(3, min(min_m // 4, 24))
-
+                feather_px = 3
                 mask = Image.new("L", orig.size, 0)
                 ImageDraw.Draw(mask).rectangle(
-                    [feather_px, feather_px,
-                     orig.width - feather_px - 1, orig.height - feather_px - 1],
+                    [
+                        feather_px,
+                        feather_px,
+                        orig.width - feather_px - 1,
+                        orig.height - feather_px - 1,
+                    ],
                     fill=255,
                 )
                 mask = mask.filter(ImageFilter.GaussianBlur(radius=feather_px))
-
                 result_img.paste(orig, (paste_left, paste_top), mask=mask)
-                self._report(f"Feathered blend applied (feather={feather_px}px)", "progress")
+                self._report(f"Tight feathered blend applied (feather={feather_px}px)", "progress")
 
-            save_kwargs = {}
-            if output_format.lower() in ("jpg", "jpeg"):
-                save_kwargs["quality"] = 95
+            save_kwargs = {"quality": 95} if output_format.lower() in ("jpg", "jpeg") else {}
             result_img.save(output_path, **save_kwargs)
             self._report(f"Saved: {os.path.basename(output_path)}", "success")
+
         except Exception as e:
             self._report(f"Composite step failed ({e}), using AI result as-is", "warning")
 
@@ -666,11 +670,11 @@ class OutpaintGenerator:
         if output_path is None:
             stem = Path(image_path).stem
             ext = f".{output_format}"
-            output_path = os.path.join(output_folder, f"{stem}_outpaint{ext}")
+            output_path = os.path.join(output_folder, f"{stem}-expanded{ext}")
             counter = 1
             while os.path.exists(output_path):
                 output_path = os.path.join(
-                    output_folder, f"{stem}_outpaint_{counter}{ext}",
+                    output_folder, f"{stem}-expanded_v{counter}{ext}",
                 )
                 counter += 1
 
