@@ -220,25 +220,27 @@ class ImageCarousel(tk.Frame):
         self._ref_btn = ttk.Button(
             sim_row,
             text="\u2605 Ref",
-            style=TTK_BTN_SECONDARY,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(self._toggle_sim_ref, key="carousel_ref"),
             state=tk.DISABLED,
+            width=2,
         )
         self._ref_btn.pack(side=tk.LEFT)
 
         self.compare_btn = ttk.Button(
             sim_row,
             text="Compare",
-            style=TTK_BTN_SECONDARY,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(self._on_compare, key="carousel_compare"),
             state=tk.DISABLED,
+            width=2,
         )
         self.compare_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         self.open_active_folder_btn = ttk.Button(
             sim_row,
             text="📂",
-            style=TTK_BTN_SECONDARY,
+            style=TTK_BTN_COMPACT,
             width=2,
             command=debounce_command(self._on_open_active_image_folder, key="carousel_open_folder"),
         )

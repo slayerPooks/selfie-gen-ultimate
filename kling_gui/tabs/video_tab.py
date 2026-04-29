@@ -47,7 +47,7 @@ class VideoTab(tk.Frame):
 
         tk.Label(
             use_carousel_frame,
-            text="Add active carousel image to video queue",
+            text="Use active carousel image for video generation",
             font=(FONT_FAMILY, 8),
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
@@ -59,7 +59,7 @@ class VideoTab(tk.Frame):
         config_panel.pack(fill=tk.X, padx=0, pady=(0, 3))
 
     def _on_use_carousel(self):
-        """Add the active carousel image to the video queue."""
+        """Add the active carousel image to the video processing flow."""
         path = self.image_session.active_image_path
         if not path:
             self.log("No image in carousel to use", "warning")
@@ -68,9 +68,9 @@ class VideoTab(tk.Frame):
         if self._on_files_dropped_cb:
             self._on_files_dropped_cb([path])
             self.log(
-                f"Added carousel image to video queue: {basename}", "info"
+                f"Added carousel image for video generation: {basename}", "info"
             )
             return
         self.log(
-            "Could not add image to queue — no handler available", "warning"
+            "Could not add image for generation — no handler available", "warning"
         )

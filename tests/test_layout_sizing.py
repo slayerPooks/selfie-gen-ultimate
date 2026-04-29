@@ -1,9 +1,13 @@
 import unittest
 
-from kling_gui.main_window import sanitize_saved_geometry, sanitize_sash_layout, sanitize_window_layout
+from kling_gui.main_window import UI_CONFIG_DEFAULTS, sanitize_saved_geometry, sanitize_sash_layout, sanitize_window_layout
 
 
 class LayoutSizingTests(unittest.TestCase):
+    def test_default_history_panel_rows_increased_for_step3_layout(self):
+        history_defaults = UI_CONFIG_DEFAULTS.get("history_panel", {})
+        self.assertGreaterEqual(int(history_defaults.get("visible_rows", 0)), 10)
+
     def test_window_config_clamps_oversized_values(self):
         window, geometry, changed = sanitize_window_layout(
             window_config={"width": 2200, "height": 1800, "min_width": 1900, "min_height": 1500},

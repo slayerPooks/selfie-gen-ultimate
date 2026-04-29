@@ -101,7 +101,7 @@ UI_CONFIG_DEFAULTS = {
     },
     "drop_zone": {"height": 560},
     "queue_panel": {"width": 300},
-    "history_panel": {"height": 220, "visible_rows": 8},
+    "history_panel": {"height": 260, "visible_rows": 10},
     "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
 }
 
@@ -1262,10 +1262,12 @@ class KlingGUIWindow:
         self._compare_frame: Optional[tk.Frame] = None
         self._compare_panel: Optional[ComparePanel] = None
 
-        # Queue panel — lives inside VideoTab (below the top controls)
+        # Queue panel internals are kept for backend flow, but surface stays hidden in Step 3 UI.
+        self._queue_panel_visible = False
         self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
-        self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
+        if self._queue_panel_visible:
+            self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
 
         # Right side: Vertical PanedWindow (Log | History)
         self.right_paned = tk.PanedWindow(
@@ -1613,10 +1615,13 @@ class KlingGUIWindow:
         # which runs after this method to avoid conflicts.
         try:
             visible_rows = int(
-                self.ui_config.get("history_panel", {}).get("visible_rows", 8)
+                self.ui_config.get("history_panel", {}).get("visible_rows", 10)
             )
         except (TypeError, ValueError):
-            visible_rows = 8
+            visible_rows = 10
+
+        if not getattr(self, "_queue_panel_visible", True):
+            visible_rows = max(10, visible_rows)
 
         if hasattr(self, "history_tree"):
             try:
@@ -2398,6 +2403,18 @@ class KlingGUIWindow:
             style=TTK_BTN_TAB_NAV,
         )
         self.pause_btn.pack(side=tk.RIGHT, padx=4)
+        self._set_queue_controls_enabled(False)
+
+    def _set_queue_controls_enabled(self, enabled: bool):
+        """Enable or disable queue control buttons without removing them from UI."""
+        state = tk.NORMAL if enabled else tk.DISABLED
+        for btn_name in ("pause_btn", "retry_btn", "clear_btn"):
+            btn = getattr(self, btn_name, None)
+            if btn is not None:
+                try:
+                    btn.config(state=state)
+                except Exception:
+                    pass
 
     def _init_generator(self):
         """Initialize the video generator and queue manager."""
@@ -2480,6 +2497,8 @@ class KlingGUIWindow:
 
     def _update_queue_display(self):
         """Update the queue listbox display."""
+        if not hasattr(self, "queue_listbox") or not hasattr(self, "queue_header"):
+            return
         self.queue_listbox.delete(0, tk.END)
 
         if self.queue_manager:
@@ -3263,12 +3282,16 @@ class KlingGUIWindow:
 
     def _remove_selected_item(self):
         """Remove the selected item from the queue."""
+        if not hasattr(self, "queue_listbox"):
+            return
         selection = self.queue_listbox.curselection()
         if selection and self.queue_manager:
             self.queue_manager.remove_item(selection[0])
 
     def _show_queue_menu(self, event):
         """Show context menu for queue item."""
+        if not hasattr(self, "queue_listbox") or not hasattr(self, "queue_menu"):
+            return
         try:
             self.queue_listbox.selection_clear(0, tk.END)
             self.queue_listbox.selection_set(self.queue_listbox.nearest(event.y))

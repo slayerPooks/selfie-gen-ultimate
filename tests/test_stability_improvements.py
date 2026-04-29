@@ -17,6 +17,7 @@ from kling_gui import theme
 from kling_gui.carousel_widget import ImageCarousel
 from kling_gui.config_panel import ConfigPanel
 from kling_gui.tabs.selfie_tab import SelfieTab
+from kling_gui.tabs.video_tab import VideoTab
 from kling_gui.drop_zone import DropZone
 
 
@@ -355,6 +356,39 @@ class CarouselFolderButtonTests(unittest.TestCase):
         folder_pos = src.find("self.open_active_folder_btn")
         auto_pos = src.find("self._auto_chk")
         self.assertTrue(0 <= ref_pos < compare_pos < folder_pos < auto_pos)
+
+    def test_similarity_row_buttons_use_compact_style(self):
+        src = inspect.getsource(ImageCarousel._build_panel)
+        self.assertIn("self._ref_btn = ttk.Button(", src)
+        self.assertIn("self.compare_btn = ttk.Button(", src)
+        self.assertIn("self.open_active_folder_btn = ttk.Button(", src)
+        self.assertGreaterEqual(src.count("style=TTK_BTN_COMPACT"), 5)
+
+
+class Step3UiTighteningTests(unittest.TestCase):
+    def test_setup_ui_keeps_queue_panel_hidden(self):
+        src = inspect.getsource(KlingGUIWindow._setup_ui)
+        self.assertIn("self._queue_panel_visible = False", src)
+        self.assertIn("if self._queue_panel_visible:", src)
+
+    def test_queue_controls_are_disabled_in_setup(self):
+        src = inspect.getsource(KlingGUIWindow._setup_controls)
+        self.assertIn("self._set_queue_controls_enabled(False)", src)
+
+    def test_update_queue_display_safe_when_widgets_missing(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._update_queue_display()
+
+    def test_queue_backend_clear_still_callable(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window.queue_manager = mock.Mock()
+        window._clear_queue()
+        window.queue_manager.clear_queue.assert_called_once()
+
+    def test_video_tab_helper_text_no_queue_wording(self):
+        src = inspect.getsource(VideoTab.__init__)
+        self.assertIn("Use active carousel image for video generation", src)
+        self.assertNotIn("video queue", src)
 
 
 if __name__ == "__main__":
