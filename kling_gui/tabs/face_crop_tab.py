@@ -1,6 +1,7 @@
 """Face Crop Tab — Extract passport-style 3:4 face crops from ID card photos."""
 
 import os
+import platform
 import tempfile
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -51,6 +52,16 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 # Accordion header background colors
 _HEADER_BG_COLLAPSED = "#333338"  # noticeably darker than bg_panel (#3C3C41)
 _HEADER_BG_OPEN = "#505055"       # matches COLORS["bg_hover"]
+
+
+def _platform_gui_repair_launcher() -> str:
+    """Return the platform-appropriate GUI repair launcher name."""
+    system = platform.system()
+    if system == "Windows":
+        return "run_gui.bat"
+    if system == "Darwin":
+        return "run_gui.command"
+    return "run_gui.sh"
 
 
 def _format_image_info(path: str) -> str:
@@ -214,10 +225,11 @@ class FaceCropTab(tk.Frame):
     def _build_ui(self):
         # Dependency warning
         if not HAS_FACE_DEPS:
+            repair_launcher = _platform_gui_repair_launcher()
             warn = tk.Label(
                 self,
                 text=(
-                    "Face Crop deps missing. Auto-repair via run_gui.bat, or install manually: "
+                    f"Face Crop deps missing. Auto-repair via {repair_launcher}, or install manually: "
                     "pip install opencv-python-headless numpy tensorflow==2.16.2 "
                     "tensorflow-intel==2.16.2 tf-keras==2.16.0 retina-face==0.0.17"
                 ),
@@ -1052,13 +1064,14 @@ class FaceCropTab(tk.Frame):
             return
         retinaface_cls, retinaface_error = _load_retinaface()
         if retinaface_cls is None:
+            repair_launcher = _platform_gui_repair_launcher()
             self._status_label.config(
                 text=f"RetinaFace unavailable: {retinaface_error}",
                 fg=COLORS["error"],
             )
             self.log(
                 "Face Crop: RetinaFace/TensorFlow import failed. "
-                "Run run_gui.bat for automatic dependency repair.",
+                f"Run {repair_launcher} for automatic dependency repair.",
                 "error",
             )
             return
