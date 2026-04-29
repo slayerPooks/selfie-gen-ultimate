@@ -168,14 +168,39 @@ class DropZone(tk.Frame):
         self.icon_label.pack(pady=(0, 5 if self.compact else 8))
 
         # Main instruction label
-        self.main_label = tk.Label(
-            self.content_container,
-            text="DROP ZONE" if self.compact else "DRAG & DROP IMAGES",
-            font=(FONT_FAMILY, 11 if self.compact else 14, "bold"),
-            bg=self._default_bg,
-            fg=self._text_color,
-        )
-        self.main_label.pack(pady=(1 if self.compact else 2))
+        main_font = (FONT_FAMILY, 11 if self.compact else 14, "bold")
+        main_text = "DROP ZONE" if self.compact else "DRAG & DROP IMAGES"
+        self._main_text_canvas = None
+        if self.compact and sys.platform.startswith("win"):
+            # Windows can clip a glyph in ttk/label text rasterization in this compact pane.
+            # Canvas text renders reliably here.
+            self._main_text_canvas = tk.Canvas(
+                self.content_container,
+                width=220,
+                height=28,
+                bg=self._default_bg,
+                highlightthickness=0,
+                bd=0,
+            )
+            self._main_text_canvas.create_text(
+                110,
+                14,
+                text=main_text,
+                font=("Segoe UI", 13, "bold"),
+                fill=self._text_color,
+            )
+            self._main_text_canvas.pack(pady=(1, 1))
+            self.main_label = self._main_text_canvas
+        else:
+            self.main_label = tk.Label(
+                self.content_container,
+                text=main_text,
+                font=main_font,
+                bg=self._default_bg,
+                fg=self._text_color,
+                padx=6 if self.compact else 0,
+            )
+            self.main_label.pack(pady=(1 if self.compact else 2))
 
         # Sub-instruction label (combined: left click + right click hint on one line)
         self.sub_label = tk.Label(
@@ -218,7 +243,17 @@ class DropZone(tk.Frame):
         if HAS_DND:
             self._setup_dnd()
         else:
-            self.main_label.config(text="CLICK TO SELECT IMAGES")
+            if isinstance(self.main_label, tk.Canvas):
+                self.main_label.delete("all")
+                self.main_label.create_text(
+                    110,
+                    14,
+                    text="CLICK TO SELECT IMAGES",
+                    font=("Segoe UI", 11, "bold"),
+                    fill=self._text_color,
+                )
+            else:
+                self.main_label.config(text="CLICK TO SELECT IMAGES")
             if not self.compact:
                 self.sub_label.config(text="Left click to select files  |  Right click for folder")
 

@@ -59,7 +59,7 @@ class CropUpscaler:
             Absolute path to upscaled image, or None on failure.
         """
         from fal_utils import (
-            upload_to_freeimage,
+            upload_reference_image,
             fal_queue_submit,
             fal_queue_poll,
             fal_download_file,
@@ -76,15 +76,18 @@ class CropUpscaler:
 
         # Upload source image
         self._report("Uploading image for upscaling...", "upload")
-        image_url, _ = upload_to_freeimage(
-            image_path,
+        image_url, _, provider = upload_reference_image(
+            image_path=image_path,
+            fal_api_key=self._falai_api_key,
             max_size=2048,
             progress_cb=self._progress_callback,
-            api_key=self._freeimage_key,
+            freeimage_api_key=self._freeimage_key,
         )
         if not image_url:
             self._report("Failed to upload image", "error")
             return None
+        if provider:
+            self._report(f"Reference upload provider: {provider}", "upload")
 
         endpoint = prov["endpoint"]
 

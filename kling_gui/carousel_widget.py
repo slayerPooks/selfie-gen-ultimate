@@ -161,6 +161,15 @@ class ImageCarousel(tk.Frame):
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
 
+        self.counter_label = tk.Label(
+            header,
+            text="0/0",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+        )
+        self.counter_label.pack(side=tk.LEFT, padx=(8, 8))
+
         controls = tk.Frame(header, bg=COLORS["bg_panel"])
         controls.pack(side=tk.RIGHT)
 
@@ -341,6 +350,7 @@ class ImageCarousel(tk.Frame):
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")
 
         if n == 0:
+            self.counter_label.config(text="0/0")
             self.info_label.config(text="Add images to start", fg=COLORS["text_dim"])
             self.meta_label.config(text="")
             self.sim_label.config(text="")
@@ -354,6 +364,7 @@ class ImageCarousel(tk.Frame):
                 font=(FONT_FAMILY, 10),
             )
             return
+        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
 
         # Show the active image
         if entry and entry.exists:
@@ -642,6 +653,7 @@ class ImageCarousel(tk.Frame):
         ref, ref_source = self.image_session.get_effective_similarity_ref()
         if not ref:
             return
+        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
         targets = [e for e in self.image_session.images
                    if e.source_type != "input" and e is not ref and e.exists]
         if not targets:

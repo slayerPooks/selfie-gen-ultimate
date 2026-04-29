@@ -177,7 +177,7 @@ class OutpaintGenerator:
         self._report("Using fal.ai outpaint (no BFL key)", "info")
 
         from fal_utils import (
-            upload_to_freeimage,
+            upload_reference_image,
             fal_queue_submit,
             fal_queue_poll,
             fal_download_file,
@@ -207,13 +207,18 @@ class OutpaintGenerator:
 
         # Upload with pre-flight max_size
         self._report("Uploading image for outpainting...", "upload")
-        image_url, processed_img = upload_to_freeimage(
-            image_path, max_size=max_upload_size, progress_cb=self._progress_callback,
-            api_key=self._freeimage_key,
+        image_url, processed_img, provider = upload_reference_image(
+            image_path=image_path,
+            fal_api_key=self.api_key,
+            max_size=max_upload_size,
+            progress_cb=self._progress_callback,
+            freeimage_api_key=self._freeimage_key,
         )
         if not image_url:
             self._report("Failed to upload image", "error")
             return None
+        if provider:
+            self._report(f"Reference upload provider: {provider}", "upload")
 
         # Build payload — zoom_out_percentage=0 prevents hidden 20% default shrink
         payload = {

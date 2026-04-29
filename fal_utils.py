@@ -5,8 +5,9 @@ import time
 import threading
 import requests
 import logging
+import tempfile
 from pathlib import Path
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable, Tuple, Any
 from PIL import Image, ImageOps
 import io
 import base64
@@ -17,6 +18,12 @@ ProgressCallback = Optional[Callable[[str, str], None]]  # (message, level)
 
 # Freeimage.host API key from environment (optional)
 _FREEIMAGE_KEY = os.getenv("FREEIMAGE_API_KEY", "")
+_FAL_CLIENT_IMPORT_ERROR = ""
+try:
+    import fal_client  # type: ignore
+except Exception as exc:  # pragma: no cover - tested via runtime fallback behavior
+    fal_client = None
+    _FAL_CLIENT_IMPORT_ERROR = str(exc)
 
 
 def _extract_http_error_detail(resp: requests.Response, limit: int = 500) -> str:
@@ -33,6 +40,86 @@ def _extract_http_error_detail(resp: requests.Response, limit: int = 500) -> str
         return str(data)[:limit]
     except Exception:
         return (resp.text or "").strip()[:limit]
+
+
+def _sleep_with_cancel(
+    delay_seconds: float,
+    cancel_event: Optional[threading.Event],
+    progress_cb: ProgressCallback = None,
+) -> bool:
+    """Sleep for delay seconds; return True if cancelled while sleeping."""
+    if cancel_event is None:
+        time.sleep(delay_seconds)
+        return False
+    if cancel_event.wait(timeout=max(0.0, float(delay_seconds))):
+        if progress_cb:
+            progress_cb("Generation cancelled", "warning")
+        return True
+    return False
+
+
+def _prepare_image_for_upload(image_path: str, max_size: int = 1200) -> Tuple[bytes, Image.Image]:
+    """Normalize image orientation/mode/size and return jpeg bytes + decoded PIL copy."""
+    with Image.open(image_path) as source_img:
+        img = ImageOps.exif_transpose(source_img)
+        if img.width > max_size or img.height > max_size:
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+        if img.mode in ("RGBA", "LA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            background.paste(
+                img,
+                mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None,
+            )
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85, optimize=True)
+        jpeg_bytes = buffer.getvalue()
+
+    decoded = Image.open(io.BytesIO(jpeg_bytes))
+    decoded.load()
+    return jpeg_bytes, decoded
+
+
+def _fal_upload_jpeg_bytes(jpeg_bytes: bytes, api_key: str) -> str:
+    """Upload bytes through fal client using sync APIs and return public URL."""
+    if fal_client is None:
+        raise RuntimeError(f"fal_client unavailable: {_FAL_CLIENT_IMPORT_ERROR or 'not installed'}")
+
+    api_key = (api_key or "").strip()
+    if api_key:
+        os.environ["FAL_KEY"] = api_key
+
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = tmp.name
+            tmp.write(jpeg_bytes)
+
+        for method_name in ("upload_file", "upload_image", "upload"):
+            method = getattr(fal_client, method_name, None)
+            if not callable(method):
+                continue
+            result = method(temp_path)
+            if isinstance(result, str) and result.strip():
+                return result.strip()
+            if isinstance(result, dict):
+                for key in ("url", "file_url"):
+                    value = result.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+        raise RuntimeError("fal_client upload returned no URL")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def upload_to_freeimage(
@@ -60,38 +147,9 @@ def upload_to_freeimage(
         return None, None
 
     try:
-        img = Image.open(image_path)
-        img.load()  # Read pixel data into memory, releasing file handle
-        img = ImageOps.exif_transpose(img)
+        jpeg_bytes, img = _prepare_image_for_upload(image_path=image_path, max_size=max_size)
 
-        # Resize if needed
-        if img.width > max_size or img.height > max_size:
-            if progress_cb:
-                progress_cb(f"Resizing from {img.width}x{img.height}", "resize")
-            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-
-        # Convert to RGB (handles RGBA, LA, P modes)
-        if img.mode in ("RGBA", "LA", "P"):
-            background = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "P":
-                img = img.convert("RGBA")
-            background.paste(
-                img,
-                mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None,
-            )
-            img = background
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
-
-        # Compress to JPEG
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85, optimize=True)
-        buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        # Re-open from JPEG bytes so composite source == what fal.ai receives
-        buffer.seek(0)
-        img = Image.open(buffer)
-        img.load()  # force decode before buffer scope ends
+        image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
         if progress_cb:
             progress_cb(
@@ -129,6 +187,50 @@ def upload_to_freeimage(
         return None, None
 
 
+def upload_reference_image(
+    image_path: str,
+    fal_api_key: str,
+    max_size: int = 1200,
+    progress_cb: ProgressCallback = None,
+    freeimage_api_key: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Image.Image], Optional[str]]:
+    """Upload reference image using fal CDN first, then fallback to freeimage."""
+    try:
+        if progress_cb:
+            progress_cb(f"Preparing {Path(image_path).name} for upload...", "upload")
+        jpeg_bytes, processed_img = _prepare_image_for_upload(image_path=image_path, max_size=max_size)
+    except Exception as exc:
+        logger.error("Failed to prepare image for upload: %s", exc)
+        if progress_cb:
+            progress_cb(f"Image preparation failed: {exc}", "error")
+        return None, None, None
+
+    try:
+        if progress_cb:
+            progress_cb("Uploading via fal CDN...", "upload")
+        fal_url = _fal_upload_jpeg_bytes(jpeg_bytes=jpeg_bytes, api_key=fal_api_key)
+        if progress_cb:
+            progress_cb("Uploaded via fal CDN", "upload")
+        return fal_url, processed_img, "fal_cdn"
+    except Exception as fal_exc:
+        logger.warning("fal CDN upload failed; falling back to freeimage: %s", fal_exc)
+        if progress_cb:
+            progress_cb(f"fal CDN upload failed, falling back: {fal_exc}", "warning")
+
+    freeimage_url, freeimage_img = upload_to_freeimage(
+        image_path=image_path,
+        max_size=max_size,
+        progress_cb=progress_cb,
+        api_key=freeimage_api_key,
+    )
+    if freeimage_url:
+        if progress_cb:
+            progress_cb("Uploaded via freeimage fallback", "upload")
+        return freeimage_url, freeimage_img, "freeimage"
+
+    return None, None, None
+
+
 def fal_queue_submit(
     api_key: str,
     endpoint: str,
@@ -155,7 +257,8 @@ def fal_queue_submit(
                 logger.warning("Rate limited — waiting 30 s before retry")
                 if progress_cb:
                     progress_cb("Rate limited — waiting 30 s...", "warning")
-                time.sleep(30)
+                if _sleep_with_cancel(30, cancel_event=None, progress_cb=progress_cb):
+                    return None
                 continue
 
             elif response.status_code == 503:
@@ -165,7 +268,8 @@ def fal_queue_submit(
                         f"Service unavailable, retrying ({attempt + 1}/{max_retries})...",
                         "warning",
                     )
-                time.sleep(10)
+                if _sleep_with_cancel(10, cancel_event=None, progress_cb=progress_cb):
+                    return None
                 continue
 
             elif response.status_code == 402:
@@ -183,7 +287,8 @@ def fal_queue_submit(
                         "error",
                     )
                 if attempt < max_retries - 1:
-                    time.sleep(5)
+                    if _sleep_with_cancel(5, cancel_event=None, progress_cb=progress_cb):
+                        return None
                     continue
                 return None
 
@@ -196,7 +301,8 @@ def fal_queue_submit(
                 if progress_cb:
                     progress_cb("No request_id/status_url in response", "error")
                 if attempt < max_retries - 1:
-                    time.sleep(5)
+                    if _sleep_with_cancel(5, cancel_event=None, progress_cb=progress_cb):
+                        return None
                     continue
                 return None
 
@@ -207,7 +313,8 @@ def fal_queue_submit(
         except requests.exceptions.Timeout:
             logger.warning("Request timeout (attempt %d/%d)", attempt + 1, max_retries)
             if attempt < max_retries - 1:
-                time.sleep(10)
+                if _sleep_with_cancel(10, cancel_event=None, progress_cb=progress_cb):
+                    return None
                 continue
             if progress_cb:
                 progress_cb("Submit timed out", "error")
@@ -216,7 +323,8 @@ def fal_queue_submit(
         except requests.exceptions.ConnectionError as e:
             logger.warning("Connection error: %s (attempt %d/%d)", e, attempt + 1, max_retries)
             if attempt < max_retries - 1:
-                time.sleep(10)
+                if _sleep_with_cancel(10, cancel_event=None, progress_cb=progress_cb):
+                    return None
                 continue
             if progress_cb:
                 progress_cb(f"Connection error: {e}", "error")
@@ -225,7 +333,8 @@ def fal_queue_submit(
         except Exception as e:
             logger.error("Unexpected submit error: %s", e)
             if attempt < max_retries - 1:
-                time.sleep(5)
+                if _sleep_with_cancel(5, cancel_event=None, progress_cb=progress_cb):
+                    return None
                 continue
             if progress_cb:
                 progress_cb(f"Submit error: {e}", "error")
@@ -291,7 +400,8 @@ def fal_queue_poll(
         else:
             delay = 15
 
-        time.sleep(delay)
+        if _sleep_with_cancel(delay, cancel_event=cancel_event, progress_cb=progress_cb):
+            return None
 
         # Periodic progress update
         if attempt % 12 == 0:
@@ -310,7 +420,8 @@ def fal_queue_poll(
 
             elif resp.status_code == 429:
                 logger.warning("Rate limited during polling — waiting 30 s")
-                time.sleep(30)
+                if _sleep_with_cancel(30, cancel_event=cancel_event, progress_cb=progress_cb):
+                    return None
                 continue
 
             elif resp.status_code == 503:
@@ -320,7 +431,8 @@ def fal_queue_poll(
                     if progress_cb:
                         progress_cb("Too many service errors", "error")
                     return None
-                time.sleep(10)
+                if _sleep_with_cancel(10, cancel_event=cancel_event, progress_cb=progress_cb):
+                    return None
                 continue
 
             elif resp.status_code not in (200, 202):

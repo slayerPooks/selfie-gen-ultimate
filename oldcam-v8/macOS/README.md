@@ -1,6 +1,7 @@
 # macOS Port (V7)
+# macOS Port (V8)
 
-This folder mirrors the V7 Python functionality for macOS and replaces the Windows batch launcher with a `.command` launcher.
+This folder mirrors the V8 Python functionality for macOS and replaces the Windows batch launcher with a `.command` launcher.
 
 Files:
 - `oldcam.py`: V8 processing script with temporal OIS jitter, random-velocity rolling shutter, shadow chroma noise, and H.264 bit-starved video finalization

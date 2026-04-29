@@ -503,6 +503,7 @@ class ConfigPanel(tk.Frame):
             state="readonly",
             width=4,
             font=(FONT_FAMILY, 9),
+            style="Dark.TCombobox",
         )
         self.oldcam_version_combo.pack(side=tk.LEFT, padx=(4, 0))
         self.oldcam_version_combo.bind("<<ComboboxSelected>>", self._on_oldcam_version_changed)

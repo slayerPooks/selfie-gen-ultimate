@@ -34,6 +34,7 @@ class LayoutSizingTests(unittest.TestCase):
             sash_prompt_split=10,
             sash_queue=5,
             sash_log=8888,
+            sash_log_drop_split=9999,
             root_width=1100,
             root_height=900,
         )
@@ -42,10 +43,12 @@ class LayoutSizingTests(unittest.TestCase):
         self.assertLessEqual(sash["sash_dropzone"], int(900 * 0.75))
         self.assertGreaterEqual(sash["sash_prompt_split"], 420)
         self.assertLessEqual(sash["sash_prompt_split"], 1100 - 260)
-        self.assertGreaterEqual(sash["sash_queue"], 250)
-        self.assertLessEqual(sash["sash_queue"], int(1100 * 0.55))
+        self.assertGreaterEqual(sash["sash_queue"], 300)
+        self.assertLessEqual(sash["sash_queue"], int(1100 * 0.68))
         self.assertGreaterEqual(sash["sash_log"], 110)
         self.assertLessEqual(sash["sash_log"], int(900 * 0.42))
+        self.assertGreaterEqual(sash["sash_log_drop_split"], 220)
+        self.assertLessEqual(sash["sash_log_drop_split"], int(1100 * 0.70))
 
     def test_sane_values_remain_unchanged(self):
         window, geometry, changed_window = sanitize_window_layout(
@@ -66,6 +69,7 @@ class LayoutSizingTests(unittest.TestCase):
             sash_prompt_split=620,
             sash_queue=320,
             sash_log=150,
+            sash_log_drop_split=360,
             root_width=1100,
             root_height=900,
         )
@@ -74,6 +78,7 @@ class LayoutSizingTests(unittest.TestCase):
         self.assertEqual(sash["sash_prompt_split"], 620)
         self.assertEqual(sash["sash_queue"], 320)
         self.assertEqual(sash["sash_log"], 150)
+        self.assertEqual(sash["sash_log_drop_split"], 360)
 
 
 if __name__ == "__main__":

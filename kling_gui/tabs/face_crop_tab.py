@@ -167,24 +167,8 @@ class FaceCropTab(tk.Frame):
             value=config.get("upscale_resemblance", 0.9)
         )
 
-        # Accordion state (always exactly 2 expanded section names)
-        _DEFAULT_EXPANDED = ["polish", "expand"]
-        saved = config.get("accordion_expanded", None)
-        if isinstance(saved, list):
-            self._expanded_sections = [s for s in saved if s in ("polish", "expand", "upscale")][:2]
-        elif isinstance(saved, str) and saved in ("polish", "expand", "upscale"):
-            self._expanded_sections = [saved]
-        else:
-            self._expanded_sections = list(_DEFAULT_EXPANDED)
-        # Auto-correct stale config: enforce exactly polish+expand
-        if set(self._expanded_sections) != set(_DEFAULT_EXPANDED):
-            self._expanded_sections = list(_DEFAULT_EXPANDED)
-        # Always pad to exactly 2
-        while len(self._expanded_sections) < 2:
-            for fallback in _DEFAULT_EXPANDED + ["upscale"]:
-                if fallback not in self._expanded_sections:
-                    self._expanded_sections.append(fallback)
-                    break
+        # Accordion state (force all collapsed on launch).
+        self._expanded_sections = []
 
         # Outpaint state
         self._outpaint_busy = False

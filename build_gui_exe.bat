@@ -32,14 +32,8 @@ echo       Found: %PYVER%
 :: -------- Step 2: Install / Upgrade Dependencies --------
 echo.
 echo [2/6] Installing dependencies...
-python -m pip install --quiet --upgrade ^
-    pyinstaller ^
-    Pillow ^
-    requests ^
-    rich ^
-    tkinterdnd2 ^
-    selenium ^
-    webdriver-manager
+python -m pip install --quiet --upgrade pyinstaller
+python -m pip install --quiet --upgrade -r requirements.txt
 if %errorlevel% neq 0 (
     echo ERROR: pip install failed. See messages above.
     goto :fail

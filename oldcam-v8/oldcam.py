@@ -542,7 +542,6 @@ def build_parser():
         "--saturation", type=float, default=1.12, help="Saturation multiplier. Default: 1.12"
     )
     parser.add_argument("--grain", type=int, default=1, help="Sensor-grain strength. Default: 1")
-    parser.add_argument("--quality", type=int, default=94, help="JPEG quality. Default: 94")
     parser.add_argument(
         "--ghosting",
         type=bounded_ghosting,

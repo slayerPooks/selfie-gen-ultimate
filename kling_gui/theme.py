@@ -2,6 +2,8 @@
 
 import sys
 import time
+import tkinter as tk
+from tkinter import ttk
 from typing import Callable, Dict
 
 
@@ -89,3 +91,32 @@ def debounce_command(command: Callable[[], None], key: str, interval_ms: int = 1
         command()
 
     return _wrapped
+
+
+def create_action_button(parent, text: str, command, style: str = TTK_BTN_SECONDARY, **kwargs):
+    """Create cross-platform action button with macOS click-safe hitbox."""
+    if IS_MACOS:
+        width = kwargs.pop("width", None)
+        state = kwargs.pop("state", tk.NORMAL)
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            state=state,
+            font=(FONT_FAMILY, 10, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=BUTTON_TEXT_COLOR,
+            activebackground=COLORS["bg_hover"],
+            activeforeground=BUTTON_TEXT_COLOR,
+            highlightbackground=COLORS["bg_main"],
+            highlightthickness=1,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            cursor="hand2",
+        )
+        if width is not None:
+            button.config(width=width)
+        return button
+    return ttk.Button(parent, text=text, command=command, style=style, **kwargs)

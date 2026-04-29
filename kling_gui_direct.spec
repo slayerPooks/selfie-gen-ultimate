@@ -71,6 +71,7 @@ hiddenimports = [
     'requests.adapters',
     'requests.auth',
     'requests.packages',
+    'fal_client',
     'urllib3',
     'urllib3.util',
     'certifi',
