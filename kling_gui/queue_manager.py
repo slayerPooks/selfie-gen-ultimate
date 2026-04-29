@@ -886,19 +886,30 @@ class QueueManager:
             self.log(f"Error creating looped video: {e}", "warning")
             return None
 
-    def _resolve_oldcam_dir(self) -> Path:
-        """Resolve oldcam-v7 directory for script and frozen builds."""
+    def _get_oldcam_version(self) -> str:
+        """Return configured Oldcam version with backward-compatible default."""
+        version = str(self.get_config().get("oldcam_version", "v7")).lower()
+        return version if version in ("v7", "v8") else "v7"
+
+    def _build_oldcam_output_path(self, input_path: Path, version: str) -> Path:
+        """Build versioned Oldcam output path next to input video."""
+        suffix = "-oldcam-v8" if version == "v8" else "-oldcam-v7"
+        return input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
+
+    def _resolve_oldcam_dir(self, version: str = "v7") -> Path:
+        """Resolve selected oldcam directory for script and frozen builds."""
+        folder_name = "oldcam-v8" if version == "v8" else "oldcam-v7"
         app_dir = Path(get_app_dir())
         resource_dir = Path(get_resource_dir())
         candidates = [
-            app_dir / "oldcam-v7",
-            resource_dir / "oldcam-v7",
-            Path(__file__).parent.parent.resolve() / "oldcam-v7",
+            app_dir / folder_name,
+            resource_dir / folder_name,
+            Path(__file__).parent.parent.resolve() / folder_name,
         ]
         for candidate in candidates:
             if candidate.exists():
                 return candidate
-        return app_dir / "oldcam-v7"
+        return app_dir / folder_name
 
     def _ensure_oldcam_dependencies(self, oldcam_dir: Path) -> bool:
         """Check Oldcam requirements in current interpreter and emit install guidance."""
@@ -929,7 +940,7 @@ class QueueManager:
 
     def _oldcam_video(self, video_path: str, item: QueueItem) -> Optional[str]:
         """
-        Process the video with Oldcam V7.
+        Process the video with selected Oldcam version.
 
         Args:
             video_path: Path to the generated or looped video
@@ -937,17 +948,18 @@ class QueueManager:
         """
         del item  # Reserved for future per-item status hooks
         try:
-            oldcam_dir = self._resolve_oldcam_dir()
+            version = self._get_oldcam_version()
+            oldcam_dir = self._resolve_oldcam_dir(version)
             launcher_path = oldcam_dir / "launcher.py"
             if not launcher_path.exists():
-                self.log("Oldcam launcher not found", "warning")
+                self.log(f"Oldcam {version} launcher not found", "warning")
                 return None
 
             if not self._ensure_oldcam_dependencies(oldcam_dir):
-                self.log("Skipping Oldcam Finish due to missing dependencies", "warning")
+                self.log(f"Skipping Oldcam {version} Finish due to missing dependencies", "warning")
                 return None
 
-            self.log("Applying Oldcam Finish...", "info")
+            self.log(f"Applying Oldcam {version} Finish...", "info")
             run_cmd = [sys.executable, "-u", str(launcher_path), video_path]
             completed = subprocess.run(
                 run_cmd,
@@ -959,14 +971,14 @@ class QueueManager:
             )
             if completed.returncode == 0:
                 input_path = Path(video_path)
-                oldcam_output = input_path.with_name(f"{input_path.stem}-oldcam{input_path.suffix}")
+                oldcam_output = self._build_oldcam_output_path(input_path, version)
                 if oldcam_output.exists():
-                    self.log(f"Oldcam Finish applied: {oldcam_output.name}", "success")
+                    self.log(f"Oldcam {version} Finish applied: {oldcam_output.name}", "success")
                     return str(oldcam_output)
-                self.log("Oldcam process completed but output file was not found", "warning")
+                self.log(f"Oldcam {version} process completed but output file was not found", "warning")
                 return None
 
-            self.log(f"Oldcam Finish failed (code {completed.returncode})", "warning")
+            self.log(f"Oldcam {version} Finish failed (code {completed.returncode})", "warning")
             err = (completed.stderr or completed.stdout or "").strip()
             if err:
                 self.log(err.splitlines()[-1], "warning")

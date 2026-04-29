@@ -495,6 +495,17 @@ class ConfigPanel(tk.Frame):
             activeforeground=COLORS["text_light"], command=self._on_oldcam_changed,
         )
         self.oldcam_checkbox.pack(side=tk.LEFT, padx=(8, 0))
+        self.oldcam_version_var = tk.StringVar(value="v7")
+        self.oldcam_version_combo = ttk.Combobox(
+            rA,
+            textvariable=self.oldcam_version_var,
+            values=("v7", "v8"),
+            state="readonly",
+            width=4,
+            font=(FONT_FAMILY, 9),
+        )
+        self.oldcam_version_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self.oldcam_version_combo.bind("<<ComboboxSelected>>", self._on_oldcam_version_changed)
 
         # Allow reprocessing
         rB = tk.Frame(left_col, bg=COLORS["bg_input"])
@@ -1001,6 +1012,11 @@ class ConfigPanel(tk.Frame):
         self.loop_video_var.set(self.config.get("loop_videos", False))
         self._check_ffmpeg_status()
         self.oldcam_video_var.set(self.config.get("oldcam_videos", True))
+        oldcam_version = self.config.get("oldcam_version", "v7")
+        if oldcam_version not in ("v7", "v8"):
+            oldcam_version = "v7"
+            self.config["oldcam_version"] = oldcam_version
+        self.oldcam_version_var.set(oldcam_version)
 
         # Reprocess options
         self.reprocess_var.set(self.config.get("allow_reprocess", False))
@@ -1286,6 +1302,16 @@ class ConfigPanel(tk.Frame):
         self.config["oldcam_videos"] = self.oldcam_video_var.get()
         status = "enabled" if self.oldcam_video_var.get() else "disabled"
         self._notify_change(f"Oldcam Finish {status}")
+
+    def _on_oldcam_version_changed(self, event=None):
+        """Handle oldcam version dropdown change."""
+        del event
+        version = self.oldcam_version_var.get()
+        if version not in ("v7", "v8"):
+            version = "v7"
+            self.oldcam_version_var.set(version)
+        self.config["oldcam_version"] = version
+        self._notify_change(f"Oldcam Finish version set to {version}")
 
     def _on_reprocess_changed(self):
         """Handle reprocess checkbox change."""
@@ -1594,6 +1620,7 @@ class ConfigPanel(tk.Frame):
             "prompt_title_var",
             "loop_video_var",
             "oldcam_video_var",
+            "oldcam_version_var",
             "reprocess_var",
             "reprocess_mode_var",
             "verbose_gui_var",

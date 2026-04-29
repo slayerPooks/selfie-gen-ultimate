@@ -6,7 +6,8 @@ set "GUI_SCRIPT=%BATCH_DIR%gui_launcher.py"
 set "VENV_DIR=%BATCH_DIR%venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
 set "REQUIREMENTS=%BATCH_DIR%requirements.txt"
-set "OLDCAM_REQUIREMENTS=%BATCH_DIR%oldcam-v7\requirements.txt"
+set "OLDCAM_V7_REQUIREMENTS=%BATCH_DIR%oldcam-v7\requirements.txt"
+set "OLDCAM_V8_REQUIREMENTS=%BATCH_DIR%oldcam-v8\requirements.txt"
 set "DEP_HEALTH_SCRIPT=%BATCH_DIR%dependency_health_check.py"
 
 if not exist "%VENV_PYTHON%" (
@@ -36,13 +37,13 @@ if !errorlevel! neq 0 (
     "%VENV_PYTHON%" -m pip install -r "%REQUIREMENTS%"
 )
 
-if exist "%OLDCAM_REQUIREMENTS%" (
+for %%R in ("%OLDCAM_V7_REQUIREMENTS%" "%OLDCAM_V8_REQUIREMENTS%") do if exist "%%~R" (
     echo.
-    echo  Syncing Oldcam dependencies...
-    "%VENV_PYTHON%" -m pip install --only-binary :all: -r "%OLDCAM_REQUIREMENTS%"
+    echo  Syncing Oldcam dependencies from %%~nxR...
+    "%VENV_PYTHON%" -m pip install --only-binary :all: -r "%%~R"
     if !errorlevel! neq 0 (
         echo  Retrying Oldcam dependencies without binary constraint...
-        "%VENV_PYTHON%" -m pip install -r "%OLDCAM_REQUIREMENTS%"
+        "%VENV_PYTHON%" -m pip install -r "%%~R"
         if !errorlevel! neq 0 (
             echo.
             echo  WARNING: Oldcam dependencies failed to install after retry.
