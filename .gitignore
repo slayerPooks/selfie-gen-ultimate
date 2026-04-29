@@ -46,6 +46,7 @@ test_crop.py
 
 # Session artifacts
 handoffs/
+sessions/
 .serena/
 .claude/
 
