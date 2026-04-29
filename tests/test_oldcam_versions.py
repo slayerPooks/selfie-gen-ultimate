@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+import threading
 
 import numpy as np
 
@@ -125,3 +126,99 @@ def test_v8_process_frame_does_not_apply_per_frame_jpeg():
         processed = oldcam_v8.process_frame(image, lut, vignette, args, np.random.default_rng(3), {})
 
     assert processed.shape == image.shape
+
+
+def test_oldcam_rerun_only_processes_existing_video(tmp_path):
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    expected = tmp_path / "clip-oldcam-v7.mp4"
+    manager, _ = make_queue_manager(
+        {"oldcam_version": "v7", "allow_reprocess": True, "reprocess_mode": "overwrite"}
+    )
+
+    done = threading.Event()
+    result = {}
+
+    def callback(success, src, output, error):
+        result.update(
+            {"success": success, "src": src, "output": output, "error": error}
+        )
+        done.set()
+
+    with mock.patch.object(manager, "_oldcam_video") as oldcam_mock:
+        def _run_oldcam(path, _item):
+            expected.write_bytes(b"done")
+            return str(expected)
+
+        oldcam_mock.side_effect = _run_oldcam
+        started = manager.rerun_oldcam_only(str(source), completion_callback=callback)
+        assert started is True
+        assert done.wait(2)
+
+    assert result["success"] is True
+    assert result["src"] == str(source.resolve())
+    assert result["output"] == str(expected)
+
+
+def test_oldcam_rerun_respects_reprocess_disabled_when_same_version_output_exists(tmp_path):
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    existing = tmp_path / "clip-oldcam-v8.mp4"
+    existing.write_bytes(b"existing")
+    manager, _ = make_queue_manager(
+        {"oldcam_version": "v8", "allow_reprocess": False, "reprocess_mode": "increment"}
+    )
+
+    done = threading.Event()
+    result = {}
+
+    def callback(success, src, output, error):
+        result.update(
+            {"success": success, "src": src, "output": output, "error": error}
+        )
+        done.set()
+
+    with mock.patch.object(manager, "_oldcam_video") as oldcam_mock:
+        started = manager.rerun_oldcam_only(str(source), completion_callback=callback)
+        assert started is True
+        assert done.wait(2)
+        oldcam_mock.assert_not_called()
+
+    assert result["success"] is False
+    assert "Enable 'Allow reprocessing'" in (result["error"] or "")
+
+
+def test_oldcam_rerun_increment_mode_creates_versioned_comparison_output(tmp_path):
+    source = tmp_path / "clip_looped.mp4"
+    source.write_bytes(b"video")
+    existing = tmp_path / "clip_looped-oldcam-v7.mp4"
+    existing.write_bytes(b"existing")
+
+    manager, _ = make_queue_manager(
+        {"oldcam_version": "v7", "allow_reprocess": True, "reprocess_mode": "increment"}
+    )
+
+    done = threading.Event()
+    result = {}
+
+    def callback(success, src, output, error):
+        result.update(
+            {"success": success, "src": src, "output": output, "error": error}
+        )
+        done.set()
+
+    with mock.patch.object(manager, "_oldcam_video") as oldcam_mock:
+        def _run_oldcam(path, _item):
+            generated = manager._build_oldcam_output_path(Path(path), "v7")
+            generated.write_bytes(b"done")
+            return str(generated)
+
+        oldcam_mock.side_effect = _run_oldcam
+        started = manager.rerun_oldcam_only(str(source), completion_callback=callback)
+        assert started is True
+        assert done.wait(2)
+        manager._oldcam_rerun_thread.join(timeout=2)
+
+    assert result["success"] is True
+    assert result["output"].endswith("clip_looped_2-oldcam-v7.mp4")
+    assert not (tmp_path / "clip_looped_2.mp4").exists()

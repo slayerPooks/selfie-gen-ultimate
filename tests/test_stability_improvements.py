@@ -15,6 +15,7 @@ from selfie_generator import SelfieGenerator
 from kling_gui.main_window import KlingGUIWindow
 from kling_gui import theme
 from kling_gui.carousel_widget import ImageCarousel
+from kling_gui.config_panel import ConfigPanel
 from kling_gui.tabs.selfie_tab import SelfieTab
 from kling_gui.drop_zone import DropZone
 
@@ -231,7 +232,10 @@ class SelfieSlotStateTests(unittest.TestCase):
 
 class DropZoneWindowsRenderTests(unittest.TestCase):
     def test_compact_windows_uses_canvas_title(self):
-        root = __import__("tkinter").Tk()
+        try:
+            root = __import__("tkinter").Tk()
+        except Exception as exc:
+            self.skipTest(f"Tk unavailable in this environment: {exc}")
         root.withdraw()
         try:
             with mock.patch("kling_gui.drop_zone.sys.platform", "win32"), mock.patch("kling_gui.drop_zone.HAS_DND", False):
@@ -239,6 +243,61 @@ class DropZoneWindowsRenderTests(unittest.TestCase):
             self.assertIsNotNone(zone._main_text_canvas)
         finally:
             root.destroy()
+
+
+class OldcamRerunFlowTests(unittest.TestCase):
+    def test_config_panel_contains_oldcam_rerun_icon_next_to_version_selector(self):
+        src = inspect.getsource(ConfigPanel._setup_ui)
+        version_pos = src.find("self.oldcam_version_combo")
+        rerun_pos = src.find("self.oldcam_rerun_btn")
+        self.assertTrue(version_pos >= 0 and rerun_pos > version_pos)
+
+    def test_resolve_oldcam_rerun_source_prefers_base_video_when_available(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "clip_looped.mp4"
+            oldcam = Path(tmpdir) / "clip_looped-oldcam-v8.mp4"
+            base.write_bytes(b"base")
+            oldcam.write_bytes(b"oldcam")
+            resolved = window._resolve_oldcam_rerun_source(str(oldcam))
+        self.assertEqual(resolved, str(base))
+        window._log.assert_not_called()
+
+    def test_oldcam_rerun_uses_selected_history_output_first(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        window.config = {"oldcam_version": "v7"}
+        window.history = []
+        window.queue_manager = mock.Mock()
+        window.queue_manager.rerun_oldcam_only.return_value = True
+        window._get_latest_completed_history = lambda: {"output": "unused"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selected_path = Path(tmpdir) / "picked.mp4"
+            selected_path.write_bytes(b"video")
+            window._get_selected_history = lambda: {"output": str(selected_path)}
+            window._on_oldcam_rerun_requested()
+
+        args, kwargs = window.queue_manager.rerun_oldcam_only.call_args
+        self.assertEqual(args[0], str(selected_path))
+        self.assertIn("completion_callback", kwargs)
+
+    def test_oldcam_rerun_falls_back_to_latest_completed_when_no_selection(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        window.config = {"oldcam_version": "v8"}
+        window.history = []
+        window.queue_manager = mock.Mock()
+        window.queue_manager.rerun_oldcam_only.return_value = True
+        window._get_selected_history = lambda: None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            latest = Path(tmpdir) / "latest.mp4"
+            latest.write_bytes(b"video")
+            window._get_latest_completed_history = lambda: {"output": str(latest)}
+            window._on_oldcam_rerun_requested()
+
+        args, _kwargs = window.queue_manager.rerun_oldcam_only.call_args
+        self.assertEqual(args[0], str(latest))
 
 
 class CarouselFolderButtonTests(unittest.TestCase):

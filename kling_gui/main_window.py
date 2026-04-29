@@ -1209,6 +1209,7 @@ class KlingGUIWindow:
             config=self.config,
             on_config_changed=self._on_config_changed,
             build_prompt=False,
+            on_oldcam_rerun=self._on_oldcam_rerun_requested,
         )
 
         self.video_tab.attach_config_panel(self.config_panel)
@@ -2550,6 +2551,122 @@ class KlingGUIWindow:
             return entry
         except Exception:
             return None
+
+    def _get_latest_completed_history(self) -> Optional[dict]:
+        """Return latest completed history entry with an output path."""
+        for entry in reversed(self.history):
+            if entry.get("status") == "completed" and entry.get("output"):
+                return entry
+        return None
+
+    def _resolve_oldcam_rerun_source(self, output_path: str) -> str:
+        """Resolve Oldcam rerun source video from history output path."""
+        candidate = Path(str(output_path or "")).expanduser()
+        if not candidate:
+            return ""
+        stem = candidate.stem
+        for suffix in ("-oldcam-v7", "-oldcam-v8"):
+            if stem.endswith(suffix):
+                base = candidate.with_name(f"{stem[:-len(suffix)]}{candidate.suffix}")
+                if base.exists():
+                    return str(base)
+                self._log(
+                    f"Base video not found for {candidate.name}; using selected output as source",
+                    "warning",
+                )
+                return str(candidate)
+        return str(candidate)
+
+    def _on_oldcam_rerun_requested(self):
+        """Handle Oldcam-only rerun button from config panel."""
+        if not self.queue_manager:
+            self._log("Queue manager not initialized", "error")
+            return
+
+        selected = self._get_selected_history()
+        history_entry = None
+        if selected and selected.get("output"):
+            history_entry = selected
+        else:
+            history_entry = self._get_latest_completed_history()
+
+        if not history_entry:
+            self._log("No completed video available for Oldcam rerun", "warning")
+            return
+
+        chosen_output = str(history_entry.get("output") or "").strip()
+        if not chosen_output:
+            self._log("No output video path available for Oldcam rerun", "warning")
+            return
+
+        source_video = self._resolve_oldcam_rerun_source(chosen_output)
+        if not source_video or not os.path.isfile(source_video):
+            self._log(f"Oldcam rerun source not found: {source_video or chosen_output}", "warning")
+            return
+
+        started = self.queue_manager.rerun_oldcam_only(
+            source_video,
+            completion_callback=self._on_oldcam_rerun_complete_threadsafe,
+        )
+        if started:
+            self._log(
+                f"Oldcam-only rerun queued: {os.path.basename(source_video)} "
+                f"({self.config.get('oldcam_version', 'v7')})",
+                "info",
+            )
+
+    def _on_oldcam_rerun_complete_threadsafe(
+        self,
+        success: bool,
+        source_video: str,
+        output_path: Optional[str],
+        error: Optional[str],
+    ):
+        """Thread-safe bridge from queue manager Oldcam rerun callback."""
+        try:
+            if self.root.winfo_exists():
+                self.root.after(
+                    0,
+                    lambda: self._record_oldcam_rerun_result(
+                        success, source_video, output_path, error
+                    ),
+                )
+        except tk.TclError:
+            if self.logger:
+                self.logger.warning("Dropped oldcam rerun completion after window closed")
+
+    def _record_oldcam_rerun_result(
+        self,
+        success: bool,
+        source_video: str,
+        output_path: Optional[str],
+        error: Optional[str],
+    ):
+        """Persist Oldcam-only rerun result in history + UI log."""
+        status = "completed" if success else "failed"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = {
+            "time": timestamp,
+            "source": source_video,
+            "output": output_path or "",
+            "status": status,
+            "error": error or "",
+        }
+        self.history.append(entry)
+        self.history = self.history[-500:]
+        self._save_history()
+        self._refresh_history_view()
+
+        if success and output_path:
+            self._log(
+                f"Oldcam-only rerun complete: {os.path.basename(source_video)} → {output_path}",
+                "success",
+            )
+        else:
+            self._log(
+                f"Oldcam-only rerun failed for {os.path.basename(source_video)}: {error or 'unknown error'}",
+                "error",
+            )
 
     def _open_path_in_explorer(self, path: str):
         """Open a file or folder in the system's native file explorer.
