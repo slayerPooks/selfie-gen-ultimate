@@ -9,6 +9,22 @@ from unittest import mock
 
 
 class GuiStartupHotfixTests(unittest.TestCase):
+    def test_ml_backend_env_sets_defaults_without_override(self):
+        module = importlib.import_module("kling_gui.ml_backend_env")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            module.ensure_ml_backend_env()
+            self.assertEqual(os.environ.get("TF_USE_LEGACY_KERAS"), "1")
+            self.assertEqual(os.environ.get("KERAS_BACKEND"), "tensorflow")
+
+        with mock.patch.dict(
+            os.environ,
+            {"TF_USE_LEGACY_KERAS": "0", "KERAS_BACKEND": "jax"},
+            clear=True,
+        ):
+            module.ensure_ml_backend_env()
+            self.assertEqual(os.environ.get("TF_USE_LEGACY_KERAS"), "0")
+            self.assertEqual(os.environ.get("KERAS_BACKEND"), "jax")
+
     def test_main_window_import_survives_retinaface_init_exception(self):
         real_import = builtins.__import__
 
@@ -46,6 +62,27 @@ class GuiStartupHotfixTests(unittest.TestCase):
 
         self.assertIsNone(retinaface_cls)
         self.assertIn("RuntimeError", retinaface_error)
+
+    def test_face_crop_loader_bootstraps_ml_env_before_import(self):
+        module = importlib.import_module("kling_gui.tabs.face_crop_tab")
+        module._RETINAFACE_CLASS = None
+
+        real_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "retinaface":
+                raise RuntimeError("tensorflow runtime broken")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch.object(module, "HAS_FACE_DEPS", True), \
+            mock.patch.object(module, "FACE_DEPS_ERROR", ""), \
+            mock.patch.object(module, "ensure_ml_backend_env") as ensure_mock, \
+            mock.patch("builtins.__import__", side_effect=fake_import):
+            retinaface_cls, retinaface_error = module._load_retinaface()
+
+        self.assertIsNone(retinaface_cls)
+        self.assertIn("RuntimeError", retinaface_error)
+        ensure_mock.assert_called_once_with()
 
 
 class GuiLauncherBatchModeTests(unittest.TestCase):

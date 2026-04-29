@@ -13,7 +13,9 @@ import numpy as np
 from PIL import Image
 
 # Configure DeepFace backend before import.
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
+from kling_gui.ml_backend_env import ensure_ml_backend_env
+
+ensure_ml_backend_env()
 from deepface import DeepFace
 
 logger = logging.getLogger(__name__)

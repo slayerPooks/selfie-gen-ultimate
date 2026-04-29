@@ -39,6 +39,8 @@ from .compare_panel import ComparePanel
 from .session_controller import SessionController
 from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
 from .theme import (
+    BUTTON_DISABLED_TEXT_COLOR,
+    BUTTON_TEXT_COLOR,
     TTK_BTN_COMPACT,
     TTK_BTN_DANGER,
     TTK_BTN_DANGER_COMPACT,
@@ -369,28 +371,22 @@ class SessionManagerDialog(tk.Toplevel):
         btn_frame = tk.Frame(self, bg=COLORS["bg_main"])
         btn_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
 
-        for text, color, cmd in [
-            ("Delete", COLORS["btn_red"], self._on_delete),
-            ("Clear Project Sessions", COLORS["warning"], self._on_clear_project),
-            ("Overwrite Save", COLORS["warning"], self._on_overwrite),
-            ("Save New", COLORS["btn_green"], self._on_save_new),
+        for text, style_name, cmd in [
+            ("Delete", TTK_BTN_DANGER, self._on_delete),
+            ("Clear Project Sessions", TTK_BTN_SECONDARY, self._on_clear_project),
+            ("Overwrite Save", TTK_BTN_PRIMARY, self._on_overwrite),
+            ("Save New", TTK_BTN_SUCCESS, self._on_save_new),
         ]:
-            tk.Button(
-                btn_frame, text=text, font=(FONT_FAMILY, 9, "bold"),
-                bg=color, fg="white", relief="flat", padx=10, pady=4,
-                command=cmd,
+            create_action_button(
+                btn_frame, text=text, command=cmd, style=style_name
             ).pack(side=tk.LEFT, padx=(0, 6))
 
-        tk.Button(
-            btn_frame, text="Close", font=(FONT_FAMILY, 9),
-            bg=COLORS["bg_input"], fg=COLORS["text_light"], relief="flat",
-            padx=10, pady=4, command=self.destroy,
+        create_action_button(
+            btn_frame, text="Close", command=self.destroy, style=TTK_BTN_SECONDARY
         ).pack(side=tk.RIGHT)
 
-        tk.Button(
-            btn_frame, text="Load", font=(FONT_FAMILY, 9, "bold"),
-            bg=COLORS["accent_blue"], fg="white", relief="flat",
-            padx=10, pady=4, command=self._on_load,
+        create_action_button(
+            btn_frame, text="Load", command=self._on_load, style=TTK_BTN_PRIMARY
         ).pack(side=tk.RIGHT, padx=(0, 6))
 
     def _refresh_list(self):
@@ -929,6 +925,11 @@ class KlingGUIWindow:
         self.root.option_add("*TCombobox*Listbox.foreground", COLORS["text_light"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", COLORS["accent_blue"])
         self.root.option_add("*TCombobox*Listbox.selectForeground", "white")
+        self.root.option_add("*Button.Background", COLORS["bg_input"])
+        self.root.option_add("*Button.Foreground", BUTTON_TEXT_COLOR)
+        self.root.option_add("*Button.ActiveBackground", COLORS["bg_hover"])
+        self.root.option_add("*Button.ActiveForeground", BUTTON_TEXT_COLOR)
+        self.root.option_add("*Button.DisabledForeground", BUTTON_DISABLED_TEXT_COLOR)
 
         # Dark theme for Treeview (PROCESSED VIDEOS section)
         style.configure(

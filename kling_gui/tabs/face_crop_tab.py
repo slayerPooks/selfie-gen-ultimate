@@ -20,6 +20,7 @@ from ..theme import (
     debounce_command,
 )
 from ..image_state import ImageSession
+from ..ml_backend_env import ensure_ml_backend_env
 from path_utils import get_gen_images_folder
 
 # Optional heavy dependencies — tab degrades gracefully if missing/broken
@@ -52,6 +53,7 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 # Accordion header background colors
 _HEADER_BG_COLLAPSED = "#333338"  # noticeably darker than bg_panel (#3C3C41)
 _HEADER_BG_OPEN = "#505055"       # matches COLORS["bg_hover"]
+_TOP_LAYOUT_BREAKPOINT = 1180
 
 
 def _platform_gui_repair_launcher() -> str:
@@ -98,6 +100,7 @@ def _load_retinaface():
         return None, FACE_DEPS_ERROR or "opencv/numpy not available"
 
     try:
+        ensure_ml_backend_env()
         from retinaface import RetinaFace as _RetinaFace
 
         _RETINAFACE_CLASS = _RetinaFace
@@ -211,6 +214,7 @@ class FaceCropTab(tk.Frame):
         self._crop_photo = None
 
         self._build_ui()
+        self.image_session.add_on_change(self._on_image_session_change)
 
     # ── Config persistence ────────────────────────────────────────
 
@@ -250,11 +254,13 @@ class FaceCropTab(tk.Frame):
             bd=1,
             relief="groove",
         )
-        source_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+        source_frame.pack(fill=tk.X, padx=8, pady=(6, 2))
 
         # Browse row
         browse_row = tk.Frame(source_frame, bg=COLORS["bg_panel"])
-        browse_row.pack(fill=tk.X, padx=6, pady=(6, 2))
+        browse_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+        self._browse_row = browse_row
+        self._source_frame = source_frame
 
         self._path_var = tk.StringVar()
         path_entry = tk.Entry(
@@ -265,8 +271,10 @@ class FaceCropTab(tk.Frame):
             font=(FONT_FAMILY, 9),
             insertbackground=COLORS["text_light"],
             relief="flat",
+            width=52,
         )
-        path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+        path_entry.pack(side=tk.LEFT, ipady=3)
+        self._path_entry = path_entry
 
         browse_btn = ttk.Button(
             browse_row,
@@ -275,41 +283,22 @@ class FaceCropTab(tk.Frame):
             command=debounce_command(self._browse_image, key="facecrop_browse"),
         )
         browse_btn.pack(side=tk.LEFT, padx=(6, 0))
+        self._browse_btn = browse_btn
 
-        use_carousel_btn = ttk.Button(
-            browse_row,
-            text="Use Carousel Image",
-            style=TTK_BTN_PRIMARY,
-            command=debounce_command(self._use_carousel_image, key="facecrop_use_carousel"),
-        )
-        use_carousel_btn.pack(side=tk.LEFT, padx=(6, 0))
-
-        # Detect row
-        detect_row = tk.Frame(source_frame, bg=COLORS["bg_panel"])
-        detect_row.pack(fill=tk.X, padx=6, pady=(2, 2))
-
-        self._detect_btn = ttk.Button(
-            detect_row,
-            text="Detect Face and Crop",
-            style=TTK_BTN_SUCCESS,
-            command=debounce_command(self._detect_face, key="facecrop_detect"),
-            state=tk.DISABLED if not HAS_FACE_DEPS else tk.NORMAL,
-        )
-        self._detect_btn.pack(side=tk.LEFT)
-
+        # Hidden status label retained for internal error state compatibility.
         self._status_label = tk.Label(
-            detect_row,
-            text="No image loaded",
+            source_frame,
+            text="",
             bg=COLORS["bg_panel"],
             fg=COLORS["text_dim"],
             font=(FONT_FAMILY, 9),
             anchor="w",
+            justify=tk.LEFT,
         )
-        self._status_label.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
 
         # Slider row
         slider_row = tk.Frame(source_frame, bg=COLORS["bg_panel"])
-        slider_row.pack(fill=tk.X, padx=6, pady=(2, 6))
+        slider_row.pack(fill=tk.X, padx=6, pady=(2, 4))
 
         tk.Label(
             slider_row,
@@ -352,6 +341,15 @@ class FaceCropTab(tk.Frame):
             command=debounce_command(lambda: self._adjust_multiplier(0.1), key="facecrop_multiplier_up", interval_ms=100),
         ).pack(side=tk.LEFT)
 
+        self._detect_btn = ttk.Button(
+            slider_row,
+            text="Detect Face & Crop",
+            style=TTK_BTN_SUCCESS,
+            command=debounce_command(self._detect_face, key="facecrop_detect"),
+            state=tk.DISABLED if not HAS_FACE_DEPS else tk.NORMAL,
+        )
+        self._detect_btn.pack(side=tk.LEFT, padx=(8, 0))
+
         # "Add to Carousel" button
         self._add_carousel_btn = ttk.Button(
             slider_row,
@@ -360,7 +358,7 @@ class FaceCropTab(tk.Frame):
             command=debounce_command(self._add_crop_to_carousel, key="facecrop_add_carousel"),
             state=tk.DISABLED,
         )
-        self._add_carousel_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self._add_carousel_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         # ── Preview ─────────────────────────────────────────────────
         preview_frame = tk.LabelFrame(
@@ -372,7 +370,7 @@ class FaceCropTab(tk.Frame):
             bd=1,
             relief="groove",
         )
-        preview_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(2, 4))
 
         canvas_container = tk.Frame(preview_frame, bg=COLORS["bg_panel"])
         canvas_container.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
@@ -666,10 +664,10 @@ class FaceCropTab(tk.Frame):
         ).pack(side=tk.LEFT, padx=(4, 0))
 
         self._outpaint_status = tk.Label(
-            btn_row, text="", font=(FONT_FAMILY, 8),
+            expand_parent, text="", font=(FONT_FAMILY, 8),
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor="w",
         )
-        self._outpaint_status.pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
+        self._outpaint_status.pack(fill=tk.X, pady=(0, 2))
 
         # Percentage controls
         self._pct_frame = tk.Frame(expand_parent, bg=COLORS["bg_panel"])
@@ -842,10 +840,10 @@ class FaceCropTab(tk.Frame):
         ).pack(side=tk.LEFT, padx=(3, 0))
 
         self._upscale_status = tk.Label(
-            upscale_row, text="", font=(FONT_FAMILY, 8),
+            upscale_parent, text="", font=(FONT_FAMILY, 8),
             bg=COLORS["bg_panel"], fg=COLORS["text_dim"], anchor="w",
         )
-        self._upscale_status.pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
+        self._upscale_status.pack(fill=tk.X, pady=(0, 2))
 
         # Crystal-specific sliders (hidden when Aura SR is selected)
         self._crystal_settings_frame = tk.Frame(upscale_parent, bg=COLORS["bg_panel"])
@@ -894,6 +892,23 @@ class FaceCropTab(tk.Frame):
 
         # Recursive mousewheel binding
         self._bind_scroll_mousewheel(scroll_canvas, scroll_inner)
+        self.after(0, self._refresh_responsive_layout)
+        self.bind("<Configure>", lambda _e: self._refresh_responsive_layout())
+
+    def _refresh_responsive_layout(self):
+        """Keep Step 0 controls readable at narrow widths on all platforms."""
+        self._refresh_browse_row_layout()
+        self._refresh_status_wraplengths()
+
+    def _refresh_browse_row_layout(self):
+        # Browse row no longer has a secondary action button.
+        return
+
+    def _refresh_status_wraplengths(self):
+        source_w = max(220, self._source_frame.winfo_width() - 80) if hasattr(self, "_source_frame") else 320
+        self._status_label.config(wraplength=source_w)
+        self._outpaint_status.config(wraplength=max(220, self.winfo_width() - 100))
+        self._upscale_status.config(wraplength=max(220, self.winfo_width() - 100))
 
     # ── Accordion toggle ────────────────────────────────────────────
 
@@ -997,16 +1012,7 @@ class FaceCropTab(tk.Frame):
         self._path_var.set(path)
         self._load_source(path)
 
-    def _use_carousel_image(self):
-        """Load the active carousel image as the face detection source."""
-        path = self.image_session.active_image_path
-        if not path:
-            self._status_label.config(text="No image in carousel", fg=COLORS["warning"])
-            return
-        self._path_var.set(path)
-        self._load_source(path)
-
-    def _load_source(self, path: str):
+    def _load_source(self, path: str, silent: bool = False):
         if not HAS_PIL:
             self._status_label.config(text="Pillow not installed", fg=COLORS["error"])
             return
@@ -1041,21 +1047,51 @@ class FaceCropTab(tk.Frame):
             self._source_photo = self._show_on_canvas(self._source_canvas, pil_img)
             self._crop_canvas.delete("all")
             self._crop_label.config(text="Crop Result")
-            self._status_label.config(
-                text=f"Loaded ({pil_img.width}x{pil_img.height} preview)",
-                fg=COLORS["text_light"],
-            )
+            if not silent:
+                self._status_label.config(
+                    text=f"Loaded ({pil_img.width}x{pil_img.height} preview)",
+                    fg=COLORS["text_light"],
+                )
             # Show dimensions + filesize on source label
             info = _format_image_info(path)
             self._source_label.config(text=f"Source  {info}" if info else "Source")
-            self.log(f"Face Crop: loaded {os.path.basename(path)}", "info")
+            if not silent:
+                self.log(f"Face Crop: loaded {os.path.basename(path)}", "info")
         except Exception as exc:
             self._status_label.config(text=f"Load error: {exc}", fg=COLORS["error"])
+
+    def _on_image_session_change(self):
+        """Mirror active carousel image in left preview without extra user clicks."""
+        active_path = self.image_session.active_image_path
+        if not active_path or not os.path.isfile(active_path):
+            return
+        if os.path.abspath(active_path) == os.path.abspath(self._original_path or ""):
+            return
+        self._path_var.set(active_path)
+        self._load_source(active_path, silent=True)
 
     # ── Detection ───────────────────────────────────────────────────
 
     def _detect_face(self):
-        if self._busy or not self._source_path:
+        if self._busy:
+            return
+        if not self._source_path:
+            active_path = self.image_session.active_image_path
+            if not active_path:
+                self._status_label.config(text="No image in carousel", fg=COLORS["warning"])
+                return
+            self._path_var.set(active_path)
+            self._load_source(active_path)
+        elif self.image_session.active_image_path and (
+            os.path.abspath(self.image_session.active_image_path) != os.path.abspath(self._original_path or "")
+        ):
+            # Keep detection source synced with currently active carousel image.
+            active_path = self.image_session.active_image_path
+            self._path_var.set(active_path)
+            self._load_source(active_path)
+
+        if not self._source_path:
+            self._status_label.config(text="No source image loaded", fg=COLORS["warning"])
             return
         if not HAS_FACE_DEPS:
             self._status_label.config(
@@ -1066,7 +1102,7 @@ class FaceCropTab(tk.Frame):
         if retinaface_cls is None:
             repair_launcher = _platform_gui_repair_launcher()
             self._status_label.config(
-                text=f"RetinaFace unavailable: {retinaface_error}",
+                text=f"RetinaFace unavailable (TensorFlow/Keras backend mismatch or missing deps): {retinaface_error}",
                 fg=COLORS["error"],
             )
             self.log(
