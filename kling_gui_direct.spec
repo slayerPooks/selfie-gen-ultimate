@@ -127,6 +127,22 @@ for oldcam_dir_name in ('oldcam-v7', 'oldcam-v8'):
                 target_dir = Path(oldcam_dir_name) / oldcam_file.relative_to(oldcam_dir).parent
                 datas.append((str(oldcam_file), str(target_dir)))
 
+# Standalone similarity app bundle (lean copy; skip cache/dev artifacts)
+similarity_dir = SPEC_DIR / 'similarity'
+if similarity_dir.exists():
+    similarity_skip_dirs = {'.git', '.venv', '__pycache__', '.pytest_cache', '.serena'}
+    for similarity_file in similarity_dir.rglob('*'):
+        if not similarity_file.is_file():
+            continue
+        if similarity_skip_dirs.intersection(similarity_file.parts):
+            continue
+        if similarity_file.name == '.DS_Store':
+            continue
+        if similarity_file.suffix.lower() == '.zip':
+            continue
+        target_dir = Path('similarity') / similarity_file.relative_to(similarity_dir).parent
+        datas.append((str(similarity_file), str(target_dir)))
+
 # -----------------------------------------------------------------------
 # Analysis
 # -----------------------------------------------------------------------

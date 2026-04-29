@@ -23,6 +23,7 @@ from path_utils import (
     get_crash_log_path,
     get_log_path,
     get_app_dir,
+    get_resource_dir,
     get_user_data_dir,
     sanitize_path_name,
     sanitize_tree_names_report,
@@ -583,6 +584,8 @@ class KlingGUIWindow:
         self.root.configure(bg=COLORS["bg_main"])
         self._drop_zone_window = None
         self._drop_zone_open_guard_until = 0.0
+        self._similarity_window = None
+        self._similarity_open_guard_until = 0.0
         self.session_controller = SessionController(
             root=self.root,
             data_dir=self.data_dir,
@@ -1394,6 +1397,191 @@ class KlingGUIWindow:
         except Exception:
             pass
 
+    # ── Similarity Launcher ─────────────────────────────────────────
+
+    def _resolve_similarity_dir(self) -> str:
+        """Resolve the bundled standalone similarity app folder."""
+        base_dirs = []
+        for base in (get_app_dir(), get_resource_dir()):
+            if base and base not in base_dirs:
+                base_dirs.append(base)
+
+        for base in base_dirs:
+            candidate = os.path.join(base, "similarity")
+            if os.path.isdir(candidate):
+                return candidate
+
+        fallback_base = base_dirs[0] if base_dirs else os.getcwd()
+        return os.path.join(fallback_base, "similarity")
+
+    @staticmethod
+    def _similarity_launcher_name() -> str:
+        """Return platform launcher for the standalone similarity GUI."""
+        import platform
+
+        system = platform.system()
+        if system == "Windows":
+            return "run_gui.bat"
+        if system == "Darwin":
+            return "run_gui.command"
+        return "run_gui.sh"
+
+    def _close_similarity_launcher(self):
+        """Close similarity launcher popup window if open."""
+        if self._similarity_window is None:
+            return
+        win = self._similarity_window
+        self._similarity_window = None
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except Exception:
+            pass
+
+    def _launch_similarity_gui(self, show_dialog: bool = True) -> bool:
+        """Launch the standalone similarity GUI in a non-blocking subprocess."""
+        import platform
+        import subprocess
+
+        similarity_dir = self._resolve_similarity_dir()
+        launcher_name = self._similarity_launcher_name()
+        launcher_path = os.path.join(similarity_dir, launcher_name)
+
+        if not os.path.isdir(similarity_dir):
+            msg = f"Similarity folder not found: {similarity_dir}"
+            self._log(msg, "error")
+            if show_dialog:
+                messagebox.showerror("Similarity Launch Failed", msg, parent=self.root)
+            return False
+
+        if not os.path.isfile(launcher_path):
+            msg = f"Similarity launcher missing: {launcher_path}"
+            self._log(msg, "error")
+            if show_dialog:
+                messagebox.showerror("Similarity Launch Failed", msg, parent=self.root)
+            return False
+
+        try:
+            system = platform.system()
+            if system == "Windows":
+                subprocess.Popen(
+                    ["cmd", "/c", launcher_name],
+                    cwd=similarity_dir,
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                )
+            elif system == "Darwin":
+                subprocess.Popen(["open", launcher_path], cwd=similarity_dir)
+            else:
+                subprocess.Popen([launcher_path], cwd=similarity_dir)
+
+            self._log(f"Launched Similarity app via {launcher_name}", "success")
+            return True
+        except Exception as exc:
+            msg = f"Could not launch Similarity app: {exc}"
+            self._log(msg, "error")
+            if show_dialog:
+                messagebox.showerror("Similarity Launch Failed", msg, parent=self.root)
+            return False
+
+    def _toggle_similarity_launcher(self):
+        """Toggle the floating Similarity launcher popup and auto-run app."""
+        now = time.monotonic()
+        if self._similarity_window is not None:
+            if now < self._similarity_open_guard_until:
+                return
+            self._close_similarity_launcher()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Similarity Launcher")
+        win.geometry("430x210")
+        win.configure(bg=COLORS["bg_panel"])
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+
+        card = tk.Frame(
+            win,
+            bg=COLORS["bg_drop"],
+            highlightbackground=COLORS["border"],
+            highlightthickness=2,
+        )
+        card.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        tk.Label(
+            card,
+            text="Similarity",
+            font=(FONT_FAMILY, 14, "bold"),
+            bg=COLORS["bg_drop"],
+            fg=COLORS["text_light"],
+        ).pack(pady=(14, 4))
+
+        tk.Label(
+            card,
+            text="Launching standalone similarity GUI from bundled folder.",
+            font=(FONT_FAMILY, 9),
+            bg=COLORS["bg_drop"],
+            fg=COLORS["text_dim"],
+        ).pack(pady=(0, 12))
+
+        status_label = tk.Label(
+            card,
+            text="",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_drop"],
+            fg=COLORS["text_light"],
+        )
+        status_label.pack(pady=(0, 8))
+
+        button_row = tk.Frame(card, bg=COLORS["bg_drop"])
+        button_row.pack(pady=(0, 12))
+
+        create_action_button(
+            button_row,
+            text="Launch Again",
+            command=lambda: self._launch_similarity_gui(show_dialog=True),
+            style=TTK_BTN_PRIMARY,
+            width=12,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        create_action_button(
+            button_row,
+            text="Open Folder",
+            command=lambda: self._open_path_in_explorer(self._resolve_similarity_dir()),
+            style=TTK_BTN_SECONDARY,
+            width=11,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        create_action_button(
+            button_row,
+            text="Close",
+            command=self._close_similarity_launcher,
+            style=TTK_BTN_SECONDARY,
+            width=9,
+        ).pack(side=tk.LEFT)
+
+        launched = self._launch_similarity_gui(show_dialog=False)
+        if launched:
+            status_label.config(
+                text="Similarity app launch requested.",
+                fg=COLORS.get("success", "#50C878"),
+            )
+        else:
+            status_label.config(
+                text="Launch failed. Use Launch Again for details.",
+                fg=COLORS.get("warning", "#FFA500"),
+            )
+
+        self._similarity_open_guard_until = time.monotonic() + 0.55
+        win.protocol("WM_DELETE_WINDOW", self._close_similarity_launcher)
+        win.bind(
+            "<Destroy>",
+            lambda event, this_win=win: setattr(self, "_similarity_window", None)
+            if event.widget is this_win
+            else None,
+            add="+",
+        )
+        self._similarity_window = win
+
     # ── Floating Drop Zone ──────────────────────────────────────────
 
     def _close_drop_zone(self):
@@ -2155,6 +2343,16 @@ class KlingGUIWindow:
             style=TTK_BTN_SUCCESS,
         )
         add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+
+        # Similarity launcher popup toggle
+        similarity_btn = create_action_button(
+            header,
+            text="Similarity",
+            command=self._dbcmd("header_toggle_similarity", self._toggle_similarity_launcher),
+            style=TTK_BTN_PRIMARY,
+            width=12,
+        )
+        similarity_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # Floating drop zone toggle
         self._drop_zone_window = None
@@ -3589,6 +3787,9 @@ class KlingGUIWindow:
         self._save_layout()
         self._save_history()
         self._save_config()
+
+        self._close_drop_zone()
+        self._close_similarity_launcher()
 
         # Clean up tkinter variables before destroying root to prevent
         # "main thread is not in main loop" errors on Python 3.14+
