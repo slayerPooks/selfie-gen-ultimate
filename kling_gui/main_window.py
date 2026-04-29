@@ -726,7 +726,7 @@ class KlingGUIWindow:
             "hidden_models": [],
             "freeimage_api_key": "",
             "bfl_api_key": "",
-            "upload_provider_order": ["freeimage"],
+            "upload_provider_order": ["fal_cdn", "freeimage"],
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",

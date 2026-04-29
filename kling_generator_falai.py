@@ -92,6 +92,41 @@ class FalAIKlingGenerator:
         self.last_error_message = message
 
     @staticmethod
+    def _extract_response_error_detail(response: requests.Response) -> str:
+        """Extract readable detail text from fal API error response."""
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                detail = data.get("detail")
+                if isinstance(detail, list):
+                    return "; ".join(str(item.get("msg", item)) for item in detail)
+                if detail:
+                    return str(detail)
+                if data.get("error"):
+                    return str(data["error"])
+                if data.get("message"):
+                    return str(data["message"])
+            if data:
+                return str(data)
+        except Exception:
+            pass
+        return (response.text or "").strip()
+
+    @staticmethod
+    def _is_balance_lock_error(message: str) -> bool:
+        """True when backend message indicates exhausted/locked account state."""
+        lowered = str(message or "").lower()
+        markers = (
+            "exhausted balance",
+            "user is locked",
+            "insufficient credits",
+            "insufficient balance",
+            "quota",
+            "payment required",
+        )
+        return any(marker in lowered for marker in markers)
+
+    @staticmethod
     def _extract_video_url(data: dict) -> Optional[str]:
         """Extract video URL from all known fal.ai response structures.
 
@@ -615,24 +650,37 @@ class FalAIKlingGenerator:
                         continue
 
                     elif response.status_code == 402:
-                        error_msg = (
-                            "Payment required - insufficient credits in your fal.ai account"
-                        )
+                        detail = self._extract_response_error_detail(response)
+                        error_msg = "Payment required - insufficient credits in your fal.ai account"
+                        if detail:
+                            error_msg = f"{error_msg}: {detail}"
                         self._set_last_error(error_msg)
                         logger.error(f"💳 {error_msg}")
                         return None
 
                     elif response.status_code != 200:
+                        detail = self._extract_response_error_detail(response)
                         error_msg = f"Request failed: HTTP {response.status_code}"
+                        if detail:
+                            error_msg = f"{error_msg} — {detail}"
+                        self._set_last_error(error_msg)
                         logger.error(f"❌ {error_msg}")
-                        logger.error(f"Response: {response.text}")
+                        if detail:
+                            logger.error(f"Response detail: {detail}")
+
+                        # Account lock/balance issues will not resolve by retrying.
+                        if response.status_code == 403 and self._is_balance_lock_error(detail):
+                            logger.error(
+                                "💳 Account locked due to exhausted balance - top up at fal.ai/dashboard/billing"
+                            )
+                            return None
+
                         if submit_attempt < max_submit_retries - 1:
                             logger.info(
                                 f"Retrying... ({submit_attempt + 1}/{max_submit_retries})"
                             )
                             time.sleep(5)
                             continue
-                        self._set_last_error(error_msg)
                         return None
 
                     result = response.json()
