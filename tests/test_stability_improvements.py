@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from PIL import Image
@@ -13,6 +14,7 @@ from fal_utils import fal_queue_poll, upload_to_freeimage
 from selfie_generator import SelfieGenerator
 from kling_gui.main_window import KlingGUIWindow
 from kling_gui import theme
+from kling_gui.carousel_widget import ImageCarousel
 from kling_gui.tabs.selfie_tab import SelfieTab
 from kling_gui.drop_zone import DropZone
 
@@ -237,6 +239,63 @@ class DropZoneWindowsRenderTests(unittest.TestCase):
             self.assertIsNotNone(zone._main_text_canvas)
         finally:
             root.destroy()
+
+
+class CarouselFolderButtonTests(unittest.TestCase):
+    class _FakeSession:
+        def __init__(self, entry):
+            self.active_entry = entry
+
+    def test_open_active_folder_opens_parent_dir(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = str(Path(tmpdir) / "active.png")
+            Path(image_path).write_bytes(b"x")
+            carousel.image_session = self._FakeSession(SimpleNamespace(path=image_path))
+            carousel.log = mock.Mock()
+            carousel._open_path_in_explorer = mock.Mock()
+
+            carousel._on_open_active_image_folder()
+
+            carousel._open_path_in_explorer.assert_called_once_with(tmpdir)
+            carousel.log.assert_not_called()
+
+    def test_open_active_folder_warns_when_no_active_entry(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        carousel.image_session = self._FakeSession(None)
+        carousel.log = mock.Mock()
+        carousel._open_path_in_explorer = mock.Mock()
+
+        carousel._on_open_active_image_folder()
+
+        carousel._open_path_in_explorer.assert_not_called()
+        carousel.log.assert_called_once_with(
+            "No active carousel image to open folder for",
+            "warning",
+        )
+
+    def test_open_active_folder_warns_when_parent_folder_missing(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        missing_path = str(Path("Z:/path/that/does/not/exist/image.png"))
+        carousel.image_session = self._FakeSession(SimpleNamespace(path=missing_path))
+        carousel.log = mock.Mock()
+        carousel._open_path_in_explorer = mock.Mock()
+
+        carousel._on_open_active_image_folder()
+
+        carousel._open_path_in_explorer.assert_not_called()
+        carousel.log.assert_called_once_with(
+            "No folder to open for active carousel image",
+            "warning",
+        )
+
+    def test_similarity_row_button_order_includes_folder_icon_before_auto(self):
+        src = inspect.getsource(ImageCarousel._build_panel)
+        ref_pos = src.find("self._ref_btn")
+        compare_pos = src.find("self.compare_btn")
+        folder_pos = src.find("self.open_active_folder_btn")
+        auto_pos = src.find("self._auto_chk")
+        self.assertTrue(0 <= ref_pos < compare_pos < folder_pos < auto_pos)
 
 
 if __name__ == "__main__":

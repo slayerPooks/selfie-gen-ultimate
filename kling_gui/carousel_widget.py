@@ -5,8 +5,10 @@ from tkinter import ttk
 from tkinter import filedialog
 from typing import Callable, Optional
 import os
+import platform
 import logging
 import threading
+import subprocess
 
 from .theme import (
     COLORS,
@@ -232,6 +234,15 @@ class ImageCarousel(tk.Frame):
             state=tk.DISABLED,
         )
         self.compare_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.open_active_folder_btn = ttk.Button(
+            sim_row,
+            text="📂",
+            style=TTK_BTN_SECONDARY,
+            width=2,
+            command=debounce_command(self._on_open_active_image_folder, key="carousel_open_folder"),
+        )
+        self.open_active_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         self._auto_chk = tk.Checkbutton(
             sim_row,
@@ -512,6 +523,33 @@ class ImageCarousel(tk.Frame):
     def _on_compare(self):
         if self._on_compare_callback:
             self._on_compare_callback()
+
+    def _open_path_in_explorer(self, path: str):
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.run(["open", path], check=True)
+            else:
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self.log(f"Could not open {path}: {e}", "error")
+
+    def _on_open_active_image_folder(self):
+        entry = self.image_session.active_entry
+        if not entry:
+            self.log("No active carousel image to open folder for", "warning")
+            return
+        path = str(entry.path or "").strip()
+        if not path:
+            self.log("No folder to open for active carousel image", "warning")
+            return
+        folder = os.path.dirname(path)
+        if not folder or not os.path.isdir(folder):
+            self.log("No folder to open for active carousel image", "warning")
+            return
+        self._open_path_in_explorer(folder)
 
     def _rotate(self, degrees: int):
         """Rotate the active image by the given degrees (positive = clockwise)."""
