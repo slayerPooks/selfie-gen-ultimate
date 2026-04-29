@@ -325,8 +325,6 @@ class OutpaintGenerator:
             return
 
         try:
-            import cv2
-            import numpy as np
             from PIL import ImageFilter, ImageDraw
 
             self._report(f"Compositing original over AI result (mode={composite_mode})...", "progress")
@@ -335,9 +333,10 @@ class OutpaintGenerator:
 
             # --- 1. INITIAL MATH ESTIMATE ---
             expected_w = orig.width + margin_left + margin_right
+            expected_h = orig.height + margin_top + margin_bottom
             actual_w, actual_h = result_img.size
 
-            if actual_w == expected_w:
+            if (actual_w == expected_w) and (actual_h == expected_h):
                 math_left, math_top = margin_left, margin_top
             else:
                 total_h_margin = actual_w - orig.width
@@ -348,33 +347,52 @@ class OutpaintGenerator:
                 math_top = round(total_v_margin * margin_top / v_sum) if v_sum > 0 else total_v_margin // 2
 
             # --- 2. EXACT ALIGNMENT (Fixing VAE Shift) ---
-            orig_cv = cv2.cvtColor(np.array(orig_rgb), cv2.COLOR_RGB2BGR)
-            res_cv = cv2.cvtColor(np.array(result_img), cv2.COLOR_RGB2BGR)
-
-            search_margin = 15
-            search_x1 = max(0, math_left - search_margin)
-            search_y1 = max(0, math_top - search_margin)
-            search_x2 = min(res_cv.shape[1], math_left + orig.width + search_margin)
-            search_y2 = min(res_cv.shape[0], math_top + orig.height + search_margin)
-
-            search_area = res_cv[search_y1:search_y2, search_x1:search_x2]
-
+            paste_left, paste_top = math_left, math_top
             try:
-                match = cv2.matchTemplate(search_area, orig_cv, cv2.TM_CCOEFF_NORMED)
-                _, _, _, max_loc = cv2.minMaxLoc(match)
-                paste_left = search_x1 + max_loc[0]
-                paste_top = search_y1 + max_loc[1]
-                if (paste_left != math_left) or (paste_top != math_top):
+                import cv2
+                import numpy as np
+
+                orig_cv = cv2.cvtColor(np.array(orig_rgb), cv2.COLOR_RGB2BGR)
+                res_cv = cv2.cvtColor(np.array(result_img), cv2.COLOR_RGB2BGR)
+
+                search_margin = 15
+                search_x1 = max(0, math_left - search_margin)
+                search_y1 = max(0, math_top - search_margin)
+                search_x2 = min(res_cv.shape[1], math_left + orig.width + search_margin)
+                search_y2 = min(res_cv.shape[0], math_top + orig.height + search_margin)
+
+                search_area = res_cv[search_y1:search_y2, search_x1:search_x2]
+                if (
+                    search_area.shape[0] >= orig_cv.shape[0]
+                    and search_area.shape[1] >= orig_cv.shape[1]
+                ):
+                    match = cv2.matchTemplate(search_area, orig_cv, cv2.TM_CCOEFF_NORMED)
+                    _, _, _, max_loc = cv2.minMaxLoc(match)
+                    paste_left = search_x1 + max_loc[0]
+                    paste_top = search_y1 + max_loc[1]
+                    if (paste_left != math_left) or (paste_top != math_top):
+                        self._report(
+                            f"Auto-aligned paste shifted by X:{paste_left-math_left} Y:{paste_top-math_top}px to fix VAE drift",
+                            "debug",
+                        )
+                else:
                     self._report(
-                        f"Auto-aligned paste shifted by X:{paste_left-math_left} Y:{paste_top-math_top}px to fix VAE drift",
-                        "debug",
+                        "Auto-align skipped (search window smaller than original), using mathematical placement",
+                        "warning",
                     )
             except Exception as e:
-                self._report(f"Auto-align failed ({e}), falling back to mathematical placement", "warning")
-                paste_left, paste_top = math_left, math_top
+                self._report(
+                    f"Auto-align unavailable ({e}), falling back to mathematical placement",
+                    "warning",
+                )
 
             # Safety guard
-            if (paste_left + orig.width > actual_w) or (paste_top + orig.height > actual_h):
+            if (
+                (paste_left < 0)
+                or (paste_top < 0)
+                or (paste_left + orig.width > actual_w)
+                or (paste_top + orig.height > actual_h)
+            ):
                 self._report("Original doesn't fit in AI result — using raw output", "warning")
                 return
 
