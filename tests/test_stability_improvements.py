@@ -557,10 +557,11 @@ class CarouselFolderButtonTests(unittest.TestCase):
 
     def test_similarity_row_buttons_use_compact_style(self):
         src = inspect.getsource(ImageCarousel._build_panel)
-        self.assertIn("self._ref_btn = ttk.Button(", src)
-        self.assertIn("self.compare_btn = ttk.Button(", src)
+        # Ref/Compare use tk.Button for custom legibility styling.
+        self.assertIn("self._ref_btn = tk.Button(", src)
+        self.assertIn("self.compare_btn = tk.Button(", src)
         self.assertIn("self.open_active_folder_btn = ttk.Button(", src)
-        self.assertGreaterEqual(src.count("style=TTK_BTN_COMPACT"), 5)
+        self.assertGreaterEqual(src.count("style=TTK_BTN_COMPACT"), 3)
 
 
 class Step3UiTighteningTests(unittest.TestCase):
