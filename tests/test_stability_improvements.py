@@ -10,8 +10,9 @@ from unittest import mock
 
 from PIL import Image
 
-from fal_utils import fal_queue_poll, upload_to_freeimage
+from fal_utils import fal_queue_poll, upload_to_freeimage, upload_reference_image
 from selfie_generator import SelfieGenerator
+from kling_generator_falai import FalAIKlingGenerator
 from kling_gui.main_window import KlingGUIWindow
 from kling_gui import theme
 from kling_gui.carousel_widget import ImageCarousel
@@ -65,6 +66,108 @@ class UploadHandleTests(unittest.TestCase):
             renamed_path = os.path.join(tmpdir, "renamed.png")
             os.rename(image_path, renamed_path)
             self.assertTrue(os.path.exists(renamed_path))
+
+    def test_upload_reference_image_prefers_fal_cdn(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "source.png")
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(image_path)
+
+            with mock.patch("fal_utils._fal_upload_jpeg_bytes", return_value="https://v3.fal.media/files/test.jpg"), \
+                mock.patch("fal_utils.upload_to_freeimage") as freeimage_mock:
+                url, processed, provider = upload_reference_image(
+                    image_path=image_path,
+                    fal_api_key="fal-key",
+                    freeimage_api_key="free-key",
+                    progress_cb=None,
+                )
+
+            self.assertEqual(provider, "fal_cdn")
+            self.assertEqual(url, "https://v3.fal.media/files/test.jpg")
+            self.assertIsNotNone(processed)
+            freeimage_mock.assert_not_called()
+
+    def test_upload_reference_image_falls_back_to_freeimage_on_transport_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "source.png")
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(image_path)
+            fake_img = Image.new("RGB", (32, 32), (0, 0, 0))
+
+            with mock.patch("fal_utils._fal_upload_jpeg_bytes", side_effect=RuntimeError("network down")), \
+                mock.patch("fal_utils.upload_to_freeimage", return_value=("https://freeimage.host/img.jpg", fake_img)) as freeimage_mock:
+                url, processed, provider = upload_reference_image(
+                    image_path=image_path,
+                    fal_api_key="fal-key",
+                    freeimage_api_key="free-key",
+                    progress_cb=None,
+                )
+
+            self.assertEqual(provider, "freeimage")
+            self.assertEqual(url, "https://freeimage.host/img.jpg")
+            self.assertIs(processed, fake_img)
+            freeimage_mock.assert_called_once()
+
+    def test_upload_reference_image_does_not_fallback_when_balance_locked(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "source.png")
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(image_path)
+
+            with mock.patch(
+                "fal_utils._fal_upload_jpeg_bytes",
+                side_effect=RuntimeError("User is locked. Reason: Exhausted balance."),
+            ), mock.patch("fal_utils.upload_to_freeimage") as freeimage_mock:
+                url, processed, provider = upload_reference_image(
+                    image_path=image_path,
+                    fal_api_key="fal-key",
+                    freeimage_api_key="free-key",
+                    progress_cb=None,
+                )
+
+            self.assertIsNone(url)
+            self.assertIsNone(processed)
+            self.assertIsNone(provider)
+            freeimage_mock.assert_not_called()
+
+
+class SubmitErrorDetailTests(unittest.TestCase):
+    class _FakeResponse:
+        def __init__(self, status_code=200, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no payload")
+            return self._payload
+
+    def test_submit_403_balance_lock_sets_detailed_last_error_and_skips_retries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "source.png")
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(image_path)
+
+            generator = FalAIKlingGenerator(api_key="fal-key", verbose=False)
+            generator.schema_manager.validate_parameters = lambda _endpoint, payload: payload
+
+            response = self._FakeResponse(
+                status_code=403,
+                payload={"detail": "User is locked. Reason: Exhausted balance. Top up your balance."},
+                text='{"detail":"User is locked. Reason: Exhausted balance. Top up your balance."}',
+            )
+
+            with mock.patch.object(generator, "upload_to_freeimage", return_value="https://v3.fal.media/files/test.jpg"), \
+                mock.patch("kling_generator_falai.requests.post", return_value=response) as post_mock, \
+                mock.patch("kling_generator_falai.time.sleep", return_value=None):
+                result = generator.create_kling_generation(
+                    character_image_path=image_path,
+                    output_folder=tmpdir,
+                    custom_prompt="test",
+                    skip_duplicate_check=True,
+                )
+
+            self.assertIsNone(result)
+            self.assertIn("HTTP 403", generator.last_error_message or "")
+            self.assertIn("Exhausted balance", generator.last_error_message or "")
+            self.assertEqual(post_mock.call_count, 1)
 
 
 class DeepMergeTests(unittest.TestCase):
