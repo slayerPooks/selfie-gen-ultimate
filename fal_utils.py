@@ -278,7 +278,7 @@ def fal_queue_submit(
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = _post_with_auth_fallback(url, headers, payload, timeout=30)
 
             if response.status_code == 429:
                 logger.warning("Rate limited — waiting 30 s before retry")
@@ -307,12 +307,27 @@ def fal_queue_submit(
 
             elif response.status_code != 200:
                 detail = _extract_http_error_detail(response)
-                logger.error("Queue submit failed: %s — %s", response.status_code, detail)
-                if progress_cb:
-                    progress_cb(
-                        f"Submit failed: HTTP {response.status_code} — {detail}",
-                        "error",
+                is_final_attempt = attempt >= (max_retries - 1)
+                if is_final_attempt:
+                    logger.error("Queue submit failed: %s — %s", response.status_code, detail)
+                    if progress_cb:
+                        progress_cb(
+                            f"Submit failed: HTTP {response.status_code} — {detail}",
+                            "error",
+                        )
+                else:
+                    logger.warning(
+                        "Queue submit attempt %d/%d failed: HTTP %s — %s",
+                        attempt + 1,
+                        max_retries,
+                        response.status_code,
+                        detail,
                     )
+                    if progress_cb:
+                        progress_cb(
+                            f"Submit retrying ({attempt + 1}/{max_retries}) after HTTP {response.status_code}: {detail}",
+                            "warning",
+                        )
                 if attempt < max_retries - 1:
                     if _sleep_with_cancel(5, cancel_event=None, progress_cb=progress_cb):
                         return None
@@ -630,6 +645,24 @@ def _get_with_auth_fallback(url: str, headers: dict, timeout: int = 30) -> reque
         bearer_headers = dict(headers)
         bearer_headers["Authorization"] = auth_value.replace("Key ", "Bearer ", 1)
         return requests.get(url, headers=bearer_headers, timeout=timeout)
+    return resp
+
+
+def _post_with_auth_fallback(url: str, headers: dict, payload: dict, timeout: int = 30) -> requests.Response:
+    """POST with auth fallback for fal queue submit endpoints.
+
+    Some queue endpoints can reject `Key` auth while accepting `Bearer`.
+    Keep `Key` as primary and retry once with `Bearer` on auth-like failures.
+    """
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    auth_value = headers.get("Authorization", "")
+    if (
+        resp.status_code in (401, 403, 422)
+        and auth_value.startswith("Key ")
+    ):
+        bearer_headers = dict(headers)
+        bearer_headers["Authorization"] = auth_value.replace("Key ", "Bearer ", 1)
+        return requests.post(url, headers=bearer_headers, json=payload, timeout=timeout)
     return resp
 
 

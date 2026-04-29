@@ -9,7 +9,7 @@ from unittest import mock
 
 
 class GuiStartupHotfixTests(unittest.TestCase):
-    def test_ml_backend_env_sets_defaults_without_override(self):
+    def test_ml_backend_env_forces_deterministic_values(self):
         module = importlib.import_module("kling_gui.ml_backend_env")
         with mock.patch.dict(os.environ, {}, clear=True):
             module.ensure_ml_backend_env()
@@ -22,8 +22,8 @@ class GuiStartupHotfixTests(unittest.TestCase):
             clear=True,
         ):
             module.ensure_ml_backend_env()
-            self.assertEqual(os.environ.get("TF_USE_LEGACY_KERAS"), "0")
-            self.assertEqual(os.environ.get("KERAS_BACKEND"), "jax")
+            self.assertEqual(os.environ.get("TF_USE_LEGACY_KERAS"), "1")
+            self.assertEqual(os.environ.get("KERAS_BACKEND"), "tensorflow")
 
     def test_main_window_import_survives_retinaface_init_exception(self):
         real_import = builtins.__import__
@@ -86,6 +86,20 @@ class GuiStartupHotfixTests(unittest.TestCase):
 
 
 class GuiLauncherBatchModeTests(unittest.TestCase):
+    def test_launcher_bootstraps_ml_env_before_dependency_check(self):
+        module = importlib.import_module("gui_launcher")
+        call_order = []
+
+        with mock.patch.object(module, "ensure_ml_backend_env", side_effect=lambda: call_order.append("env")), \
+            mock.patch.object(module, "_run_dependency_bootstrap", side_effect=lambda: call_order.append("deps")), \
+            mock.patch.object(module, "_load_gui_window", return_value=(None, "ImportError: test", "tb")), \
+            mock.patch.object(module, "show_critical_error"), \
+            mock.patch.object(module, "PATH_UTILS_AVAILABLE", False):
+            with self.assertRaises(SystemExit):
+                module.main()
+
+        self.assertEqual(call_order[:2], ["env", "deps"])
+
     def test_batch_mode_import_failure_is_console_only(self):
         module = importlib.import_module("gui_launcher")
 

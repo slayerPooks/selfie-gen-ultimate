@@ -1134,7 +1134,33 @@ class FaceCropTab(tk.Frame):
                 self._after_detect(None, None, "Could not read image with OpenCV")
                 return
 
-            faces = retinaface_cls.detect_faces(source)
+            try:
+                faces = retinaface_cls.detect_faces(source)
+            except Exception as exc:
+                msg = str(exc)
+                lowered = msg.lower()
+                is_backend_runtime = (
+                    "kerastensor" in lowered
+                    or "tensorflow function" in lowered
+                    or "symbolic placeholder" in lowered
+                )
+                if not is_backend_runtime:
+                    raise
+                self.log(
+                    "Face Crop: RetinaFace backend incompatibility detected; "
+                    "falling back to OpenCV detector.",
+                    "warning",
+                )
+                fallback_box = self._detect_face_with_opencv_fallback(img)
+                if fallback_box is None:
+                    self._after_detect(
+                        img,
+                        None,
+                        "No face detected (RetinaFace fallback via OpenCV)",
+                    )
+                    return
+                self._after_detect(img, fallback_box, None)
+                return
             if not faces or len(faces) == 0:
                 self._after_detect(img, None, "No face detected")
                 return
@@ -1161,6 +1187,28 @@ class FaceCropTab(tk.Frame):
 
         except Exception as exc:
             self._after_detect(None, None, str(exc))
+
+    def _detect_face_with_opencv_fallback(self, img):
+        """Fallback detector when RetinaFace runtime is incompatible."""
+        try:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+            classifier = cv2.CascadeClassifier(cascade_path)
+            if classifier.empty():
+                return None
+            faces = classifier.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(60, 60),
+            )
+            if faces is None or len(faces) == 0:
+                return None
+            best = max(faces, key=lambda f: int(f[2]) * int(f[3]))
+            fx, fy, fw, fh = [int(v) for v in best]
+            return fx, fy, fw, fh
+        except Exception:
+            return None
 
     def _after_detect(self, cv2_img, face_box, error):
         def _update():

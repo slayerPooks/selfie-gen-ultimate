@@ -28,7 +28,10 @@ class DependencyHealthCheckTests(unittest.TestCase):
                 return modules[name]
             raise ModuleNotFoundError(name)
 
-        ok, failures = dhc.check_runtime_dependencies(importer=fake_importer)
+        ok, failures = dhc.check_runtime_dependencies(
+            importer=fake_importer,
+            runtime_probe=lambda: (object(), ""),
+        )
         self.assertFalse(ok)
         combined = "\n".join(failures)
         self.assertIn("tensorflow missing __version__", combined)
@@ -50,9 +53,35 @@ class DependencyHealthCheckTests(unittest.TestCase):
                 return modules[name]
             raise ModuleNotFoundError(name)
 
-        ok, failures = dhc.check_runtime_dependencies(importer=fake_importer)
+        ok, failures = dhc.check_runtime_dependencies(
+            importer=fake_importer,
+            runtime_probe=lambda: (object(), ""),
+        )
         self.assertTrue(ok)
         self.assertEqual(failures, [])
+
+    def test_fails_for_retinaface_runtime_probe_incompatibility(self):
+        tf_module = types.SimpleNamespace(__version__="2.16.2")
+        modules = {
+            "tensorflow": tf_module,
+            "tensorflow.compat.v2": types.SimpleNamespace(),
+            "tf_keras": types.SimpleNamespace(__version__="2.16.0"),
+            "retinaface": types.SimpleNamespace(RetinaFace=object()),
+            "cv2": types.SimpleNamespace(),
+            "numpy": types.SimpleNamespace(),
+        }
+
+        def fake_importer(name: str):
+            if name in modules:
+                return modules[name]
+            raise ModuleNotFoundError(name)
+
+        ok, failures = dhc.check_runtime_dependencies(
+            importer=fake_importer,
+            runtime_probe=lambda: (None, "RuntimeError: A KerasTensor cannot be used"),
+        )
+        self.assertFalse(ok)
+        self.assertIn("retinaface runtime loader failed", "\n".join(failures))
 
     def test_verify_in_fresh_process_parses_failures(self):
         completed = types.SimpleNamespace(

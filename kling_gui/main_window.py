@@ -2304,14 +2304,6 @@ class KlingGUIWindow:
         )
         sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        load_session_btn = create_action_button(
-            header,
-            text="Load Session",
-            command=self._dbcmd("header_load_session", self._on_open_sessions),
-            style=TTK_BTN_PRIMARY,
-        )
-        load_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
-
         save_session_btn = create_action_button(
             header,
             text="Save Session",
@@ -2335,15 +2327,6 @@ class KlingGUIWindow:
             style=TTK_BTN_SECONDARY,
         )
         sanitize_folder_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
-
-        # "Add Image" button — browse and add to carousel
-        add_image_btn = create_action_button(
-            header,
-            text="Add Image",
-            command=self._dbcmd("header_add_image", self._browse_and_add_images),
-            style=TTK_BTN_SUCCESS,
-        )
-        add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # Similarity launcher popup toggle
         similarity_btn = create_action_button(

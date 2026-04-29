@@ -104,6 +104,25 @@ class FaceCropLayoutTests(unittest.TestCase):
         self.assertEqual(tab._path_var.value, "/tmp/new.jpg")
         tab._load_source.assert_called_once_with("/tmp/new.jpg", silent=True)
 
+    def test_detect_worker_falls_back_when_retinaface_kerastensor_error(self):
+        tab = FaceCropTab.__new__(FaceCropTab)
+        tab._source_path = "/tmp/source.jpg"
+        tab._after_detect = mock.Mock()
+        tab.log = mock.Mock()
+        fake_img = object()
+        tab._detect_face_with_opencv_fallback = mock.Mock(return_value=(1, 2, 30, 40))
+
+        class _Retina:
+            @staticmethod
+            def detect_faces(_source):
+                raise RuntimeError("A KerasTensor cannot be used as input to a TensorFlow function")
+
+        with mock.patch.object(face_crop_tab_module.cv2, "imread", return_value=fake_img):
+            tab._detect_worker(_Retina)
+
+        tab._detect_face_with_opencv_fallback.assert_called_once_with(fake_img)
+        tab._after_detect.assert_called_once_with(fake_img, (1, 2, 30, 40), None)
+
 
 if __name__ == "__main__":
     unittest.main()

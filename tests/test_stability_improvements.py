@@ -10,7 +10,7 @@ from unittest import mock
 
 from PIL import Image
 
-from fal_utils import fal_queue_poll, upload_to_freeimage, upload_reference_image
+from fal_utils import fal_queue_poll, fal_queue_submit, upload_to_freeimage, upload_reference_image
 from selfie_generator import SelfieGenerator
 from kling_generator_falai import FalAIKlingGenerator
 from kling_gui.main_window import KlingGUIWindow
@@ -126,6 +126,68 @@ class UploadHandleTests(unittest.TestCase):
             self.assertIsNone(processed)
             self.assertIsNone(provider)
             freeimage_mock.assert_not_called()
+
+
+class FalSubmitRetryBehaviorTests(unittest.TestCase):
+    class _FakeResponse:
+        def __init__(self, status_code=200, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload if payload is not None else {}
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    def test_submit_uses_post_auth_fallback_before_failing(self):
+        responses = [
+            self._FakeResponse(
+                status_code=403,
+                payload={"detail": "User is locked. Reason: Exhausted balance."},
+                text='{"detail":"User is locked. Reason: Exhausted balance."}',
+            ),
+            self._FakeResponse(
+                status_code=200,
+                payload={"request_id": "req-1", "status_url": "https://example.com/status"},
+                text='{"request_id":"req-1","status_url":"https://example.com/status"}',
+            ),
+        ]
+        progress = []
+
+        with mock.patch("fal_utils.requests.post", side_effect=responses) as post_mock:
+            result = fal_queue_submit(
+                api_key="test-key",
+                endpoint="fal-ai/test-model",
+                payload={"prompt": "hello"},
+                progress_cb=lambda message, level: progress.append((level, message)),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("request_id"), "req-1")
+        self.assertEqual(post_mock.call_count, 2)
+        self.assertFalse(any(level == "error" and "Submit failed" in message for level, message in progress))
+
+    def test_submit_retry_logs_warning_until_terminal_failure(self):
+        responses = [
+            self._FakeResponse(status_code=500, payload={"detail": "temporary backend failure"}),
+            self._FakeResponse(
+                status_code=200,
+                payload={"request_id": "req-2", "status_url": "https://example.com/status2"},
+            ),
+        ]
+        progress = []
+
+        with mock.patch("fal_utils.requests.post", side_effect=responses), \
+            mock.patch("fal_utils.time.sleep", return_value=None):
+            result = fal_queue_submit(
+                api_key="test-key",
+                endpoint="fal-ai/test-model",
+                payload={"prompt": "hello"},
+                progress_cb=lambda message, level: progress.append((level, message)),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(any(level == "warning" and "Submit retrying" in message for level, message in progress))
+        self.assertFalse(any(level == "error" and "Submit failed" in message for level, message in progress))
 
 
 class SubmitErrorDetailTests(unittest.TestCase):

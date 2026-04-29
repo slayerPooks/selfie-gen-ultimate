@@ -1,4 +1,6 @@
 deepface==0.0.92
+tensorflow==2.16.2; sys_platform != "win32"
+tensorflow-intel==2.16.2; sys_platform == "win32"
 tf-keras==2.16.0
 retina-face==0.0.17
 customtkinter==5.2.2

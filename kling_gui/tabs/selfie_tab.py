@@ -12,6 +12,8 @@ import re
 from typing import Callable, Dict, List, Optional
 
 from ..theme import (
+    BUTTON_FILLED_TEXT_COLOR,
+    BUTTON_TEXT_COLOR,
     COLORS,
     FONT_FAMILY,
     TTK_BTN_COMPACT,
@@ -299,9 +301,9 @@ class SelfieTab(tk.Frame):
                 width=2,
                 font=(FONT_FAMILY, 8, "bold"),
                 bg=COLORS["bg_input"],
-                fg=COLORS["text_light"],
+                fg=BUTTON_TEXT_COLOR,
                 activebackground=COLORS["accent_blue"],
-                activeforeground=COLORS["text_light"],
+                activeforeground=BUTTON_FILLED_TEXT_COLOR,
                 relief=tk.SOLID,
                 bd=1,
                 highlightthickness=0,
@@ -928,9 +930,9 @@ class SelfieTab(tk.Frame):
         active = self._selfie_slot_var.get()
         for i, btn in enumerate(self._slot_buttons, start=1):
             if i == active:
-                btn.config(bg=COLORS["accent_blue"], fg=COLORS["text_light"])
+                btn.config(bg=COLORS["accent_blue"], fg=BUTTON_FILLED_TEXT_COLOR)
             else:
-                btn.config(bg=COLORS["bg_input"], fg=COLORS["text_light"])
+                btn.config(bg=COLORS["bg_input"], fg=BUTTON_TEXT_COLOR)
 
     def _load_current_slot_into_editor(self):
         slot = str(self._selfie_slot_var.get())

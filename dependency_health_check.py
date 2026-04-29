@@ -10,21 +10,34 @@ import subprocess
 import sys
 from typing import Callable
 
+from kling_gui.ml_backend_env import ensure_ml_backend_env
 
 ImportFn = Callable[[str], object]
+RuntimeProbeFn = Callable[[], tuple[object | None, str]]
 
 REPAIR_PACKAGES = [
     "tensorflow==2.16.2",
     "tf-keras==2.16.0",
     "retina-face==0.0.17",
+    "deepface==0.0.92",
 ]
 
 if sys.platform == "win32":
     REPAIR_PACKAGES.insert(1, "tensorflow-intel==2.16.2")
 
 
-def check_runtime_dependencies(importer: ImportFn = importlib.import_module) -> tuple[bool, list[str]]:
+def _default_retinaface_runtime_probe() -> tuple[object | None, str]:
+    from kling_gui.tabs.face_crop_tab import _load_retinaface
+
+    return _load_retinaface()
+
+
+def check_runtime_dependencies(
+    importer: ImportFn = importlib.import_module,
+    runtime_probe: RuntimeProbeFn = _default_retinaface_runtime_probe,
+) -> tuple[bool, list[str]]:
     """Validate the runtime face-stack imports used by the GUI."""
+    ensure_ml_backend_env()
     failures: list[str] = []
 
     try:
@@ -59,6 +72,14 @@ def check_runtime_dependencies(importer: ImportFn = importlib.import_module) -> 
             importer(module_name)
         except Exception as exc:
             failures.append(f"{module_name} import failed: {type(exc).__name__}: {exc}")
+
+    if not failures:
+        try:
+            retinaface_cls, retinaface_error = runtime_probe()
+            if retinaface_cls is None:
+                failures.append(f"retinaface runtime loader failed: {retinaface_error}")
+        except Exception as exc:
+            failures.append(f"retinaface runtime probe failed: {type(exc).__name__}: {exc}")
 
     return len(failures) == 0, failures
 

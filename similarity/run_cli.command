@@ -2,9 +2,11 @@
 
 # Ensure we are in the directory where the script is located
 cd "$(dirname "$0")" || exit 1
+export TF_USE_LEGACY_KERAS=1
+export KERAS_BACKEND=tensorflow
 
 pick_supported_python() {
-    for candidate in python3.12 python3.11 python3.10 python3; do
+    for candidate in python3.12 python3.11 python3.10 python3.9 python3; do
         if ! command -v "$candidate" >/dev/null 2>&1; then
             continue
         fi

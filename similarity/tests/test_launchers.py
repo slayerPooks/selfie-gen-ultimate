@@ -58,20 +58,23 @@ class TestLauncherScripts(unittest.TestCase):
                 for needle in needles:
                     self.assertIn(needle, text)
 
-    def test_gui_cli_launcher_setup_blocks_match_per_platform(self) -> None:
-        windows_setup_gui = self._extract_setup_block(_read("run_gui.bat"), ":: Check if .venv exists", ":: Run the application")
-        windows_setup_cli = self._extract_setup_block(_read("run_cli.bat"), ":: Check if .venv exists", ":: Run the application")
-        self.assertEqual(windows_setup_gui, windows_setup_cli)
+    def test_gui_launchers_require_tkinter_capability(self) -> None:
+        command_text = _read("run_gui.command")
+        self.assertIn('import tkinter', command_text)
+        self.assertIn("lacks Tk support", command_text)
 
-        command_setup_gui = self._extract_setup_block(_read("run_gui.command"), "# Check if .venv exists", "# Run the application")
-        command_setup_cli = self._extract_setup_block(_read("run_cli.command"), "# Check if .venv exists", "# Run the application")
-        self.assertEqual(command_setup_gui, command_setup_cli)
+        windows_text = _read("run_gui.bat")
+        self.assertIn("import sys, tkinter", windows_text)
+        self.assertIn("lacks Tk support", windows_text)
 
-    @staticmethod
-    def _extract_setup_block(text: str, start_marker: str, end_marker: str) -> str:
-        start = text.index(start_marker)
-        end = text.index(end_marker)
-        return text[start:end].strip()
+    def test_cli_launchers_only_require_supported_python_version(self) -> None:
+        command_text = _read("run_cli.command")
+        self.assertNotIn("import tkinter", command_text)
+        self.assertIn("requires 3.9-3.12", command_text)
+
+        windows_text = _read("run_cli.bat")
+        self.assertNotIn("import sys, tkinter", windows_text)
+        self.assertIn("requires 3.9-3.12", windows_text)
 
 
 if __name__ == "__main__":

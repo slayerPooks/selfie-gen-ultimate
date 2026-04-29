@@ -12,6 +12,13 @@ import os
 import traceback
 from pathlib import Path
 
+try:
+    from kling_gui.ml_backend_env import ensure_ml_backend_env
+except Exception:
+    def ensure_ml_backend_env() -> None:  # type: ignore[redef]
+        os.environ["TF_USE_LEGACY_KERAS"] = "1"
+        os.environ["KERAS_BACKEND"] = "tensorflow"
+
 
 def get_tkinter_setup_hint() -> str:
     """Return a platform-aware help message for missing Tk support."""
@@ -96,6 +103,8 @@ def show_critical_error(title, message):
 
 def main():
     """Launch the Tkinter GUI directly."""
+    # Apply TensorFlow/Keras compatibility env before any dependency checks/imports.
+    ensure_ml_backend_env()
     _run_dependency_bootstrap()
 
     KlingGUIWindow, import_error, import_traceback = _load_gui_window()
