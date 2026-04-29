@@ -20,5 +20,21 @@
     "fal-ai/kling-video/v2.5-turbo/pro/image-to-video": "★ Fast & affordable workhorse\n\n• Quick generation times at a budget-friendly price.",
     "fal-ai/minimax-video/image-to-video": "★ Ranked #5 for head-turn workflows\n\n• Budget Stability: Offers much of the same temporal consistency and clean lighting as the Pro version.\n• Best cheap option that preserves forensic integrity.",
     "fal-ai/hunyuan-video/v1.5/image-to-video": "★ Ranked #6 for head-turn workflows\n\n• Anti-Jitter Architecture: Specifically designed to reduce frame-to-frame jitter — crucial for slow, smooth motion.\n• Strong Silhouettes: Keeps the subject's outline sharp against the background, preventing warp as the head moves."
-  }
+  },
+  "selfie_models": [
+    {
+      "endpoint": "openai/gpt-image-2/edit",
+      "label": "GPT Image 2 Edit",
+      "slug": "gpt-image-2-edit",
+      "provider": "fal",
+      "api_url": "https://fal.ai/models/openai/gpt-image-2/edit/api"
+    },
+    {
+      "endpoint": "fal-ai/nano-banana-2/edit",
+      "label": "Nano Banana 2 Edit",
+      "slug": "nano-banana-2-edit",
+      "provider": "fal",
+      "api_url": "https://fal.ai/models/fal-ai/nano-banana-2/edit/api"
+    }
+  ]
 }

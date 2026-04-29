@@ -5,6 +5,7 @@ import random
 import logging
 import re
 import threading
+import json
 from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
 
@@ -51,6 +52,8 @@ class SelfieGenerator:
             "api_url": "https://fal.ai/models/fal-ai/nano-banana-2/edit/api",
         },
     ]
+    _SELFIE_MODELS_FILE = Path(__file__).resolve().parent / "models.json"
+    _FALLBACK_SELFIE_MODELS = [dict(item) for item in AVAILABLE_MODELS]
 
     def __init__(self, api_key: str, freeimage_key: Optional[str] = None, bfl_api_key: Optional[str] = None):
         self.api_key = api_key
@@ -58,6 +61,7 @@ class SelfieGenerator:
         self._bfl_api_key = bfl_api_key or ""
         self._progress_callback: Optional[Callable[[str, str], None]] = None
         self._cancel_event: Optional["threading.Event"] = None
+        self.__class__._refresh_available_models()
 
     def set_progress_callback(self, cb: Callable[[str, str], None]):
         self._progress_callback = cb
@@ -72,10 +76,43 @@ class SelfieGenerator:
     @classmethod
     def get_available_models(cls) -> List[Dict[str, str]]:
         """Return supported selfie model metadata for UI rendering."""
+        cls._refresh_available_models()
         return [dict(model) for model in cls.AVAILABLE_MODELS]
 
     @classmethod
+    def _refresh_available_models(cls) -> None:
+        """Load selfie model metadata from models.json with fallback."""
+        try:
+            with cls._SELFIE_MODELS_FILE.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            models_raw = payload.get("selfie_models", [])
+            validated: List[Dict[str, str]] = []
+            for item in models_raw:
+                if not isinstance(item, dict):
+                    continue
+                endpoint = str(item.get("endpoint", "")).strip()
+                label = str(item.get("label", endpoint)).strip()
+                if not endpoint:
+                    continue
+                validated.append(
+                    {
+                        "endpoint": endpoint,
+                        "label": label or endpoint,
+                        "slug": str(item.get("slug", "")).strip(),
+                        "provider": str(item.get("provider", "fal")).strip() or "fal",
+                        "api_url": str(item.get("api_url", "")).strip(),
+                    }
+                )
+            if validated:
+                cls.AVAILABLE_MODELS = validated
+                return
+        except Exception as exc:
+            logger.warning("Failed loading selfie_models from models.json: %s", exc)
+        cls.AVAILABLE_MODELS = [dict(item) for item in cls._FALLBACK_SELFIE_MODELS]
+
+    @classmethod
     def get_model_label(cls, endpoint: str) -> str:
+        cls._refresh_available_models()
         for model in cls.AVAILABLE_MODELS:
             if model["endpoint"] == endpoint:
                 return model["label"]
@@ -104,6 +141,7 @@ class SelfieGenerator:
 
     @classmethod
     def _model_short_name(cls, endpoint: str) -> str:
+        cls._refresh_available_models()
         for model in cls.AVAILABLE_MODELS:
             if model["endpoint"] == endpoint:
                 slug = model.get("slug", "")
@@ -226,20 +264,23 @@ class SelfieGenerator:
             return False
 
         from fal_utils import (
-            upload_to_freeimage,
+            upload_reference_image,
             fal_queue_submit,
             fal_queue_poll,
             fal_download_file,
         )
 
         self._report("Uploading identity reference...", "upload")
-        image_url, _ = upload_to_freeimage(
+        image_url, _, upload_provider = upload_reference_image(
             image_path, progress_cb=self._progress_callback,
-            api_key=self._freeimage_key,
+            fal_api_key=self.api_key,
+            freeimage_api_key=self._freeimage_key,
         )
         if not image_url:
             self._report("Failed to upload image", "error")
             return False
+        if upload_provider:
+            self._report(f"Reference upload provider: {upload_provider}", "upload")
 
         payload = self._build_payload(
             model_endpoint=resolved_endpoint,

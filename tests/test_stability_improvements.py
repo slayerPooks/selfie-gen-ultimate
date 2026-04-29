@@ -1,0 +1,395 @@
+import os
+import inspect
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from PIL import Image
+
+from fal_utils import fal_queue_poll, upload_to_freeimage
+from selfie_generator import SelfieGenerator
+from kling_gui.main_window import KlingGUIWindow
+from kling_gui import theme
+from kling_gui.carousel_widget import ImageCarousel
+from kling_gui.config_panel import ConfigPanel
+from kling_gui.tabs.selfie_tab import SelfieTab
+from kling_gui.tabs.video_tab import VideoTab
+from kling_gui.drop_zone import DropZone
+
+
+class FalPollCancellationTests(unittest.TestCase):
+    def test_cancel_interrupts_poll_sleep(self):
+        cancel_event = threading.Event()
+
+        def _set_cancel():
+            time.sleep(0.1)
+            cancel_event.set()
+
+        worker = threading.Thread(target=_set_cancel, daemon=True)
+        worker.start()
+
+        start = time.monotonic()
+        with mock.patch("fal_utils._get_with_auth_fallback", side_effect=AssertionError("should not reach HTTP call")):
+            result = fal_queue_poll(
+                api_key="dummy",
+                status_url="https://example.com/status",
+                progress_cb=None,
+                max_wait_seconds=30,
+                cancel_event=cancel_event,
+            )
+        elapsed = time.monotonic() - start
+
+        self.assertIsNone(result)
+        self.assertLess(elapsed, 1.0)
+
+
+class UploadHandleTests(unittest.TestCase):
+    def test_upload_error_releases_source_file_handle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "source.png")
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(image_path)
+
+            with mock.patch("fal_utils.requests.post", side_effect=RuntimeError("network down")):
+                url, _img = upload_to_freeimage(
+                    image_path=image_path,
+                    api_key="dummy",
+                    progress_cb=None,
+                )
+            self.assertIsNone(url)
+
+            renamed_path = os.path.join(tmpdir, "renamed.png")
+            os.rename(image_path, renamed_path)
+            self.assertTrue(os.path.exists(renamed_path))
+
+
+class DeepMergeTests(unittest.TestCase):
+    def test_deep_merge_dict_preserves_nested_defaults(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        base = {
+            "saved_prompts": {"1": "a", "2": "b"},
+            "selfie_selected_models": {"m1": True, "m2": False},
+            "simple": 1,
+        }
+        updates = {
+            "saved_prompts": {"1": "override"},
+            "selfie_selected_models": {"m2": True},
+            "simple": 3,
+        }
+        merged = window._deep_merge_dict(base, updates)
+        self.assertEqual(merged["saved_prompts"]["1"], "override")
+        self.assertEqual(merged["saved_prompts"]["2"], "b")
+        self.assertEqual(merged["selfie_selected_models"]["m1"], True)
+        self.assertEqual(merged["selfie_selected_models"]["m2"], True)
+        self.assertEqual(merged["simple"], 3)
+
+
+class SelfieModelLoadingTests(unittest.TestCase):
+    def test_selfie_models_loaded_from_models_json(self):
+        payload = {
+            "selfie_models": [
+                {
+                    "endpoint": "fal-ai/test-model/edit",
+                    "label": "Test Model",
+                    "slug": "test-model",
+                    "provider": "fal",
+                    "api_url": "https://fal.ai/models/fal-ai/test-model/edit/api",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            models_path = Path(tmpdir) / "models.json"
+            models_path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+            with mock.patch.object(SelfieGenerator, "_SELFIE_MODELS_FILE", models_path):
+                SelfieGenerator._refresh_available_models()
+                models = SelfieGenerator.get_available_models()
+        self.assertEqual(models[0]["endpoint"], "fal-ai/test-model/edit")
+        self.assertEqual(models[0]["label"], "Test Model")
+
+
+class MacButtonFactoryTests(unittest.TestCase):
+    def test_macos_button_factory_uses_tk_button_styling(self):
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        try:
+            with mock.patch.object(theme, "IS_MACOS", True):
+                btn = theme.create_action_button(root, text="X", command=lambda: None)
+            self.assertEqual(str(btn.cget("highlightbackground")), theme.COLORS["bg_main"])
+            self.assertGreaterEqual(int(btn.cget("padx")), 12)
+            self.assertGreaterEqual(int(btn.cget("pady")), 8)
+        finally:
+            root.destroy()
+
+
+class SelfieSlotStateTests(unittest.TestCase):
+    class _FakeVar:
+        def __init__(self):
+            self.value = None
+        def set(self, value):
+            self.value = value
+        def get(self):
+            return self.value
+
+    class _FakeText:
+        def __init__(self, text=""):
+            self.text = text
+            self.state = "normal"
+        def get(self, *_args):
+            return self.text
+        def delete(self, *_args):
+            self.text = ""
+        def insert(self, *_args):
+            self.text = _args[-1]
+        def config(self, **kwargs):
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    class _FakeEntry:
+        def __init__(self):
+            self.state = None
+        def config(self, **kwargs):
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    class _FakeButton:
+        def config(self, **_kwargs):
+            return None
+
+    def test_slot_defaults_and_migration(self):
+        tab = SelfieTab.__new__(SelfieTab)
+        tab.SLOT_COUNT = 10
+        tab.DEFAULT_PROMPT_TEMPLATE = "DEFAULT"
+        tab.config = {"selfie_prompt_template": "LEGACY TEMPLATE"}
+        tab._selfie_slot_var = self._FakeVar()
+        tab._init_selfie_prompt_slots()
+
+        self.assertEqual(tab.config["selfie_current_prompt_slot"], 1)
+        self.assertEqual(tab.config["selfie_saved_prompts"]["1"], "LEGACY TEMPLATE")
+        self.assertEqual(tab.config["selfie_prompt_titles"]["1"], "")
+        self.assertEqual(tab._selfie_slot_var.get(), 1)
+
+    def test_slot_current_clamped(self):
+        tab = SelfieTab.__new__(SelfieTab)
+        tab.SLOT_COUNT = 10
+        tab.DEFAULT_PROMPT_TEMPLATE = "DEFAULT"
+        tab.config = {"selfie_current_prompt_slot": 99, "selfie_saved_prompts": {}, "selfie_prompt_titles": {}}
+        tab._selfie_slot_var = self._FakeVar()
+        tab._init_selfie_prompt_slots()
+        self.assertEqual(tab.config["selfie_current_prompt_slot"], 1)
+
+    def test_persist_does_not_overwrite_custom_title_without_explicit_title_save(self):
+        tab = SelfieTab.__new__(SelfieTab)
+        tab.SLOT_COUNT = 10
+        tab.DEFAULT_PROMPT_TEMPLATE = "DEFAULT"
+        tab._selfie_slot_var = self._FakeVar()
+        tab._selfie_slot_var.set(1)
+        tab._slot_title_var = self._FakeVar()
+        tab._slot_title_var.set("Unsaved UI Title")
+        tab.prompt_template_text = self._FakeText("New prompt text")
+        tab.config = {
+            "selfie_saved_prompts": {"1": "Old prompt"},
+            "selfie_prompt_titles": {"1": "Custom Saved Title"},
+        }
+        tab._persist_active_slot_prompt(persist_title=False)
+        self.assertEqual(tab.config["selfie_saved_prompts"]["1"], "New prompt text")
+        self.assertEqual(tab.config["selfie_prompt_titles"]["1"], "Custom Saved Title")
+
+    def test_persist_with_title_save_updates_custom_title(self):
+        tab = SelfieTab.__new__(SelfieTab)
+        tab.SLOT_COUNT = 10
+        tab.DEFAULT_PROMPT_TEMPLATE = "DEFAULT"
+        tab._selfie_slot_var = self._FakeVar()
+        tab._selfie_slot_var.set(2)
+        tab._slot_title_var = self._FakeVar()
+        tab._slot_title_var.set("My Slot Two")
+        tab.prompt_template_text = self._FakeText("Prompt two")
+        tab.config = {
+            "selfie_saved_prompts": {"2": "Old"},
+            "selfie_prompt_titles": {"2": "Prompt 2"},
+        }
+        tab._persist_active_slot_prompt(persist_title=True)
+        self.assertEqual(tab.config["selfie_prompt_titles"]["2"], "My Slot Two")
+        self.assertEqual(tab.config["selfie_current_prompt_slot"], 2)
+
+    def test_template_edit_mode_uses_readonly_outside_edit(self):
+        tab = SelfieTab.__new__(SelfieTab)
+        tab.prompt_template_text = self._FakeText("")
+        tab._slot_title_entry = self._FakeEntry()
+        tab.edit_template_btn = self._FakeButton()
+        tab.save_template_btn = self._FakeButton()
+        tab._set_prompt_template_edit_mode(True)
+        self.assertEqual(tab._slot_title_entry.state, "normal")
+        tab._set_prompt_template_edit_mode(False)
+        self.assertEqual(tab._slot_title_entry.state, "readonly")
+
+    def test_step2_layout_no_extra_slot_title_rows(self):
+        src = inspect.getsource(SelfieTab._build_ui)
+        self.assertNotIn("slot_row =", src)
+        self.assertNotIn("title_row =", src)
+
+
+class DropZoneWindowsRenderTests(unittest.TestCase):
+    def test_compact_windows_uses_canvas_title(self):
+        try:
+            root = __import__("tkinter").Tk()
+        except Exception as exc:
+            self.skipTest(f"Tk unavailable in this environment: {exc}")
+        root.withdraw()
+        try:
+            with mock.patch("kling_gui.drop_zone.sys.platform", "win32"), mock.patch("kling_gui.drop_zone.HAS_DND", False):
+                zone = DropZone(root, on_files_dropped=lambda *_: None, compact=True)
+            self.assertIsNotNone(zone._main_text_canvas)
+        finally:
+            root.destroy()
+
+
+class OldcamRerunFlowTests(unittest.TestCase):
+    def test_config_panel_contains_oldcam_rerun_icon_next_to_version_selector(self):
+        src = inspect.getsource(ConfigPanel._setup_ui)
+        version_pos = src.find("self.oldcam_version_combo")
+        rerun_pos = src.find("self.oldcam_rerun_btn")
+        self.assertTrue(version_pos >= 0 and rerun_pos > version_pos)
+
+    def test_resolve_oldcam_rerun_source_prefers_base_video_when_available(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "clip_looped.mp4"
+            oldcam = Path(tmpdir) / "clip_looped-oldcam-v8.mp4"
+            base.write_bytes(b"base")
+            oldcam.write_bytes(b"oldcam")
+            resolved = window._resolve_oldcam_rerun_source(str(oldcam))
+        self.assertEqual(resolved, str(base))
+        window._log.assert_not_called()
+
+    def test_oldcam_rerun_uses_selected_history_output_first(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        window.config = {"oldcam_version": "v7"}
+        window.history = []
+        window.queue_manager = mock.Mock()
+        window.queue_manager.rerun_oldcam_only.return_value = True
+        window._get_latest_completed_history = lambda: {"output": "unused"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selected_path = Path(tmpdir) / "picked.mp4"
+            selected_path.write_bytes(b"video")
+            window._get_selected_history = lambda: {"output": str(selected_path)}
+            window._on_oldcam_rerun_requested()
+
+        args, kwargs = window.queue_manager.rerun_oldcam_only.call_args
+        self.assertEqual(args[0], str(selected_path))
+        self.assertIn("completion_callback", kwargs)
+
+    def test_oldcam_rerun_falls_back_to_latest_completed_when_no_selection(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._log = mock.Mock()
+        window.config = {"oldcam_version": "v8"}
+        window.history = []
+        window.queue_manager = mock.Mock()
+        window.queue_manager.rerun_oldcam_only.return_value = True
+        window._get_selected_history = lambda: None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            latest = Path(tmpdir) / "latest.mp4"
+            latest.write_bytes(b"video")
+            window._get_latest_completed_history = lambda: {"output": str(latest)}
+            window._on_oldcam_rerun_requested()
+
+        args, _kwargs = window.queue_manager.rerun_oldcam_only.call_args
+        self.assertEqual(args[0], str(latest))
+
+
+class CarouselFolderButtonTests(unittest.TestCase):
+    class _FakeSession:
+        def __init__(self, entry):
+            self.active_entry = entry
+
+    def test_open_active_folder_opens_parent_dir(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = str(Path(tmpdir) / "active.png")
+            Path(image_path).write_bytes(b"x")
+            carousel.image_session = self._FakeSession(SimpleNamespace(path=image_path))
+            carousel.log = mock.Mock()
+            carousel._open_path_in_explorer = mock.Mock()
+
+            carousel._on_open_active_image_folder()
+
+            carousel._open_path_in_explorer.assert_called_once_with(tmpdir)
+            carousel.log.assert_not_called()
+
+    def test_open_active_folder_warns_when_no_active_entry(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        carousel.image_session = self._FakeSession(None)
+        carousel.log = mock.Mock()
+        carousel._open_path_in_explorer = mock.Mock()
+
+        carousel._on_open_active_image_folder()
+
+        carousel._open_path_in_explorer.assert_not_called()
+        carousel.log.assert_called_once_with(
+            "No active carousel image to open folder for",
+            "warning",
+        )
+
+    def test_open_active_folder_warns_when_parent_folder_missing(self):
+        carousel = ImageCarousel.__new__(ImageCarousel)
+        missing_path = str(Path("Z:/path/that/does/not/exist/image.png"))
+        carousel.image_session = self._FakeSession(SimpleNamespace(path=missing_path))
+        carousel.log = mock.Mock()
+        carousel._open_path_in_explorer = mock.Mock()
+
+        carousel._on_open_active_image_folder()
+
+        carousel._open_path_in_explorer.assert_not_called()
+        carousel.log.assert_called_once_with(
+            "No folder to open for active carousel image",
+            "warning",
+        )
+
+    def test_similarity_row_button_order_includes_folder_icon_before_auto(self):
+        src = inspect.getsource(ImageCarousel._build_panel)
+        ref_pos = src.find("self._ref_btn")
+        compare_pos = src.find("self.compare_btn")
+        folder_pos = src.find("self.open_active_folder_btn")
+        auto_pos = src.find("self._auto_chk")
+        self.assertTrue(0 <= ref_pos < compare_pos < folder_pos < auto_pos)
+
+    def test_similarity_row_buttons_use_compact_style(self):
+        src = inspect.getsource(ImageCarousel._build_panel)
+        self.assertIn("self._ref_btn = ttk.Button(", src)
+        self.assertIn("self.compare_btn = ttk.Button(", src)
+        self.assertIn("self.open_active_folder_btn = ttk.Button(", src)
+        self.assertGreaterEqual(src.count("style=TTK_BTN_COMPACT"), 5)
+
+
+class Step3UiTighteningTests(unittest.TestCase):
+    def test_setup_ui_keeps_queue_panel_hidden(self):
+        src = inspect.getsource(KlingGUIWindow._setup_ui)
+        self.assertIn("self._queue_panel_visible = False", src)
+        self.assertIn("if self._queue_panel_visible:", src)
+
+    def test_queue_controls_are_disabled_in_setup(self):
+        src = inspect.getsource(KlingGUIWindow._setup_controls)
+        self.assertIn("self._set_queue_controls_enabled(False)", src)
+
+    def test_update_queue_display_safe_when_widgets_missing(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window._update_queue_display()
+
+    def test_queue_backend_clear_still_callable(self):
+        window = KlingGUIWindow.__new__(KlingGUIWindow)
+        window.queue_manager = mock.Mock()
+        window._clear_queue()
+        window.queue_manager.clear_queue.assert_called_once()
+
+    def test_video_tab_helper_text_no_queue_wording(self):
+        src = inspect.getsource(VideoTab.__init__)
+        self.assertIn("Use active carousel image for video generation", src)
+        self.assertNotIn("video queue", src)
+
+
+if __name__ == "__main__":
+    unittest.main()

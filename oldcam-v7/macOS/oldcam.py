@@ -52,7 +52,7 @@ def create_vignette_mask(height, width, strength=0.04):
 
 def build_default_output_path(input_path):
     path = Path(input_path)
-    return str(path.with_name(f"{path.stem}-oldcam{path.suffix}"))
+    return str(path.with_name(f"{path.stem}-oldcam-v7{path.suffix}"))
 
 
 def build_preview_output_path(input_path):

@@ -8,6 +8,7 @@ import logging
 import re
 import subprocess
 import sys
+import shutil
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Tuple
 from pathlib import Path
@@ -358,6 +359,7 @@ class QueueManager:
         self._stop_flag = False
         self._oldcam_deps_checked = False
         self._oldcam_deps_ready = False
+        self._oldcam_rerun_thread: Optional[threading.Thread] = None
 
     def log_verbose(self, message: str, level: str = "info"):
         """Log a message only if verbose mode is enabled."""
@@ -513,6 +515,126 @@ class QueueManager:
                 "failed": sum(1 for item in self.items if item.status == "failed"),
                 "total": len(self.items),
             }
+
+    def _get_next_incremented_oldcam_input(self, source_video: Path, version: str) -> Path:
+        """Return a copied input path whose derived oldcam output does not exist."""
+        counter = 2
+        while True:
+            candidate_input = source_video.with_name(
+                f"{source_video.stem}_{counter}{source_video.suffix}"
+            )
+            candidate_output = self._build_oldcam_output_path(candidate_input, version)
+            if not candidate_input.exists() and not candidate_output.exists():
+                shutil.copy2(source_video, candidate_input)
+                return candidate_input
+            counter += 1
+
+    def rerun_oldcam_only(
+        self,
+        video_path: str,
+        completion_callback: Optional[
+            Callable[[bool, str, Optional[str], Optional[str]], None]
+        ] = None,
+    ) -> bool:
+        """Apply Oldcam-only rerun to an existing video without new Kling generation.
+
+        Args:
+            video_path: Existing video file path used as Oldcam source.
+            completion_callback: Optional callback(success, source_video, output_path, error).
+        """
+        source_video = Path(str(video_path or "")).expanduser().resolve()
+        if not source_video.exists() or not source_video.is_file():
+            message = f"Oldcam rerun source video not found: {source_video}"
+            self.log(message, "warning")
+            if completion_callback:
+                completion_callback(False, str(source_video), None, message)
+            return False
+
+        if self.is_running:
+            message = "Cannot run Oldcam rerun while queue processing is active"
+            self.log(message, "warning")
+            if completion_callback:
+                completion_callback(False, str(source_video), None, message)
+            return False
+
+        if self._oldcam_rerun_thread and self._oldcam_rerun_thread.is_alive():
+            message = "Oldcam rerun already running"
+            self.log(message, "warning")
+            if completion_callback:
+                completion_callback(False, str(source_video), None, message)
+            return False
+
+        def _worker():
+            temp_input: Optional[Path] = None
+            try:
+                config = self.get_config()
+                version = self._get_oldcam_version()
+                allow_reprocess = bool(config.get("allow_reprocess", False))
+                reprocess_mode = str(config.get("reprocess_mode", "increment") or "increment").lower()
+                expected_output = self._build_oldcam_output_path(source_video, version)
+                run_input = source_video
+
+                if expected_output.exists():
+                    if not allow_reprocess:
+                        message = (
+                            f"Oldcam {version} output already exists: {expected_output.name}. "
+                            "Enable 'Allow reprocessing' to rerun."
+                        )
+                        self.log(message, "warning")
+                        if completion_callback:
+                            completion_callback(False, str(source_video), None, message)
+                        return
+
+                    if reprocess_mode == "overwrite":
+                        try:
+                            expected_output.unlink()
+                            self.log(f"Deleted existing Oldcam output: {expected_output.name}", "warning")
+                        except Exception as exc:
+                            message = f"Could not delete existing Oldcam output: {exc}"
+                            self.log(message, "error")
+                            if completion_callback:
+                                completion_callback(False, str(source_video), None, message)
+                            return
+                    else:
+                        temp_input = self._get_next_incremented_oldcam_input(source_video, version)
+                        run_input = temp_input
+                        expected_output = self._build_oldcam_output_path(run_input, version)
+                        self.log(f"Oldcam rerun increment target: {expected_output.name}", "info")
+
+                self.log(
+                    f"Oldcam-only rerun: source={source_video.name}, version={version}",
+                    "info",
+                )
+                output_path = self._oldcam_video(str(run_input), QueueItem(str(source_video)))
+                if output_path and Path(output_path).exists():
+                    self.log(f"Oldcam-only rerun complete: {Path(output_path).name}", "success")
+                    if completion_callback:
+                        completion_callback(True, str(source_video), str(output_path), None)
+                    return
+
+                message = f"Oldcam-only rerun failed for {source_video.name}"
+                self.log(message, "warning")
+                if completion_callback:
+                    completion_callback(False, str(source_video), None, message)
+            except Exception as exc:
+                message = f"Oldcam-only rerun error: {exc}"
+                self.log(message, "error")
+                if completion_callback:
+                    completion_callback(False, str(source_video), None, message)
+            finally:
+                if temp_input is not None:
+                    try:
+                        temp_input.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        self._oldcam_rerun_thread = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name="oldcam-rerun-worker",
+        )
+        self._oldcam_rerun_thread.start()
+        return True
 
     def _get_next_pending(self) -> Optional[QueueItem]:
         """Get next pending item and mark it as processing."""
@@ -886,19 +1008,30 @@ class QueueManager:
             self.log(f"Error creating looped video: {e}", "warning")
             return None
 
-    def _resolve_oldcam_dir(self) -> Path:
-        """Resolve oldcam-v7 directory for script and frozen builds."""
+    def _get_oldcam_version(self) -> str:
+        """Return configured Oldcam version with backward-compatible default."""
+        version = str(self.get_config().get("oldcam_version", "v7")).lower()
+        return version if version in ("v7", "v8") else "v7"
+
+    def _build_oldcam_output_path(self, input_path: Path, version: str) -> Path:
+        """Build versioned Oldcam output path next to input video."""
+        suffix = "-oldcam-v8" if version == "v8" else "-oldcam-v7"
+        return input_path.with_name(f"{input_path.stem}{suffix}{input_path.suffix}")
+
+    def _resolve_oldcam_dir(self, version: str = "v7") -> Path:
+        """Resolve selected oldcam directory for script and frozen builds."""
+        folder_name = "oldcam-v8" if version == "v8" else "oldcam-v7"
         app_dir = Path(get_app_dir())
         resource_dir = Path(get_resource_dir())
         candidates = [
-            app_dir / "oldcam-v7",
-            resource_dir / "oldcam-v7",
-            Path(__file__).parent.parent.resolve() / "oldcam-v7",
+            app_dir / folder_name,
+            resource_dir / folder_name,
+            Path(__file__).parent.parent.resolve() / folder_name,
         ]
         for candidate in candidates:
             if candidate.exists():
                 return candidate
-        return app_dir / "oldcam-v7"
+        return app_dir / folder_name
 
     def _ensure_oldcam_dependencies(self, oldcam_dir: Path) -> bool:
         """Check Oldcam requirements in current interpreter and emit install guidance."""
@@ -929,7 +1062,7 @@ class QueueManager:
 
     def _oldcam_video(self, video_path: str, item: QueueItem) -> Optional[str]:
         """
-        Process the video with Oldcam V7.
+        Process the video with selected Oldcam version.
 
         Args:
             video_path: Path to the generated or looped video
@@ -937,17 +1070,18 @@ class QueueManager:
         """
         del item  # Reserved for future per-item status hooks
         try:
-            oldcam_dir = self._resolve_oldcam_dir()
+            version = self._get_oldcam_version()
+            oldcam_dir = self._resolve_oldcam_dir(version)
             launcher_path = oldcam_dir / "launcher.py"
             if not launcher_path.exists():
-                self.log("Oldcam launcher not found", "warning")
+                self.log(f"Oldcam {version} launcher not found", "warning")
                 return None
 
             if not self._ensure_oldcam_dependencies(oldcam_dir):
-                self.log("Skipping Oldcam Finish due to missing dependencies", "warning")
+                self.log(f"Skipping Oldcam {version} Finish due to missing dependencies", "warning")
                 return None
 
-            self.log("Applying Oldcam Finish...", "info")
+            self.log(f"Applying Oldcam {version} Finish...", "info")
             run_cmd = [sys.executable, "-u", str(launcher_path), video_path]
             completed = subprocess.run(
                 run_cmd,
@@ -959,14 +1093,14 @@ class QueueManager:
             )
             if completed.returncode == 0:
                 input_path = Path(video_path)
-                oldcam_output = input_path.with_name(f"{input_path.stem}-oldcam{input_path.suffix}")
+                oldcam_output = self._build_oldcam_output_path(input_path, version)
                 if oldcam_output.exists():
-                    self.log(f"Oldcam Finish applied: {oldcam_output.name}", "success")
+                    self.log(f"Oldcam {version} Finish applied: {oldcam_output.name}", "success")
                     return str(oldcam_output)
-                self.log("Oldcam process completed but output file was not found", "warning")
+                self.log(f"Oldcam {version} process completed but output file was not found", "warning")
                 return None
 
-            self.log(f"Oldcam Finish failed (code {completed.returncode})", "warning")
+            self.log(f"Oldcam {version} Finish failed (code {completed.returncode})", "warning")
             err = (completed.stderr or completed.stdout or "").strip()
             if err:
                 self.log(err.splitlines()[-1], "warning")

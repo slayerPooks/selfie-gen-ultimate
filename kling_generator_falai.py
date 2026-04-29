@@ -344,68 +344,18 @@ class FalAIKlingGenerator:
             self._progress_callback(message, level)
 
     def upload_to_freeimage(self, image_path: str) -> Optional[str]:
-        """Upload image to freeimage.host"""
+        """Upload image using fal CDN primary with freeimage fallback."""
+        from fal_utils import upload_reference_image
         try:
-            img = Image.open(image_path)
-
-            # Apply EXIF orientation (phone photos are often stored rotated
-            # with an EXIF tag indicating the correct orientation)
-            img = ImageOps.exif_transpose(img)
-
-            # Resize if needed
-            max_size = 1200
-            if img.width > max_size or img.height > max_size:
-                if self.verbose:
-                    logger.info(f"Resizing from {img.width}x{img.height}")
-                self._report_progress(
-                    f"Resizing from {img.width}x{img.height}", "resize"
-                )
-                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-
-            # Convert to RGB
-            if img.mode in ("RGBA", "LA", "P"):
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "P":
-                    img = img.convert("RGBA")
-                background.paste(
-                    img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None
-                )
-                img = background
-
-            # Compress to JPEG
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=85, optimize=True)
-            buffer.seek(0)
-            image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
-
-            if self.verbose:
-                logger.info(f"Uploading {Path(image_path).name} to freeimage.host...")
-            self._report_progress(
-                f"Uploading {Path(image_path).name} to freeimage.host...", "upload"
+            image_url, _, provider = upload_reference_image(
+                image_path=image_path,
+                fal_api_key=self.api_key,
+                progress_cb=self._report_progress,
+                freeimage_api_key=self.freeimage_key,
             )
-
-            response = requests.post(
-                "https://freeimage.host/api/1/upload",
-                data={
-                    "key": self.freeimage_key,
-                    "action": "upload",
-                    "source": image_base64,
-                    "format": "json",
-                },
-                timeout=30,
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("status_code") == 200:
-                    url = result["image"]["url"]
-                    if self.verbose:
-                        logger.info(f"✓ Uploaded: {url}")
-                    self._report_progress(f"✓ Uploaded: {url}", "upload")
-                    return url
-
-            logger.error(f"Upload failed: {response.status_code}")
-            return None
+            if image_url and provider:
+                self._report_progress(f"Reference upload provider: {provider}", "upload")
+            return image_url
 
         except Exception as e:
             logger.error(f"Upload error: {e}")

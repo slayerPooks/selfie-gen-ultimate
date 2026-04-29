@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import logging
-import re
 import time
 from copy import deepcopy
 import webbrowser
@@ -35,6 +34,7 @@ from .queue_manager import QueueManager, QueueItem
 from .image_state import ImageSession
 from .carousel_widget import ImageCarousel
 from .compare_panel import ComparePanel
+from .session_controller import SessionController
 from .tabs import FaceCropTab, PrepTab, SelfieTab, ExpandTab, VideoTab
 from .theme import (
     TTK_BTN_COMPACT,
@@ -45,7 +45,13 @@ from .theme import (
     TTK_BTN_SUCCESS,
     TTK_BTN_SUCCESS_COMPACT,
     TTK_BTN_TAB_NAV,
+    create_action_button,
     debounce_command,
+)
+from .layout_utils import (
+    sanitize_saved_geometry as _sanitize_saved_geometry,
+    sanitize_window_layout as _sanitize_window_layout,
+    sanitize_sash_layout as _sanitize_sash_layout,
 )
 
 # Try to import the generator
@@ -95,74 +101,19 @@ UI_CONFIG_DEFAULTS = {
     },
     "drop_zone": {"height": 560},
     "queue_panel": {"width": 300},
-    "history_panel": {"height": 220, "visible_rows": 8},
+    "history_panel": {"height": 260, "visible_rows": 10},
     "debug": {"enabled": False, "inspector_hotkey": "F12", "reload_hotkey": "F5"},
 }
 
 
-_GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+)?([+-]\d+)?$")
-
-
-def _clamp_int(value, minimum: int, maximum: int, fallback: int) -> int:
-    """Clamp any int-like value to [minimum, maximum] with fallback."""
-    if maximum < minimum:
-        maximum = minimum
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = fallback
-    return max(minimum, min(parsed, maximum))
-
-
 def sanitize_saved_geometry(saved_geometry: str, min_width: int, min_height: int, max_width: int, max_height: int) -> str:
-    """Sanitize Tk geometry string to safe size bounds, preserving position when present."""
-    if not isinstance(saved_geometry, str) or not saved_geometry.strip():
-        return ""
-    match = _GEOMETRY_RE.match(saved_geometry.strip())
-    if not match:
-        return ""
-
-    width = _clamp_int(match.group(1), min_width, max_width, min_width)
-    height = _clamp_int(match.group(2), min_height, max_height, min_height)
-    x_part = match.group(3) or ""
-    y_part = match.group(4) or ""
-    return f"{width}x{height}{x_part}{y_part}"
+    """Backwards-compatible wrapper around layout_utils implementation."""
+    return _sanitize_saved_geometry(saved_geometry, min_width, min_height, max_width, max_height)
 
 
 def sanitize_window_layout(window_config: dict, saved_geometry: str, screen_width: int, screen_height: int) -> tuple[dict, str, bool]:
-    """Clamp window sizing config and geometry to monitor-safe ranges."""
-    safe_screen_w = max(1024, int(screen_width))
-    safe_screen_h = max(720, int(screen_height))
-
-    max_width = max(920, int(safe_screen_w * 0.95))
-    max_height = max(620, int(safe_screen_h * 0.90))
-    min_width_cap = max(760, int(safe_screen_w * 0.82))
-    min_height_cap = max(560, int(safe_screen_h * 0.78))
-
-    width = _clamp_int(window_config.get("width"), 840, max_width, 1100)
-    height = _clamp_int(window_config.get("height"), 620, max_height, 900)
-    min_width = _clamp_int(window_config.get("min_width"), 700, min_width_cap, 760)
-    min_height = _clamp_int(window_config.get("min_height"), 520, min_height_cap, 620)
-
-    width = max(width, min_width)
-    height = max(height, min_height)
-
-    sanitized_geometry = sanitize_saved_geometry(saved_geometry, min_width, min_height, max_width, max_height)
-    sanitized_window = {
-        "width": width,
-        "height": height,
-        "min_width": min_width,
-        "min_height": min_height,
-    }
-
-    changed = (
-        window_config.get("width") != width
-        or window_config.get("height") != height
-        or window_config.get("min_width") != min_width
-        or window_config.get("min_height") != min_height
-        or (saved_geometry or "") != sanitized_geometry
-    )
-    return sanitized_window, sanitized_geometry, changed
+    """Backwards-compatible wrapper around layout_utils implementation."""
+    return _sanitize_window_layout(window_config, saved_geometry, screen_width, screen_height)
 
 
 def sanitize_sash_layout(
@@ -174,45 +125,16 @@ def sanitize_sash_layout(
     root_width: int,
     root_height: int,
 ) -> tuple[dict, bool]:
-    """Clamp sash positions to compact, usable bounds for current window size."""
-    safe_w = max(900, int(root_width))
-    safe_h = max(620, int(root_height))
-
-    drop_min = 320
-    drop_max = max(drop_min, int(safe_h * 0.75))
-    drop_default = int(safe_h * 0.58)
-
-    prompt_min = 420
-    prompt_max = max(prompt_min, safe_w - 260)
-    prompt_default = int(safe_w * 0.62)
-
-    queue_min = 300
-    queue_max = max(queue_min, int(safe_w * 0.68))
-    queue_default = int(safe_w * 0.38)
-
-    log_min = 110
-    log_max = max(log_min, int(safe_h * 0.42))
-    log_default = int(safe_h * 0.22)
-
-    log_drop_min = 220
-    log_drop_max = max(log_drop_min, int(safe_w * 0.70))
-    log_drop_default = int(safe_w * 0.50)
-
-    sanitized = {
-        "sash_dropzone": _clamp_int(sash_dropzone, drop_min, drop_max, drop_default),
-        "sash_prompt_split": _clamp_int(sash_prompt_split, prompt_min, prompt_max, prompt_default),
-        "sash_queue": _clamp_int(sash_queue, queue_min, queue_max, queue_default),
-        "sash_log": _clamp_int(sash_log, log_min, log_max, log_default),
-        "sash_log_drop_split": _clamp_int(sash_log_drop_split, log_drop_min, log_drop_max, log_drop_default),
-    }
-    changed = (
-        sash_dropzone != sanitized["sash_dropzone"]
-        or sash_prompt_split != sanitized["sash_prompt_split"]
-        or sash_queue != sanitized["sash_queue"]
-        or sash_log != sanitized["sash_log"]
-        or sash_log_drop_split != sanitized["sash_log_drop_split"]
+    """Backwards-compatible wrapper around layout_utils implementation."""
+    return _sanitize_sash_layout(
+        sash_dropzone,
+        sash_prompt_split,
+        sash_queue,
+        sash_log,
+        sash_log_drop_split,
+        root_width,
+        root_height,
     )
-    return sanitized, changed
 
 
 class FolderPreviewDialog(tk.Toplevel):
@@ -642,8 +564,6 @@ class KlingGUIWindow:
         self.generator: Optional["FalAIKlingGenerator"] = None
         self.queue_manager: Optional[QueueManager] = None
         self.image_session = ImageSession()
-        self._autosave_job = None
-        self._autosave_suspended = False
         self._autosave_debounce_ms = 1200
 
         # Tell Windows this is its own app (not just "python.exe") so the
@@ -662,6 +582,15 @@ class KlingGUIWindow:
         self.root.configure(bg=COLORS["bg_main"])
         self._drop_zone_window = None
         self._drop_zone_open_guard_until = 0.0
+        self.session_controller = SessionController(
+            root=self.root,
+            data_dir=self.data_dir,
+            image_session=self.image_session,
+            config_getter=lambda: self.config,
+            log_callback=self._log,
+            logger=self.logger,
+            autosave_debounce_ms=self._autosave_debounce_ms,
+        )
         self.image_session.add_on_change(self._on_image_session_changed)
 
         # Set app icon (window title bar + taskbar)
@@ -717,6 +646,9 @@ class KlingGUIWindow:
 
         # Enable debug hotkeys/inspector if configured
         self._setup_debug_hotkeys()
+
+        # First-run key prompt (Fal.ai required for generation)
+        self._prompt_fal_key_on_first_run()
 
         # Initialize generator and queue manager
         self._init_generator()
@@ -789,10 +721,14 @@ class KlingGUIWindow:
             "hidden_models": [],
             "freeimage_api_key": "",
             "bfl_api_key": "",
+            "upload_provider_order": ["fal_cdn", "freeimage"],
             "openrouter_vision_system_prompt": "",
             "selfie_output_mode": "source",
             "selfie_output_folder": "",
             "selfie_poll_timeout_seconds": 300,
+            "selfie_current_prompt_slot": 1,
+            "selfie_saved_prompts": {str(i): "" for i in range(1, 11)},
+            "selfie_prompt_titles": {str(i): f"Prompt {i}" for i in range(1, 11)},
             "selfie_selected_models": {
                 "bfl/flux-kontext-pro": False,
                 "bfl/flux-kontext-max": False,
@@ -825,7 +761,8 @@ class KlingGUIWindow:
             if os.path.exists(template_path):
                 with open(template_path, "r", encoding="utf-8") as f:
                     template = json.load(f)
-                    default_config.update(template)
+                    if isinstance(template, dict):
+                        self._deep_merge_dict(default_config, template)
         except Exception:
             pass  # Template is cosmetic - never crash on missing defaults
 
@@ -834,7 +771,8 @@ class KlingGUIWindow:
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    default_config.update(loaded)
+                    if isinstance(loaded, dict):
+                        self._deep_merge_dict(default_config, loaded)
         except Exception as e:
             print(f"Warning: Could not load config: {e}")
 
@@ -850,6 +788,24 @@ class KlingGUIWindow:
             for slot in (str(i) for i in range(1, 11)):
                 if slot not in bucket or bucket[slot] is None:
                     bucket[slot] = ""
+
+        for key in ("selfie_saved_prompts", "selfie_prompt_titles"):
+            bucket = default_config.get(key)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                default_config[key] = bucket
+            for slot in (str(i) for i in range(1, 11)):
+                if key == "selfie_prompt_titles":
+                    if slot not in bucket or bucket[slot] is None or str(bucket[slot]).strip() == "":
+                        bucket[slot] = f"Prompt {slot}"
+                elif slot not in bucket or bucket[slot] is None:
+                    bucket[slot] = ""
+
+        try:
+            selfie_slot = int(default_config.get("selfie_current_prompt_slot", 1))
+        except Exception:
+            selfie_slot = 1
+        default_config["selfie_current_prompt_slot"] = min(10, max(1, selfie_slot))
 
         # Layer 4: migrate known broken endpoint paths
         self._migrate_endpoints(default_config)
@@ -873,6 +829,15 @@ class KlingGUIWindow:
         for key, value in updates.items():
             if isinstance(value, dict) and isinstance(base.get(key), dict):
                 self._merge_ui_config(base[key], value)
+            else:
+                base[key] = value
+        return base
+
+    def _deep_merge_dict(self, base: dict, updates: dict) -> dict:
+        """Deep-merge configuration dictionaries."""
+        for key, value in updates.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                self._deep_merge_dict(base[key], value)
             else:
                 base[key] = value
         return base
@@ -1244,6 +1209,7 @@ class KlingGUIWindow:
             config=self.config,
             on_config_changed=self._on_config_changed,
             build_prompt=False,
+            on_oldcam_rerun=self._on_oldcam_rerun_requested,
         )
 
         self.video_tab.attach_config_panel(self.config_panel)
@@ -1296,10 +1262,12 @@ class KlingGUIWindow:
         self._compare_frame: Optional[tk.Frame] = None
         self._compare_panel: Optional[ComparePanel] = None
 
-        # Queue panel — lives inside VideoTab (below the top controls)
+        # Queue panel internals are kept for backend flow, but surface stays hidden in Step 3 UI.
+        self._queue_panel_visible = False
         self.queue_frame = tk.Frame(self.video_tab, bg=COLORS["bg_panel"])
         self._setup_queue_panel_content(self.queue_frame)
-        self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
+        if self._queue_panel_visible:
+            self.queue_frame.pack(fill=tk.X, padx=0, pady=(3, 0))
 
         # Right side: Vertical PanedWindow (Log | History)
         self.right_paned = tk.PanedWindow(
@@ -1647,10 +1615,13 @@ class KlingGUIWindow:
         # which runs after this method to avoid conflicts.
         try:
             visible_rows = int(
-                self.ui_config.get("history_panel", {}).get("visible_rows", 8)
+                self.ui_config.get("history_panel", {}).get("visible_rows", 10)
             )
         except (TypeError, ValueError):
-            visible_rows = 8
+            visible_rows = 10
+
+        if not getattr(self, "_queue_panel_visible", True):
+            visible_rows = max(10, visible_rows)
 
         if hasattr(self, "history_tree"):
             try:
@@ -2133,63 +2104,63 @@ class KlingGUIWindow:
         title.pack(side=tk.LEFT, padx=10, pady=6)
 
         # Session management buttons
-        sessions_btn = ttk.Button(
+        sessions_btn = create_action_button(
             header,
             text="Sessions",
-            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("header_sessions", self._on_open_sessions),
+            style=TTK_BTN_SECONDARY,
             width=12,
         )
         sessions_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        load_session_btn = ttk.Button(
+        load_session_btn = create_action_button(
             header,
             text="Load Session",
-            style=TTK_BTN_PRIMARY,
             command=self._dbcmd("header_load_session", self._on_open_sessions),
+            style=TTK_BTN_PRIMARY,
         )
         load_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        save_session_btn = ttk.Button(
+        save_session_btn = create_action_button(
             header,
             text="Save Session",
-            style=TTK_BTN_SUCCESS,
             command=self._dbcmd("header_save_session", self._on_save_session),
+            style=TTK_BTN_SUCCESS,
         )
         save_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        new_session_btn = ttk.Button(
+        new_session_btn = create_action_button(
             header,
             text="New Session",
-            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("header_new_session", self._on_new_session),
+            style=TTK_BTN_SECONDARY,
         )
         new_session_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
-        sanitize_folder_btn = ttk.Button(
+        sanitize_folder_btn = create_action_button(
             header,
             text="Sanitize Folder",
-            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("header_sanitize_folder", self._on_sanitize_folder_clicked),
+            style=TTK_BTN_SECONDARY,
         )
         sanitize_folder_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # "Add Image" button — browse and add to carousel
-        add_image_btn = ttk.Button(
+        add_image_btn = create_action_button(
             header,
             text="Add Image",
-            style=TTK_BTN_SUCCESS,
             command=self._dbcmd("header_add_image", self._browse_and_add_images),
+            style=TTK_BTN_SUCCESS,
         )
         add_image_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
 
         # Floating drop zone toggle
         self._drop_zone_window = None
-        drop_zone_btn = ttk.Button(
+        drop_zone_btn = create_action_button(
             header,
             text="Drop Zone",
-            style="DropZone.TButton",
             command=self._dbcmd("header_toggle_drop_zone", self._toggle_drop_zone),
+            style="DropZone.TButton",
             width=12,
         )
         drop_zone_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
@@ -2370,11 +2341,11 @@ class KlingGUIWindow:
 
         # Left side: Add file button (fallback if DnD unavailable)
         if not HAS_DND:
-            add_btn = ttk.Button(
+            add_btn = create_action_button(
                 control_frame,
                 text="📁 Add...",
-                style=TTK_BTN_SUCCESS,
                 command=self._dbcmd("controls_add_files", self._browse_files),
+                style=TTK_BTN_SUCCESS,
             )
             add_btn.pack(side=tk.LEFT, padx=5)
 
@@ -2401,37 +2372,49 @@ class KlingGUIWindow:
         ).pack(side=tk.LEFT)
 
         # Right side: Control buttons (flat styling, always visible via side=BOTTOM)
-        self.close_btn = ttk.Button(
+        self.close_btn = create_action_button(
             control_frame,
             text="Close",
-            style=TTK_BTN_DANGER,
             command=self._dbcmd("controls_close", self._on_close),
+            style=TTK_BTN_DANGER,
         )
         self.close_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.clear_btn = ttk.Button(
+        self.clear_btn = create_action_button(
             control_frame,
             text="Clear",
-            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("controls_clear", self._clear_queue),
+            style=TTK_BTN_SECONDARY,
         )
         self.clear_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.retry_btn = ttk.Button(
+        self.retry_btn = create_action_button(
             control_frame,
             text="Retry Failed",
-            style=TTK_BTN_SECONDARY,
             command=self._dbcmd("controls_retry_failed", self._retry_failed),
+            style=TTK_BTN_SECONDARY,
         )
         self.retry_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.pause_btn = ttk.Button(
+        self.pause_btn = create_action_button(
             control_frame,
             text="Pause",
-            style=TTK_BTN_TAB_NAV,
             command=self._dbcmd("controls_pause", self._toggle_pause),
+            style=TTK_BTN_TAB_NAV,
         )
         self.pause_btn.pack(side=tk.RIGHT, padx=4)
+        self._set_queue_controls_enabled(False)
+
+    def _set_queue_controls_enabled(self, enabled: bool):
+        """Enable or disable queue control buttons without removing them from UI."""
+        state = tk.NORMAL if enabled else tk.DISABLED
+        for btn_name in ("pause_btn", "retry_btn", "clear_btn"):
+            btn = getattr(self, btn_name, None)
+            if btn is not None:
+                try:
+                    btn.config(state=state)
+                except Exception:
+                    pass
 
     def _init_generator(self):
         """Initialize the video generator and queue manager."""
@@ -2469,6 +2452,27 @@ class KlingGUIWindow:
         except Exception as e:
             self._log(f"Failed to initialize generator: {e}", "error")
 
+    def _prompt_fal_key_on_first_run(self):
+        """Prompt for fal.ai key on first launch if not configured."""
+        existing = str(self.config.get("falai_api_key", "")).strip()
+        if existing:
+            return
+        new_key = simpledialog.askstring(
+            "Fal.ai API Key Required",
+            "Enter your fal.ai API key to enable generation:\nhttps://fal.ai/dashboard/keys",
+            parent=self.root,
+        )
+        if new_key is None:
+            self._log("Fal.ai API key not set yet. You can add it from key badges below.", "warning")
+            return
+        new_key = new_key.strip()
+        if not new_key:
+            self._log("Fal.ai API key left empty. Generation remains disabled.", "warning")
+            return
+        self.config["falai_api_key"] = new_key
+        self._save_config()
+        self._log("Fal.ai API key saved.", "success")
+
     def _log(self, message: str, level: str = "info"):
         """Log a message to the log display."""
         if hasattr(self, "log_display"):
@@ -2493,6 +2497,8 @@ class KlingGUIWindow:
 
     def _update_queue_display(self):
         """Update the queue listbox display."""
+        if not hasattr(self, "queue_listbox") or not hasattr(self, "queue_header"):
+            return
         self.queue_listbox.delete(0, tk.END)
 
         if self.queue_manager:
@@ -2564,6 +2570,122 @@ class KlingGUIWindow:
             return entry
         except Exception:
             return None
+
+    def _get_latest_completed_history(self) -> Optional[dict]:
+        """Return latest completed history entry with an output path."""
+        for entry in reversed(self.history):
+            if entry.get("status") == "completed" and entry.get("output"):
+                return entry
+        return None
+
+    def _resolve_oldcam_rerun_source(self, output_path: str) -> str:
+        """Resolve Oldcam rerun source video from history output path."""
+        candidate = Path(str(output_path or "")).expanduser()
+        if not candidate:
+            return ""
+        stem = candidate.stem
+        for suffix in ("-oldcam-v7", "-oldcam-v8"):
+            if stem.endswith(suffix):
+                base = candidate.with_name(f"{stem[:-len(suffix)]}{candidate.suffix}")
+                if base.exists():
+                    return str(base)
+                self._log(
+                    f"Base video not found for {candidate.name}; using selected output as source",
+                    "warning",
+                )
+                return str(candidate)
+        return str(candidate)
+
+    def _on_oldcam_rerun_requested(self):
+        """Handle Oldcam-only rerun button from config panel."""
+        if not self.queue_manager:
+            self._log("Queue manager not initialized", "error")
+            return
+
+        selected = self._get_selected_history()
+        history_entry = None
+        if selected and selected.get("output"):
+            history_entry = selected
+        else:
+            history_entry = self._get_latest_completed_history()
+
+        if not history_entry:
+            self._log("No completed video available for Oldcam rerun", "warning")
+            return
+
+        chosen_output = str(history_entry.get("output") or "").strip()
+        if not chosen_output:
+            self._log("No output video path available for Oldcam rerun", "warning")
+            return
+
+        source_video = self._resolve_oldcam_rerun_source(chosen_output)
+        if not source_video or not os.path.isfile(source_video):
+            self._log(f"Oldcam rerun source not found: {source_video or chosen_output}", "warning")
+            return
+
+        started = self.queue_manager.rerun_oldcam_only(
+            source_video,
+            completion_callback=self._on_oldcam_rerun_complete_threadsafe,
+        )
+        if started:
+            self._log(
+                f"Oldcam-only rerun queued: {os.path.basename(source_video)} "
+                f"({self.config.get('oldcam_version', 'v7')})",
+                "info",
+            )
+
+    def _on_oldcam_rerun_complete_threadsafe(
+        self,
+        success: bool,
+        source_video: str,
+        output_path: Optional[str],
+        error: Optional[str],
+    ):
+        """Thread-safe bridge from queue manager Oldcam rerun callback."""
+        try:
+            if self.root.winfo_exists():
+                self.root.after(
+                    0,
+                    lambda: self._record_oldcam_rerun_result(
+                        success, source_video, output_path, error
+                    ),
+                )
+        except tk.TclError:
+            if self.logger:
+                self.logger.warning("Dropped oldcam rerun completion after window closed")
+
+    def _record_oldcam_rerun_result(
+        self,
+        success: bool,
+        source_video: str,
+        output_path: Optional[str],
+        error: Optional[str],
+    ):
+        """Persist Oldcam-only rerun result in history + UI log."""
+        status = "completed" if success else "failed"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = {
+            "time": timestamp,
+            "source": source_video,
+            "output": output_path or "",
+            "status": status,
+            "error": error or "",
+        }
+        self.history.append(entry)
+        self.history = self.history[-500:]
+        self._save_history()
+        self._refresh_history_view()
+
+        if success and output_path:
+            self._log(
+                f"Oldcam-only rerun complete: {os.path.basename(source_video)} → {output_path}",
+                "success",
+            )
+        else:
+            self._log(
+                f"Oldcam-only rerun failed for {os.path.basename(source_video)}: {error or 'unknown error'}",
+                "error",
+            )
 
     def _open_path_in_explorer(self, path: str):
         """Open a file or folder in the system's native file explorer.
@@ -2677,21 +2799,7 @@ class KlingGUIWindow:
 
     def _save_current_session_snapshot(self) -> bool:
         """Save a manual snapshot of current session, returning success flag."""
-        if not self.image_session.count:
-            return True
-        from .session_manager import save_session, SESSION_KIND_MANUAL
-        try:
-            path = save_session(
-                self.data_dir,
-                self.image_session,
-                self.config,
-                session_kind=SESSION_KIND_MANUAL,
-            )
-            self._log(f"Session saved: {os.path.basename(path)}", "success")
-            return True
-        except Exception as exc:
-            self._log(f"Save failed: {exc}", "error")
-            return False
+        return self.session_controller.save_current_session_snapshot()
 
     def _offer_save_and_start_new_for_front(self, front_path: str) -> bool:
         """Offer to save current session and start a new one for a front image."""
@@ -3174,12 +3282,16 @@ class KlingGUIWindow:
 
     def _remove_selected_item(self):
         """Remove the selected item from the queue."""
+        if not hasattr(self, "queue_listbox"):
+            return
         selection = self.queue_listbox.curselection()
         if selection and self.queue_manager:
             self.queue_manager.remove_item(selection[0])
 
     def _show_queue_menu(self, event):
         """Show context menu for queue item."""
+        if not hasattr(self, "queue_listbox") or not hasattr(self, "queue_menu"):
+            return
         try:
             self.queue_listbox.selection_clear(0, tk.END)
             self.queue_listbox.selection_set(self.queue_listbox.nearest(event.y))
@@ -3367,7 +3479,7 @@ class KlingGUIWindow:
             return
         # Suppress auto-calc and autosave burst during restore.
         self.carousel.suppress_auto_calc(True)
-        self._autosave_suspended = True
+        self.session_controller.autosave_suspended = True
         loaded_count = 0
         try:
             # Clear and re-populate the LIVE session (preserves tab references)
@@ -3403,7 +3515,7 @@ class KlingGUIWindow:
                 self.image_session._similarity_ref_index = sim_ref_idx
             self.image_session._notify()
         finally:
-            self._autosave_suspended = False
+            self.session_controller.autosave_suspended = False
             self.carousel.suppress_auto_calc(False)
         self._refresh_session_dependent_ui()
         self._queue_autosave(reason="session_load")
@@ -3413,70 +3525,27 @@ class KlingGUIWindow:
 
     def _start_autosave_timer(self):
         """Start the auto-save timer if configured."""
-        if not self.config.get("session_autosave_enabled", True):
-            return
-        interval = self.config.get("session_autosave_interval", "after_api_action")
-        if interval == "after_api_action":
-            return  # No timer — triggered by API completion callbacks
-        ms_map = {"5min": 300000, "10min": 600000, "15min": 900000}
-        ms = ms_map.get(interval, 300000)
-        try:
-            if self.root.winfo_exists():
-                self.root.after(ms, self._autosave_tick)
-        except tk.TclError:
-            return
+        self.session_controller.start_autosave_timer()
 
     def _autosave_tick(self):
         """Perform auto-save if session has images, then reschedule."""
-        if self.image_session.count > 0:
-            self._queue_autosave(reason="timer_tick", debounce_ms=350)
-        self._start_autosave_timer()  # Reschedule
+        self.session_controller.autosave_tick()
 
     def _on_image_session_changed(self):
         """Debounced autosave trigger for key session changes."""
-        if self._autosave_suspended:
-            return
-        self._queue_autosave(reason="state_change", debounce_ms=self._autosave_debounce_ms)
+        self.session_controller.on_image_session_changed()
 
     def _queue_autosave(self, reason: str = "state_change", debounce_ms: Optional[int] = None):
         """Queue one debounced autosave call."""
-        if not self.config.get("session_autosave_enabled", True):
-            return
-        if self.image_session.count == 0:
-            return
-        if not hasattr(self, "root") or not self.root.winfo_exists():
-            return
-        delay = self._autosave_debounce_ms if debounce_ms is None else max(0, int(debounce_ms))
-        if self._autosave_job is not None:
-            try:
-                self.root.after_cancel(self._autosave_job)
-            except Exception:
-                pass
-        self._autosave_job = self.root.after(delay, lambda: self._run_debounced_autosave(reason))
+        self.session_controller.queue_autosave(reason=reason, debounce_ms=debounce_ms)
 
     def _run_debounced_autosave(self, reason: str):
         """Execute pending autosave callback."""
-        self._autosave_job = None
-        self._maybe_autosave(reason=reason)
+        self.session_controller.run_debounced_autosave(reason=reason)
 
     def _maybe_autosave(self, reason: str = "manual"):
         """Persist a versioned autosave snapshot for the current project."""
-        if not self.config.get("session_autosave_enabled", True):
-            return
-        if self.image_session.count == 0:
-            return
-        from .session_manager import save_session, get_project_key, SESSION_KIND_AUTOSAVE
-
-        try:
-            save_session(
-                self.data_dir, self.image_session, self.config,
-                session_kind=SESSION_KIND_AUTOSAVE,
-                project_key=get_project_key(self.image_session),
-                autosave_retention=int(self.config.get("session_autosave_retention", 10)),
-            )
-        except Exception as e:
-            if self.logger:
-                self.logger.warning("Auto-save failed (%s): %s", reason, e)
+        self.session_controller.maybe_autosave(reason=reason)
 
     def _on_close(self):
         """Handle window close."""
@@ -3516,14 +3585,7 @@ class KlingGUIWindow:
                     pass
 
         # Flush pending autosave and perform final best-effort save.
-        if self._autosave_job is not None:
-            try:
-                self.root.after_cancel(self._autosave_job)
-            except Exception:
-                pass
-            self._autosave_job = None
-        if self.image_session.count > 0:
-            self._maybe_autosave(reason="close")
+        self.session_controller.flush_before_close()
 
         # Save layout (geometry + sash positions) before closing
         self._save_layout()

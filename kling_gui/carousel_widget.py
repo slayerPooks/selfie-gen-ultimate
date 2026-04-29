@@ -5,8 +5,10 @@ from tkinter import ttk
 from tkinter import filedialog
 from typing import Callable, Optional
 import os
+import platform
 import logging
 import threading
+import subprocess
 
 from .theme import (
     COLORS,
@@ -161,6 +163,15 @@ class ImageCarousel(tk.Frame):
             fg=COLORS["text_light"],
         ).pack(side=tk.LEFT)
 
+        self.counter_label = tk.Label(
+            header,
+            text="0/0",
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+        )
+        self.counter_label.pack(side=tk.LEFT, padx=(8, 8))
+
         controls = tk.Frame(header, bg=COLORS["bg_panel"])
         controls.pack(side=tk.RIGHT)
 
@@ -209,20 +220,31 @@ class ImageCarousel(tk.Frame):
         self._ref_btn = ttk.Button(
             sim_row,
             text="\u2605 Ref",
-            style=TTK_BTN_SECONDARY,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(self._toggle_sim_ref, key="carousel_ref"),
             state=tk.DISABLED,
+            width=2,
         )
         self._ref_btn.pack(side=tk.LEFT)
 
         self.compare_btn = ttk.Button(
             sim_row,
             text="Compare",
-            style=TTK_BTN_SECONDARY,
+            style=TTK_BTN_COMPACT,
             command=debounce_command(self._on_compare, key="carousel_compare"),
             state=tk.DISABLED,
+            width=2,
         )
         self.compare_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.open_active_folder_btn = ttk.Button(
+            sim_row,
+            text="📂",
+            style=TTK_BTN_COMPACT,
+            width=2,
+            command=debounce_command(self._on_open_active_image_folder, key="carousel_open_folder"),
+        )
+        self.open_active_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         self._auto_chk = tk.Checkbutton(
             sim_row,
@@ -341,6 +363,7 @@ class ImageCarousel(tk.Frame):
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")
 
         if n == 0:
+            self.counter_label.config(text="0/0")
             self.info_label.config(text="Add images to start", fg=COLORS["text_dim"])
             self.meta_label.config(text="")
             self.sim_label.config(text="")
@@ -354,6 +377,7 @@ class ImageCarousel(tk.Frame):
                 font=(FONT_FAMILY, 10),
             )
             return
+        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
 
         # Show the active image
         if entry and entry.exists:
@@ -502,6 +526,33 @@ class ImageCarousel(tk.Frame):
         if self._on_compare_callback:
             self._on_compare_callback()
 
+    def _open_path_in_explorer(self, path: str):
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(path)
+            elif system == "Darwin":
+                subprocess.run(["open", path], check=True)
+            else:
+                subprocess.run(["xdg-open", path], check=True)
+        except Exception as e:
+            self.log(f"Could not open {path}: {e}", "error")
+
+    def _on_open_active_image_folder(self):
+        entry = self.image_session.active_entry
+        if not entry:
+            self.log("No active carousel image to open folder for", "warning")
+            return
+        path = str(entry.path or "").strip()
+        if not path:
+            self.log("No folder to open for active carousel image", "warning")
+            return
+        folder = os.path.dirname(path)
+        if not folder or not os.path.isdir(folder):
+            self.log("No folder to open for active carousel image", "warning")
+            return
+        self._open_path_in_explorer(folder)
+
     def _rotate(self, degrees: int):
         """Rotate the active image by the given degrees (positive = clockwise)."""
         entry = self.image_session.active_entry
@@ -642,6 +693,7 @@ class ImageCarousel(tk.Frame):
         ref, ref_source = self.image_session.get_effective_similarity_ref()
         if not ref:
             return
+        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
         targets = [e for e in self.image_session.images
                    if e.source_type != "input" and e is not ref and e.exists]
         if not targets:

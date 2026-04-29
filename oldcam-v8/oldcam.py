@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-oldcam.py - V7 "Modern Imperfection" Virtual Hardware Simulator
+oldcam.py - V8 "Temporal Smartphone" Virtual Hardware Simulator
 
-Optimized for modern handheld selfie videos. Keeps subtle arm-sway rolling
-shutter, softened skin-tone banding, light AF hunting, and gentle compression.
+Optimized for modern handheld selfie videos. Prioritizes temporal camera
+behavior: OIS micro-jitter, random velocity rolling shutter, chroma sensor
+noise, and H.264 motion compression.
 """
 
 import argparse
@@ -52,7 +53,7 @@ def create_vignette_mask(height, width, strength=0.04):
 
 def build_default_output_path(input_path):
     path = Path(input_path)
-    return str(path.with_name(f"{path.stem}-oldcam-v7{path.suffix}"))
+    return str(path.with_name(f"{path.stem}-oldcam-v8{path.suffix}"))
 
 
 def build_preview_output_path(input_path):
@@ -107,7 +108,7 @@ def build_preview_frame(original, processed):
     )
     cv2.putText(
         preview,
-        "Oldcam V7",
+        "Oldcam V8",
         (original.shape[1] + 16, 32),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.9,
@@ -190,15 +191,18 @@ def apply_organic_sensor_noise(image, grain, rng, fpn_mask=None):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     lum = hsv[:, :, 2].astype(np.float32) / 255.0
     h, w = image.shape[:2]
-    low_res = rng.normal(0.0, grain * 1.5, (max(1, h // 2), max(1, w // 2))).astype(
+    low_res = rng.normal(0.0, grain * 1.8, (max(1, h // 4), max(1, w // 4), 3)).astype(
         np.float32
     )
     boil = cv2.resize(low_res, (w, h), interpolation=cv2.INTER_LINEAR)
     if fpn_mask is None:
-        fpn_mask = np.zeros((h, w), dtype=np.float32)
+        fpn_mask = np.zeros((h, w, 3), dtype=np.float32)
+    elif fpn_mask.ndim == 2:
+        fpn_mask = fpn_mask[..., np.newaxis]
 
-    noise = (boil + fpn_mask) * ((1.0 - lum) ** 1.5)
-    return np.clip(image.astype(np.float32) + noise[..., np.newaxis], 0, 255).astype(
+    shadow_mask = ((1.0 - lum) ** 1.5)[..., np.newaxis]
+    noise = (boil + fpn_mask) * shadow_mask
+    return np.clip(image.astype(np.float32) + noise, 0, 255).astype(
         np.uint8
     )
 
@@ -226,14 +230,42 @@ def apply_radial_chromatic_aberration(image, scale=ABERRATION_SCALE):
 
 def apply_af_hunting(image, state, rng):
     hunt = state.get("af_hunt", 0)
-    if hunt == 0 and rng.random() < 0.015:
-        hunt = 12
+    if hunt == 0 and rng.random() < 0.005:
+        hunt = 2
     if hunt > 0:
-        radius = int(np.sin((12 - hunt) / 12.0 * np.pi) * 2) * 2 + 1
+        radius = int(np.sin((2 - hunt) / 2.0 * np.pi) * 1) * 2 + 1
+        radius = min(radius, 3)
         if radius > 1:
             image = cv2.GaussianBlur(image, (radius, radius), 0)
         state["af_hunt"] = hunt - 1
     return image
+
+
+def apply_ois_jitter(image, state, rng):
+    h, w = image.shape[:2]
+    x = float(state.get("ois_x", 0.0))
+    y = float(state.get("ois_y", 0.0))
+    vx = float(state.get("ois_vx", 0.0))
+    vy = float(state.get("ois_vy", 0.0))
+
+    vx = vx * 0.72 + float(rng.normal(0.0, 0.18)) - x * 0.10
+    vy = vy * 0.72 + float(rng.normal(0.0, 0.18)) - y * 0.10
+
+    x = float(np.clip(x + vx, -2.0, 2.0))
+    y = float(np.clip(y + vy, -2.0, 2.0))
+    if abs(x) >= 2.0:
+        vx *= -0.35
+    if abs(y) >= 2.0:
+        vy *= -0.35
+
+    state["ois_x"] = x
+    state["ois_y"] = y
+    state["ois_vx"] = vx
+    state["ois_vy"] = vy
+    state["ois_speed"] = float(np.hypot(vx, vy))
+
+    transform = np.float32([[1, 0, x], [0, 1, y]])
+    return cv2.warpAffine(image, transform, (w, h), borderMode=cv2.BORDER_REFLECT101)
 
 
 def apply_ae_stepping(image, state):
@@ -270,9 +302,17 @@ def apply_ae_stepping(image, state):
 
 def apply_rolling_shutter(image, state, rng):
     h, w = image.shape[:2]
-    phase = state.get("rs_phase", 0.0) + 0.05
-    state["rs_phase"] = phase
-    shear_val = np.sin(phase) * rng.uniform(0.0005, 0.002)
+    rs_velocity = float(state.get("rs_velocity", 0.0))
+    ois_vx = float(state.get("ois_vx", 0.0))
+    ois_speed = float(state.get("ois_speed", 0.0))
+
+    rs_velocity = rs_velocity * 0.86 + float(rng.normal(0.0, 0.00010))
+    if rng.random() < 0.012:
+        rs_velocity += float(rng.normal(0.0, 0.0009))
+
+    shear_val = rs_velocity + (ois_vx * 0.00055) + (np.sign(ois_vx) * ois_speed * 0.00018)
+    shear_val = float(np.clip(shear_val, -0.003, 0.003))
+    state["rs_velocity"] = rs_velocity - shear_val * 0.08
     transform = np.float32([[1, shear_val, -shear_val * h / 2], [0, 1, 0]])
     return cv2.warpAffine(image, transform, (w, h), borderMode=cv2.BORDER_REFLECT101)
 
@@ -307,6 +347,7 @@ def process_frame(image, lut, vignette_mask, args, rng=None, state=None):
     state = {} if state is None else state
 
     image = apply_gradient_banding(image, levels=96)
+    image = apply_ois_jitter(image, state, rng)
     image = apply_rolling_shutter(image, state, rng)
     image = apply_af_hunting(image, state, rng)
     image = apply_ae_stepping(image, state)
@@ -322,7 +363,6 @@ def process_frame(image, lut, vignette_mask, args, rng=None, state=None):
     image = apply_organic_sensor_noise(image, args.grain, rng, state.get("fpn"))
     image = apply_radial_chromatic_aberration(image)
     image = (image.astype(np.float32) * vignette_mask).astype(np.uint8)
-    image = apply_jpeg_pass(image, args.quality)
 
     return image
 
@@ -333,7 +373,7 @@ def naturalize_image(input_path, output_path, args):
     lut = create_iphone_lut()
     vignette_mask = create_vignette_mask(height, width)
     rng = np.random.default_rng()
-    state = {"fpn": rng.normal(0.0, args.grain * 1.2, (height, width)).astype(np.float32)}
+    state = {"fpn": rng.normal(0.0, args.grain * 1.2, (height, width, 3)).astype(np.float32)}
 
     processed = process_frame(image, lut, vignette_mask, args, rng, state)
     if args.preview:
@@ -355,7 +395,22 @@ def finalize_video_output(temp_output, input_path, output_path, codec):
     command = ["ffmpeg", "-y", "-i", temp_output, "-i", input_path, "-map", "0:v:0", "-map", "1:a:0?"]
 
     if codec == "h264":
-        command.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "18"])
+        command.extend([
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-b:v",
+            "1500k",
+            "-maxrate",
+            "2000k",
+            "-bufsize",
+            "1000k",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "medium",
+        ])
     else:
         command.extend(["-c:v", "copy"])
 
@@ -404,7 +459,7 @@ def naturalize_video(input_path, output_path, args):
     vignette_mask = create_vignette_mask(height, width)
     rng = np.random.default_rng()
     state = {
-        "fpn": rng.normal(0.0, args.grain * 1.2, (height, width)).astype(np.float32),
+        "fpn": rng.normal(0.0, args.grain * 1.2, (height, width, 3)).astype(np.float32),
         "stutter_budget": 0,
     }
 
@@ -487,7 +542,6 @@ def build_parser():
         "--saturation", type=float, default=1.12, help="Saturation multiplier. Default: 1.12"
     )
     parser.add_argument("--grain", type=int, default=1, help="Sensor-grain strength. Default: 1")
-    parser.add_argument("--quality", type=int, default=94, help="JPEG quality. Default: 94")
     parser.add_argument(
         "--ghosting",
         type=bounded_ghosting,

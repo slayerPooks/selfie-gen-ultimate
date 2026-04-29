@@ -19,6 +19,7 @@ from ..theme import (
     TTK_BTN_PRIMARY,
     TTK_BTN_SECONDARY,
     TTK_BTN_SUCCESS,
+    create_action_button,
     debounce_command,
 )
 from ..image_state import ImageSession
@@ -64,6 +65,7 @@ class SelfieTab(tk.Frame):
         "Warm practical lighting. Amateur photography aesthetic, unfiltered iPhone 7 quality."
     )
     DISABLED_BY_DEFAULT_ENDPOINTS = set()
+    SLOT_COUNT = 10
 
     # Known fields for auto-migrating old {field} syntax → {json.field}
     _KNOWN_JSON_FIELDS = {
@@ -130,12 +132,19 @@ class SelfieTab(tk.Frame):
         self._handoff_identity_data: Optional[Dict[str, str]] = None
         self._handoff_resolved = False
         self._prompt_template_edit_mode = False
-        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE  # overwritten in _build_ui
+        self._wildcard_edit_mode = False
+        self._edit_original_raw_template = ""
+        self._edit_original_wildcard_template = ""
+        self._edit_original_slot_title = ""
+        self._raw_template = ""  # overwritten in _build_ui
         self._run_ref_path = ""
         self._run_ref_source = "none"
+        self._slot_title_var = tk.StringVar(value="")
+        self._selfie_slot_var = tk.IntVar(value=1)
         self._prompt_mode_var = tk.StringVar(
             value=config.get("selfie_prompt_mode", "json_handoff")
         )
+        self._init_selfie_prompt_slots()
 
         self._build_ui()
 
@@ -161,6 +170,54 @@ class SelfieTab(tk.Frame):
         self.config.update(self.get_config_updates())
         if self._config_saver:
             self._config_saver()
+
+    @staticmethod
+    def _default_slot_title(slot: int) -> str:
+        return f"Prompt {slot}"
+
+    def _init_selfie_prompt_slots(self):
+        saved_prompts = self.config.get("selfie_saved_prompts")
+        saved_wildcards = self.config.get("selfie_wildcard_saved_prompts")
+        saved_titles = self.config.get("selfie_prompt_titles")
+        if not isinstance(saved_prompts, dict):
+            saved_prompts = {}
+        if not isinstance(saved_wildcards, dict):
+            saved_wildcards = {}
+        if not isinstance(saved_titles, dict):
+            saved_titles = {}
+
+        slot_keys = [str(i) for i in range(1, self.SLOT_COUNT + 1)]
+        normalized_prompts = {k: str(saved_prompts.get(k, "") or "") for k in slot_keys}
+        normalized_wildcards = {k: str(saved_wildcards.get(k, "") or "") for k in slot_keys}
+        normalized_titles = {k: str(saved_titles.get(k, "") or "") for k in slot_keys}
+
+        # One-time migration: seed slot 1 from legacy template only if slots are empty.
+        if not any(v.strip() for v in normalized_prompts.values()):
+            legacy_template = str(self.config.get("selfie_prompt_template", "") or "").strip()
+            if legacy_template:
+                normalized_prompts["1"] = legacy_template
+
+        # One-time migration for old global wildcard template.
+        if not any(v.strip() for v in normalized_wildcards.values()):
+            legacy_wildcard = str(self.config.get("selfie_wildcard_template", "") or "").strip()
+            if legacy_wildcard:
+                normalized_wildcards["1"] = legacy_wildcard
+
+        current_slot = self.config.get("selfie_current_prompt_slot", 1)
+        try:
+            current_slot = int(current_slot)
+        except Exception:
+            current_slot = 1
+        if current_slot < 1 or current_slot > self.SLOT_COUNT:
+            current_slot = 1
+
+        self.config["selfie_saved_prompts"] = normalized_prompts
+        self.config["selfie_wildcard_saved_prompts"] = normalized_wildcards
+        self.config["selfie_prompt_titles"] = normalized_titles
+        self.config["selfie_current_prompt_slot"] = current_slot
+        self.config["selfie_wildcard_template"] = normalized_wildcards.get(str(current_slot), "")
+        self._selfie_slot_var.set(current_slot)
+        self._raw_template = normalized_prompts.get(str(current_slot), "") or ""
 
     def _build_ui(self):
         # Pack btn_frame FIRST so it always reserves its bottom strip,
@@ -217,6 +274,63 @@ class SelfieTab(tk.Frame):
             activebackground=COLORS["bg_panel"],
             font=(FONT_FAMILY, 9),
         ).pack(side=tk.LEFT)
+        self._mode_hint_label = tk.Label(
+            mode_row,
+            text="",
+            font=(FONT_FAMILY, 8),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_dim"],
+            anchor="e",
+        )
+        self._mode_hint_label.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
+
+        tk.Label(
+            mode_row,
+            text="Slots:",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT, padx=(14, 6))
+        self._slot_buttons = []
+        for slot in range(1, self.SLOT_COUNT + 1):
+            btn = tk.Button(
+                mode_row,
+                text=str(slot),
+                width=2,
+                font=(FONT_FAMILY, 8, "bold"),
+                bg=COLORS["bg_input"],
+                fg=COLORS["text_light"],
+                activebackground=COLORS["accent_blue"],
+                activeforeground=COLORS["text_light"],
+                relief=tk.SOLID,
+                bd=1,
+                highlightthickness=0,
+                command=lambda s=slot: self._on_selfie_slot_changed(s),
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 3))
+            self._slot_buttons.append(btn)
+
+        tk.Label(
+            mode_row,
+            text="Title:",
+            font=(FONT_FAMILY, 8, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=COLORS["text_light"],
+        ).pack(side=tk.LEFT, padx=(10, 6))
+        self._slot_title_entry = tk.Entry(
+            mode_row,
+            textvariable=self._slot_title_var,
+            width=20,
+            state="readonly",
+            bg=COLORS["bg_input"],
+            readonlybackground=COLORS["bg_input"],
+            fg=COLORS["text_light"],
+            insertbackground=COLORS["text_light"],
+            font=(FONT_FAMILY, 8),
+            relief=tk.SOLID,
+            bd=1,
+        )
+        self._slot_title_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
         # Hidden variables for composer (kept for config compat)
         self.gender_var = tk.StringVar(
@@ -250,19 +364,16 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
 
         # Load saved template with migration from old {field} → {json.field} syntax
-        saved_template = self.config.get(
-            "selfie_prompt_template", self.DEFAULT_PROMPT_TEMPLATE
-        )
-        saved_template = (saved_template or self.DEFAULT_PROMPT_TEMPLATE).strip()
+        saved_template = self.config.get("selfie_prompt_template", "")
+        saved_template = (saved_template or "").strip()
         saved_template = self._migrate_template_syntax(saved_template)
 
-        # One-time migration: old template used {scene} placeholder — replace with new default
+        # One-time migration: old template used {scene} placeholder.
         if "{scene}" in saved_template:
-            saved_template = self.DEFAULT_PROMPT_TEMPLATE
+            saved_template = ""
             self.config["selfie_prompt_template"] = saved_template
 
-        self.prompt_template_text.insert("1.0", saved_template)
-        self._raw_template = saved_template
+        self.prompt_template_text.insert("1.0", self._raw_template or saved_template)
         self.prompt_template_text.config(state=tk.DISABLED)
 
         template_actions = tk.Frame(self._customized_frame, bg=COLORS["bg_panel"])
@@ -323,10 +434,8 @@ class SelfieTab(tk.Frame):
         )
         self._wildcard_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 2))
 
-        saved_wildcard = self.config.get(
-            "selfie_wildcard_template", self.DEFAULT_WILDCARD_TEMPLATE
-        )
-        self._wildcard_text.insert("1.0", (saved_wildcard or self.DEFAULT_WILDCARD_TEMPLATE).strip())
+        saved_wildcard = self.config.get("selfie_wildcard_template", "")
+        self._wildcard_text.insert("1.0", (saved_wildcard or "").strip())
         self._wildcard_text.config(state=tk.DISABLED)
 
         wildcard_actions = tk.Frame(self._wildcard_frame, bg=COLORS["bg_panel"])
@@ -355,6 +464,7 @@ class SelfieTab(tk.Frame):
 
         # Apply initial prompt mode visibility
         self._apply_prompt_mode_ui()
+        self._load_current_slot_into_editor()
 
         # Settings
         settings_frame = tk.LabelFrame(
@@ -619,46 +729,46 @@ class SelfieTab(tk.Frame):
         # Action buttons (btn_frame was packed at top of _build_ui)
         btn_frame = self._btn_frame
 
-        self.generate_btn = ttk.Button(
+        self.generate_btn = create_action_button(
             btn_frame,
             text="Generate Selfie",
-            style=TTK_BTN_SUCCESS,
             command=debounce_command(self._on_generate, key="selfie_generate"),
+            style=TTK_BTN_SUCCESS,
         )
         self.generate_btn.pack(side=tk.LEFT)
 
-        self.save_as_btn = ttk.Button(
+        self.save_as_btn = create_action_button(
             btn_frame,
             text="Save As...",
-            style=TTK_BTN_PRIMARY,
             command=debounce_command(self._on_save_as, key="selfie_save_as"),
+            style=TTK_BTN_PRIMARY,
             state=tk.DISABLED,
         )
         self.save_as_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.open_file_btn = ttk.Button(
+        self.open_file_btn = create_action_button(
             btn_frame,
             text="Open Image",
-            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_open_result_file, key="selfie_open_file"),
+            style=TTK_BTN_SECONDARY,
             state=tk.DISABLED,
         )
         self.open_file_btn.pack(side=tk.LEFT, padx=(6, 0))
 
-        self.open_folder_btn = ttk.Button(
+        self.open_folder_btn = create_action_button(
             btn_frame,
             text="Open Folder",
-            style=TTK_BTN_SECONDARY,
             command=debounce_command(self._on_open_result_folder, key="selfie_open_folder"),
+            style=TTK_BTN_SECONDARY,
             state=tk.DISABLED,
         )
         self.open_folder_btn.pack(side=tk.LEFT, padx=(6, 0))
 
-        self.send_expand_btn = ttk.Button(
+        self.send_expand_btn = create_action_button(
             btn_frame,
             text="Send to 2.5 Expand",
-            style=TTK_BTN_SUCCESS,
             command=debounce_command(self._on_send_to_expand, key="selfie_send_expand"),
+            style=TTK_BTN_SUCCESS,
             state=tk.DISABLED,
         )
         self.send_expand_btn.pack(side=tk.LEFT, padx=(6, 0))
@@ -677,27 +787,27 @@ class SelfieTab(tk.Frame):
         self._cancel_bar = tk.Frame(self, bg=COLORS["bg_panel"])
         # Not packed initially — shown in _set_busy(True)
 
-        self._skip_btn = ttk.Button(
+        self._skip_btn = create_action_button(
             self._cancel_bar,
             text="Skip Model",
-            style=TTK_BTN_PRIMARY,
             command=debounce_command(self._on_skip_model, key="selfie_skip_model"),
+            style=TTK_BTN_PRIMARY,
         )
         self._skip_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self._stop_btn = ttk.Button(
+        self._stop_btn = create_action_button(
             self._cancel_bar,
             text="Stop After This",
-            style=TTK_BTN_PRIMARY,
             command=debounce_command(self._on_stop_after, key="selfie_stop_after"),
+            style=TTK_BTN_PRIMARY,
         )
         self._stop_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        self._abort_btn = ttk.Button(
+        self._abort_btn = create_action_button(
             self._cancel_bar,
             text="Abort All",
-            style=TTK_BTN_DANGER,
             command=debounce_command(self._on_abort_all, key="selfie_abort_all"),
+            style=TTK_BTN_DANGER,
         )
         self._abort_btn.pack(side=tk.LEFT)
 
@@ -751,6 +861,9 @@ class SelfieTab(tk.Frame):
             self.prompt_template_text.delete("1.0", tk.END)
             self.prompt_template_text.insert("1.0", resolved)
             self.prompt_template_text.config(state=tk.DISABLED)
+            self._raw_template = resolved
+            self._persist_active_slot_prompt()
+            self._save_config_now()
             self._customized_status.config(
                 text="Prompt resolved from AI analysis \u2014 ready to generate",
                 fg=COLORS["success"],
@@ -764,6 +877,9 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.delete("1.0", tk.END)
         self.prompt_template_text.insert("1.0", raw_text)
         self.prompt_template_text.config(state=tk.DISABLED)
+        self._raw_template = raw_text
+        self._persist_active_slot_prompt()
+        self._save_config_now()
         self._customized_status.config(
             text="Plain text prompt loaded (no JSON fields resolved)",
             fg=COLORS["warning"],
@@ -796,9 +912,9 @@ class SelfieTab(tk.Frame):
     def _get_prompt_template_text(self) -> str:
         """Return current text box content (may be resolved or raw template)."""
         if not hasattr(self, "prompt_template_text"):
-            return self.DEFAULT_PROMPT_TEMPLATE
+            return ""
         text = self.prompt_template_text.get("1.0", tk.END).strip()
-        return text if text else self.DEFAULT_PROMPT_TEMPLATE
+        return text
 
     def _get_raw_template_text(self) -> str:
         """Return the raw template (with {json.FIELD} tags) from config/default.
@@ -808,13 +924,107 @@ class SelfieTab(tk.Frame):
         """
         return self._raw_template
 
+    def _update_selfie_slot_button_colors(self):
+        active = self._selfie_slot_var.get()
+        for i, btn in enumerate(self._slot_buttons, start=1):
+            if i == active:
+                btn.config(bg=COLORS["accent_blue"], fg=COLORS["text_light"])
+            else:
+                btn.config(bg=COLORS["bg_input"], fg=COLORS["text_light"])
+
+    def _load_current_slot_into_editor(self):
+        slot = str(self._selfie_slot_var.get())
+        saved_prompts = self.config.setdefault("selfie_saved_prompts", {})
+        saved_wildcards = self.config.setdefault("selfie_wildcard_saved_prompts", {})
+        saved_titles = self.config.setdefault("selfie_prompt_titles", {})
+        prompt_text = str(saved_prompts.get(slot, "") or "")
+        wildcard_text = str(saved_wildcards.get(slot, "") or "")
+        title_text = str(saved_titles.get(slot, "") or "")
+        self._raw_template = prompt_text
+        self._slot_title_var.set(title_text)
+
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", prompt_text)
+        self.prompt_template_text.config(state=tk.DISABLED)
+
+        self._wildcard_text.config(state=tk.NORMAL)
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", wildcard_text)
+        self._wildcard_text.config(state=tk.DISABLED)
+        self.config["selfie_wildcard_template"] = wildcard_text
+
+        self._update_selfie_slot_button_colors()
+        self._customized_status.config(
+            text=f"Slot {slot} ready",
+            fg=COLORS["text_dim"],
+        )
+
+    def _persist_active_slot_prompt(self, persist_title: bool = False):
+        slot = str(self._selfie_slot_var.get())
+        saved_prompts = self.config.setdefault("selfie_saved_prompts", {})
+        saved_wildcards = self.config.setdefault("selfie_wildcard_saved_prompts", {})
+        saved_titles = self.config.setdefault("selfie_prompt_titles", {})
+        text = self.prompt_template_text.get("1.0", tk.END).strip()
+        existing_title = str(saved_titles.get(slot, "") or "").strip()
+        title_from_ui = (self._slot_title_var.get() or "").strip()
+        if persist_title:
+            title = title_from_ui
+        else:
+            title = existing_title
+        saved_prompts[slot] = text
+        wildcard_text = ""
+        if hasattr(self, "_wildcard_text"):
+            wildcard_text = self._wildcard_text.get("1.0", tk.END).strip()
+        else:
+            wildcard_text = str(saved_wildcards.get(slot, "") or "")
+        saved_wildcards[slot] = wildcard_text
+        saved_titles[slot] = title
+        self._slot_title_var.set(title)
+        self.config["selfie_saved_prompts"] = saved_prompts
+        self.config["selfie_wildcard_saved_prompts"] = saved_wildcards
+        self.config["selfie_prompt_titles"] = saved_titles
+        self.config["selfie_wildcard_template"] = wildcard_text
+        self.config["selfie_current_prompt_slot"] = int(slot)
+        self._raw_template = text
+
+    def _cancel_prompt_template_edit(self):
+        self.prompt_template_text.config(state=tk.NORMAL)
+        self.prompt_template_text.delete("1.0", tk.END)
+        self.prompt_template_text.insert("1.0", self._edit_original_raw_template or self._raw_template)
+        self._slot_title_var.set(self._edit_original_slot_title)
+        self._set_prompt_template_edit_mode(False)
+
+    def _on_selfie_slot_changed(self, slot: int):
+        if self._prompt_template_edit_mode:
+            self._cancel_prompt_template_edit()
+        if self._wildcard_edit_mode:
+            self._cancel_wildcard_template_edit()
+        self._selfie_slot_var.set(slot)
+        self.config["selfie_current_prompt_slot"] = slot
+        self._load_current_slot_into_editor()
+        self._save_config_now()
+        self.log(f"Step 2 slot changed to {slot}", "info")
+
     def _set_prompt_template_edit_mode(self, enabled: bool):
         self._prompt_template_edit_mode = enabled
         self.prompt_template_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
-        self.edit_template_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self._slot_title_entry.config(state=tk.NORMAL if enabled else "readonly")
+        if enabled:
+            self.edit_template_btn.config(
+                text="Cancel",
+                command=debounce_command(self._cancel_prompt_template_edit, key="selfie_cancel_template"),
+            )
+        else:
+            self.edit_template_btn.config(
+                text="Edit Template",
+                command=debounce_command(self._on_edit_prompt_template, key="selfie_edit_template"),
+            )
         self.save_template_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
 
     def _on_edit_prompt_template(self):
+        self._edit_original_raw_template = self._raw_template
+        self._edit_original_slot_title = self._slot_title_var.get()
         self._set_prompt_template_edit_mode(True)
         # Always show raw template for editing (not resolved text)
         self.prompt_template_text.delete("1.0", tk.END)
@@ -828,9 +1038,8 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.delete("1.0", tk.END)
         self.prompt_template_text.insert("1.0", text)
         self._set_prompt_template_edit_mode(False)
-        # Update the raw template source of truth
-        self._raw_template = text
-        self.config["selfie_prompt_template"] = text
+        self._persist_active_slot_prompt(persist_title=True)
+        self.config["selfie_prompt_template"] = self._raw_template
         self.config["selfie_template_fields"] = self._extract_json_fields(text)
         # Reset handoff state since template changed
         self._handoff_identity_data = None
@@ -848,10 +1057,10 @@ class SelfieTab(tk.Frame):
         self.prompt_template_text.insert("1.0", self.DEFAULT_PROMPT_TEMPLATE)
         self._set_prompt_template_edit_mode(False)
         # Update raw template source of truth
-        self._raw_template = self.DEFAULT_PROMPT_TEMPLATE
+        self._persist_active_slot_prompt(persist_title=True)
         self._handoff_identity_data = None
         self._handoff_resolved = False
-        self.config["selfie_prompt_template"] = self.DEFAULT_PROMPT_TEMPLATE
+        self.config["selfie_prompt_template"] = self._raw_template
         self.config["selfie_template_fields"] = self._extract_json_fields(self.DEFAULT_PROMPT_TEMPLATE)
         self._customized_status.config(
             text="Template ready \u2014 run AI Analysis in Step 1, then Send to Step 2",
@@ -861,7 +1070,12 @@ class SelfieTab(tk.Frame):
         self.log("Selfie prompt template reset to default", "info")
 
     def _on_prompt_mode_changed(self):
+        if self._prompt_template_edit_mode:
+            self._cancel_prompt_template_edit()
+        if self._wildcard_edit_mode:
+            self._cancel_wildcard_template_edit()
         self._apply_prompt_mode_ui()
+        self._load_current_slot_into_editor()
         mode_label = "Customized (AI Analysis)" if self._prompt_mode_var.get() == "json_handoff" else "Generic (Wildcards)"
         self.log(f"Prompt mode: {mode_label}", "info")
 
@@ -870,28 +1084,55 @@ class SelfieTab(tk.Frame):
         if self._prompt_mode_var.get() == "wildcards":
             self._customized_frame.pack_forget()
             self._wildcard_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+            self._mode_hint_label.config(text="Wildcard template mode active")
         else:
             self._wildcard_frame.pack_forget()
             self._customized_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+            self._mode_hint_label.config(text="AI-analysis template mode active")
 
     def _set_wildcard_edit_mode(self, enabled: bool):
+        self._wildcard_edit_mode = enabled
         self._wildcard_text.config(state=tk.NORMAL if enabled else tk.DISABLED)
-        self._edit_wildcard_btn.config(state=tk.DISABLED if enabled else tk.NORMAL)
+        self._slot_title_entry.config(state=tk.NORMAL if enabled else ("readonly" if not self._prompt_template_edit_mode else tk.NORMAL))
+        if enabled:
+            self._edit_wildcard_btn.config(
+                text="Cancel",
+                command=debounce_command(self._cancel_wildcard_template_edit, key="selfie_cancel_wildcard"),
+            )
+        else:
+            self._edit_wildcard_btn.config(
+                text="Edit Template",
+                command=debounce_command(self._on_edit_wildcard_template, key="selfie_edit_wildcard"),
+            )
         self._save_wildcard_btn.config(state=tk.NORMAL if enabled else tk.DISABLED)
 
     def _on_edit_wildcard_template(self):
+        self._edit_original_wildcard_template = self._wildcard_text.get("1.0", tk.END).strip()
+        self._edit_original_slot_title = self._slot_title_var.get()
         self._set_wildcard_edit_mode(True)
         self._wildcard_text.focus_set()
         self._wildcard_text.mark_set(tk.INSERT, tk.END)
 
+    def _cancel_wildcard_template_edit(self):
+        self._wildcard_text.config(state=tk.NORMAL)
+        self._wildcard_text.delete("1.0", tk.END)
+        self._wildcard_text.insert("1.0", self._edit_original_wildcard_template)
+        self._slot_title_var.set(self._edit_original_slot_title)
+        self._set_wildcard_edit_mode(False)
+
     def _on_save_wildcard_template(self):
         text = self._wildcard_text.get("1.0", tk.END).strip()
-        if not text:
-            text = self.DEFAULT_WILDCARD_TEMPLATE
         self._wildcard_text.config(state=tk.NORMAL)
         self._wildcard_text.delete("1.0", tk.END)
         self._wildcard_text.insert("1.0", text)
         self._set_wildcard_edit_mode(False)
+        slot = str(self._selfie_slot_var.get())
+        saved_wildcards = self.config.setdefault("selfie_wildcard_saved_prompts", {})
+        saved_titles = self.config.setdefault("selfie_prompt_titles", {})
+        saved_wildcards[slot] = text
+        saved_titles[slot] = (self._slot_title_var.get() or "").strip()
+        self.config["selfie_wildcard_saved_prompts"] = saved_wildcards
+        self.config["selfie_prompt_titles"] = saved_titles
         self.config["selfie_wildcard_template"] = text
         self._save_config_now()
         self.log("Wildcard template saved", "success")
@@ -901,6 +1142,10 @@ class SelfieTab(tk.Frame):
         self._wildcard_text.delete("1.0", tk.END)
         self._wildcard_text.insert("1.0", self.DEFAULT_WILDCARD_TEMPLATE)
         self._set_wildcard_edit_mode(False)
+        slot = str(self._selfie_slot_var.get())
+        saved_wildcards = self.config.setdefault("selfie_wildcard_saved_prompts", {})
+        saved_wildcards[slot] = self.DEFAULT_WILDCARD_TEMPLATE
+        self.config["selfie_wildcard_saved_prompts"] = saved_wildcards
         self.config["selfie_wildcard_template"] = self.DEFAULT_WILDCARD_TEMPLATE
         self._save_config_now()
         self.log("Wildcard template reset to default", "info")
@@ -1426,6 +1671,7 @@ class SelfieTab(tk.Frame):
 
     def get_config_updates(self) -> dict:
         width, height = self._get_selected_dimensions()
+        self._persist_active_slot_prompt()
         # Save the raw template (not the resolved view)
         raw_template = self._get_raw_template_text()
         template_fields = self._extract_json_fields(raw_template)
@@ -1440,6 +1686,10 @@ class SelfieTab(tk.Frame):
             "selfie_output_mode": self.output_mode_var.get(),
             "selfie_output_folder": self.output_path_var.get().strip(),
             "selfie_prompt_template": raw_template,
+            "selfie_current_prompt_slot": self._selfie_slot_var.get(),
+            "selfie_saved_prompts": self.config.get("selfie_saved_prompts", {}),
+            "selfie_wildcard_saved_prompts": self.config.get("selfie_wildcard_saved_prompts", {}),
+            "selfie_prompt_titles": self.config.get("selfie_prompt_titles", {}),
             "selfie_template_fields": template_fields,
             "selfie_selected_models": {
                 endpoint: bool(var.get())

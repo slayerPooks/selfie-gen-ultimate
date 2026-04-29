@@ -71,6 +71,7 @@ hiddenimports = [
     'requests.adapters',
     'requests.auth',
     'requests.packages',
+    'fal_client',
     'urllib3',
     'urllib3.util',
     'certifi',
@@ -116,6 +117,15 @@ if Path(template_path).exists():
 models_json_path = str(SPEC_DIR / 'models.json')
 if Path(models_json_path).exists():
     datas.append((models_json_path, '.'))
+
+# Oldcam scripts and launchers
+for oldcam_dir_name in ('oldcam-v7', 'oldcam-v8'):
+    oldcam_dir = SPEC_DIR / oldcam_dir_name
+    if oldcam_dir.exists():
+        for oldcam_file in oldcam_dir.rglob('*'):
+            if oldcam_file.is_file() and '__pycache__' not in oldcam_file.parts:
+                target_dir = Path(oldcam_dir_name) / oldcam_file.relative_to(oldcam_dir).parent
+                datas.append((str(oldcam_file), str(target_dir)))
 
 # -----------------------------------------------------------------------
 # Analysis
