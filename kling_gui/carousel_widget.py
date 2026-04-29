@@ -17,6 +17,8 @@ from .theme import (
     TTK_BTN_DANGER_COMPACT,
     TTK_BTN_SECONDARY,
     TTK_BTN_SUCCESS_COMPACT,
+    BUTTON_TEXT_COLOR,
+    BUTTON_DISABLED_TEXT_COLOR,
     debounce_command,
 )
 from .image_state import ImageSession
@@ -95,6 +97,8 @@ def _sim_badge_style(similarity_str) -> Optional[dict]:
 
 
 logger = logging.getLogger(__name__)
+_REF_ACTIVE_BG = "#E5C100"
+_REF_ACTIVE_FG = "#111111"
 
 class ImageCarousel(tk.Frame):
     """Unified carousel showing all images (input + selfie + outpaint) in one stream.
@@ -217,23 +221,47 @@ class ImageCarousel(tk.Frame):
         sim_row = tk.Frame(self.panel_frame, bg=COLORS["bg_panel"])
         sim_row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 2))
 
-        self._ref_btn = ttk.Button(
+        self._ref_btn = tk.Button(
             sim_row,
             text="\u2605 Ref",
-            style=TTK_BTN_COMPACT,
             command=debounce_command(self._toggle_sim_ref, key="carousel_ref"),
             state=tk.DISABLED,
-            width=2,
+            width=10,
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=BUTTON_TEXT_COLOR,
+            activebackground=COLORS["bg_hover"],
+            activeforeground=BUTTON_TEXT_COLOR,
+            disabledforeground=BUTTON_DISABLED_TEXT_COLOR,
+            highlightbackground=COLORS["bg_main"],
+            highlightthickness=1,
+            relief=tk.FLAT,
+            bd=0,
+            padx=8,
+            pady=4,
+            cursor="hand2",
         )
         self._ref_btn.pack(side=tk.LEFT)
 
-        self.compare_btn = ttk.Button(
+        self.compare_btn = tk.Button(
             sim_row,
             text="Compare",
-            style=TTK_BTN_COMPACT,
             command=debounce_command(self._on_compare, key="carousel_compare"),
             state=tk.DISABLED,
-            width=2,
+            width=10,
+            font=(FONT_FAMILY, 9, "bold"),
+            bg=COLORS["bg_panel"],
+            fg=BUTTON_TEXT_COLOR,
+            activebackground=COLORS["bg_hover"],
+            activeforeground=BUTTON_TEXT_COLOR,
+            disabledforeground=BUTTON_DISABLED_TEXT_COLOR,
+            highlightbackground=COLORS["bg_main"],
+            highlightthickness=1,
+            relief=tk.FLAT,
+            bd=0,
+            padx=8,
+            pady=4,
+            cursor="hand2",
         )
         self.compare_btn.pack(side=tk.LEFT, padx=(6, 0))
 
@@ -349,18 +377,40 @@ class ImageCarousel(tk.Frame):
         self.next_btn.config(state=nav_state)
 
         # Sim ref button state
-        is_manual_ref = (session.current_index == session.similarity_ref_index
-                         and session.similarity_ref_index >= 0)
-        is_effective_ref = (entry is session.effective_similarity_ref_entry and entry is not None)
+        is_manual_ref = (
+            session.current_index == session.similarity_ref_index
+            and session.similarity_ref_index >= 0
+        )
+        is_effective_ref = (
+            entry is session.effective_similarity_ref_entry and entry is not None
+        )
 
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
             if is_manual_ref:
                 self._ref_btn.config(text="\u2605 Clear")
+                self._ref_btn.config(
+                    bg=_REF_ACTIVE_BG,
+                    fg=_REF_ACTIVE_FG,
+                    activebackground=_REF_ACTIVE_BG,
+                    activeforeground=_REF_ACTIVE_FG,
+                )
             else:
                 self._ref_btn.config(text="\u2605 Ref")
+                self._ref_btn.config(
+                    bg=_REF_ACTIVE_BG if is_effective_ref else COLORS["bg_panel"],
+                    fg=_REF_ACTIVE_FG if is_effective_ref else BUTTON_TEXT_COLOR,
+                    activebackground=_REF_ACTIVE_BG if is_effective_ref else COLORS["bg_hover"],
+                    activeforeground=_REF_ACTIVE_FG if is_effective_ref else BUTTON_TEXT_COLOR,
+                )
         else:
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")
+            self._ref_btn.config(
+                bg=COLORS["bg_panel"],
+                fg=BUTTON_TEXT_COLOR,
+                activebackground=COLORS["bg_hover"],
+                activeforeground=BUTTON_TEXT_COLOR,
+            )
 
         if n == 0:
             self.counter_label.config(text="0/0")
@@ -620,8 +670,11 @@ class ImageCarousel(tk.Frame):
     def _toggle_sim_ref(self):
         """Toggle the similarity reference on/off for the active image."""
         session = self.image_session
-        if (session.current_index == session.similarity_ref_index
-                and session.similarity_ref_index >= 0):
+        active_is_manual_ref = (
+            session.current_index == session.similarity_ref_index
+            and session.similarity_ref_index >= 0
+        )
+        if active_is_manual_ref:
             session.set_similarity_ref(-1)
             self.log("Similarity reference cleared", "info")
             recalc_reason = "manual ref cleared"
@@ -693,7 +746,6 @@ class ImageCarousel(tk.Frame):
         ref, ref_source = self.image_session.get_effective_similarity_ref()
         if not ref:
             return
-        self.counter_label.config(text=f"{session.current_index + 1}/{n}")
         targets = [e for e in self.image_session.images
                    if e.source_type != "input" and e is not ref and e.exists]
         if not targets:

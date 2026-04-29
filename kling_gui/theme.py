@@ -98,16 +98,27 @@ def create_action_button(parent, text: str, command, style: str = TTK_BTN_SECOND
     if IS_MACOS:
         width = kwargs.pop("width", None)
         state = kwargs.pop("state", tk.NORMAL)
+        palette = {
+            TTK_BTN_PRIMARY: (COLORS["accent_blue"], BUTTON_FILLED_TEXT_COLOR),
+            TTK_BTN_SUCCESS: (COLORS["btn_green"], BUTTON_FILLED_TEXT_COLOR),
+            TTK_BTN_SUCCESS_COMPACT: (COLORS["btn_green"], BUTTON_FILLED_TEXT_COLOR),
+            TTK_BTN_DANGER: (COLORS["btn_red"], BUTTON_FILLED_TEXT_COLOR),
+            TTK_BTN_DANGER_COMPACT: (COLORS["btn_red"], BUTTON_FILLED_TEXT_COLOR),
+            TTK_BTN_SECONDARY: (COLORS["bg_input"], BUTTON_TEXT_COLOR),
+            TTK_BTN_COMPACT: (COLORS["bg_input"], BUTTON_TEXT_COLOR),
+            TTK_BTN_TAB_NAV: (COLORS["bg_input"], BUTTON_TEXT_COLOR),
+        }
+        bg, fg = palette.get(style, (COLORS["bg_input"], BUTTON_TEXT_COLOR))
         button = tk.Button(
             parent,
             text=text,
             command=command,
             state=state,
             font=(FONT_FAMILY, 10, "bold"),
-            bg=COLORS["bg_panel"],
-            fg=BUTTON_TEXT_COLOR,
+            bg=bg,
+            fg=fg,
             activebackground=COLORS["bg_hover"],
-            activeforeground=BUTTON_TEXT_COLOR,
+            activeforeground=fg,
             highlightbackground=COLORS["bg_main"],
             highlightthickness=1,
             relief=tk.FLAT,
