@@ -56,7 +56,22 @@ class TestFaceEngine(unittest.TestCase):
         self._original_engine_module = sys.modules.pop("src.engine", None)
         self.addCleanup(self._restore_engine_module)
 
-        deepface_patcher = patch.dict(sys.modules, {"deepface": _build_deepface_module()})
+        cv2_module = types.ModuleType("cv2")
+        cv2_module.imread = lambda *_args, **_kwargs: None
+        cv2_module.imwrite = lambda *_args, **_kwargs: True
+        cv2_module.resize = lambda image, _size: image
+        cv2_module.dnn = types.SimpleNamespace(
+            readNetFromCaffe=lambda *_args, **_kwargs: object(),
+            blobFromImage=lambda *_args, **_kwargs: object(),
+        )
+
+        deepface_patcher = patch.dict(
+            sys.modules,
+            {
+                "deepface": _build_deepface_module(),
+                "cv2": cv2_module,
+            },
+        )
         deepface_patcher.start()
         self.addCleanup(deepface_patcher.stop)
 

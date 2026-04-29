@@ -26,19 +26,36 @@ class _DeepFaceStub:
         return [{"embedding": [1.0, 0.0, 0.0]}]
 
 
-deepface_module = types.ModuleType("deepface")
-deepface_module.DeepFace = _DeepFaceStub
-sys.modules["deepface"] = deepface_module
+def _load_cli_module_with_stub():
+    deepface_module = types.ModuleType("deepface")
+    deepface_module.DeepFace = _DeepFaceStub
+    engine_module = types.ModuleType("src.engine")
 
-cli_module = importlib.import_module("src.cli")
-cli_module = importlib.reload(cli_module)
-ProCLI = cli_module.ProCLI
+    class _FaceEngineStub:
+        def compare_images(self, *args, **kwargs):
+            return {"match": True, "score": 100.0, "error": None}
+
+        def extract_face(self, *args, **kwargs):
+            return 0.99
+
+        def initialize_models(self):
+            return None
+
+    engine_module.FaceEngine = _FaceEngineStub
+
+    with patch.dict(sys.modules, {"deepface": deepface_module, "src.engine": engine_module}, clear=False):
+        sys.modules.pop("src.cli", None)
+        cli_module = importlib.import_module("src.cli")
+        return importlib.reload(cli_module)
 
 
 class TestProCLI(unittest.TestCase):
     def setUp(self) -> None:
-        with patch("src.cli.console.print"):
-            self.cli = ProCLI()
+        self.cli_module = _load_cli_module_with_stub()
+        self.addCleanup(lambda: sys.modules.pop("src.cli", None))
+        self.addCleanup(lambda: sys.modules.pop("src.engine", None))
+        with patch.object(self.cli_module.console, "print"):
+            self.cli = self.cli_module.ProCLI()
 
     def test_import_does_not_require_tkinter(self) -> None:
         original_import = builtins.__import__
@@ -49,7 +66,7 @@ class TestProCLI(unittest.TestCase):
             return original_import(name, global_vars, local_vars, fromlist, level)
 
         with patch("builtins.__import__", side_effect=guarded_import):
-            reloaded = importlib.reload(cli_module)
+            reloaded = _load_cli_module_with_stub()
 
         self.assertTrue(hasattr(reloaded, "ProCLI"))
 
@@ -75,7 +92,7 @@ class TestProCLI(unittest.TestCase):
                 "existing_file_mode": "index",
             }
 
-            with patch("src.cli.console.print") as mock_print:
+            with patch.object(self.cli_module.console, "print") as mock_print:
                 self.cli.load_config()
 
         self.assertEqual(self.cli.config["img1_keyword"], "alpha")
@@ -159,13 +176,29 @@ class TestProCLI(unittest.TestCase):
                     return os.path.join(dirpath, f"{keyword}.jpg")
                 return None
 
+            class _ProgressStub:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def add_task(self, *_args, **_kwargs):
+                    return 1
+
+                def update(self, *_args, **_kwargs):
+                    return None
+
+                def advance(self, *_args, **_kwargs):
+                    return None
+
             with patch.object(self.cli, "_ensure_models_initialized"), \
                 patch.object(self.cli, "_log_to_manifest"), \
                 patch.object(self.cli, "_find_image_with_keyword", side_effect=find_stub), \
                 patch.object(self.cli.engine, "compare_images", return_value={"match": True, "score": 91.0, "error": None}), \
                 patch("src.cli.os.walk", side_effect=walk_stub), \
                 patch("src.cli.os.rename", side_effect=lambda src, dst: rename_order.append(src)), \
-                patch("src.cli.console.print"):
+                patch.object(self.cli_module, "Progress", return_value=_ProgressStub()):
                 self.cli.run_batch_similarity(root_dir=str(root), confirm=False)
 
         self.assertEqual(rename_order, [str(child), str(parent)])
@@ -217,7 +250,7 @@ class TestProCLI(unittest.TestCase):
             with self.subTest(section=section):
                 with patch("src.cli.Prompt.ask", side_effect=[section, "4"]), \
                     patch.object(self.cli, "_display_current_settings"), \
-                    patch("src.cli.console.print"), \
+                    patch.object(self.cli_module.console, "print"), \
                     patch.object(self.cli, handler_name) as handler:
                     self.cli.run()
                 handler.assert_called_once_with()
@@ -231,7 +264,7 @@ class TestProCLI(unittest.TestCase):
         for option, handler_name in option_to_handler.items():
             with self.subTest(option=option):
                 with patch("src.cli.Prompt.ask", side_effect=[option, "3"]), \
-                    patch("src.cli.console.print"), \
+                    patch.object(self.cli_module.console, "print"), \
                     patch.object(self.cli, handler_name) as handler:
                     self.cli._run_similarity_menu()
                 handler.assert_called_once_with()
@@ -245,14 +278,14 @@ class TestProCLI(unittest.TestCase):
         for option, handler_name in option_to_handler.items():
             with self.subTest(option=option):
                 with patch("src.cli.Prompt.ask", side_effect=[option, "3"]), \
-                    patch("src.cli.console.print"), \
+                    patch.object(self.cli_module.console, "print"), \
                     patch.object(self.cli, handler_name) as handler:
                     self.cli._run_extraction_menu()
                 handler.assert_called_once_with()
 
     def test_similarity_menu_back_returns_without_running_handlers(self) -> None:
         with patch("src.cli.Prompt.ask", return_value="3"), \
-            patch("src.cli.console.print"), \
+            patch.object(self.cli_module.console, "print"), \
             patch.object(self.cli, "_run_single_comparison") as single, \
             patch.object(self.cli, "_run_batch_processing") as batch:
             self.cli._run_similarity_menu()
@@ -261,7 +294,7 @@ class TestProCLI(unittest.TestCase):
 
     def test_extraction_menu_back_returns_without_running_handlers(self) -> None:
         with patch("src.cli.Prompt.ask", return_value="3"), \
-            patch("src.cli.console.print"), \
+            patch.object(self.cli_module.console, "print"), \
             patch.object(self.cli, "_run_single_extraction") as single, \
             patch.object(self.cli, "_run_batch_extraction") as batch:
             self.cli._run_extraction_menu()
@@ -271,14 +304,14 @@ class TestProCLI(unittest.TestCase):
     def test_run_exit_prints_exit_message(self) -> None:
         with patch("src.cli.Prompt.ask", return_value="4"), \
             patch.object(self.cli, "_display_current_settings"), \
-            patch("src.cli.console.print") as mock_print:
+            patch.object(self.cli_module.console, "print") as mock_print:
             self.cli.run()
         self.assertTrue(any("[green]Exiting...[/green]" in str(call.args[0]) for call in mock_print.call_args_list if call.args))
 
     def test_run_main_menu_renders_expected_options(self) -> None:
         with patch("src.cli.Prompt.ask", side_effect=["4"]), \
             patch.object(self.cli, "_display_current_settings"), \
-            patch("src.cli.console.print") as mock_print:
+            patch.object(self.cli_module.console, "print") as mock_print:
             self.cli.run()
 
         printed_lines = " ".join(str(call.args[0]) for call in mock_print.call_args_list if call.args)

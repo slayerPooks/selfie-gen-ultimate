@@ -1424,7 +1424,7 @@ class KlingGUIWindow:
             return "run_gui.bat"
         if system == "Darwin":
             return "run_gui.command"
-        return "run_gui.sh"
+        return "run_gui.command"
 
     def _close_similarity_launcher(self):
         """Close similarity launcher popup window if open."""

@@ -28,9 +28,21 @@ class _DeepFaceStub:
 def _load_cli_module_with_stub():
     deepface_module = types.ModuleType("deepface")
     deepface_module.DeepFace = _DeepFaceStub
+    engine_module = types.ModuleType("src.engine")
 
-    with patch.dict(sys.modules, {"deepface": deepface_module}, clear=False):
-        sys.modules.pop("src.engine", None)
+    class _FaceEngineStub:
+        def compare_images(self, *args, **kwargs):
+            return {"match": True, "score": 100.0, "error": None}
+
+        def extract_face(self, *args, **kwargs):
+            return 0.99
+
+        def initialize_models(self):
+            return None
+
+    engine_module.FaceEngine = _FaceEngineStub
+
+    with patch.dict(sys.modules, {"deepface": deepface_module, "src.engine": engine_module}, clear=False):
         sys.modules.pop("src.cli", None)
         cli_module = importlib.import_module("src.cli")
         cli_module = importlib.reload(cli_module)

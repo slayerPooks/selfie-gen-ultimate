@@ -3,6 +3,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, Union, Any, Optional
 import urllib.request
+import urllib.error
 import math
 
 import cv2
@@ -48,6 +49,9 @@ class FaceEngine:
         # URLs for extraction models
         self.prototxt_url = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
         self.caffemodel_url = "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+        # Basic integrity guardrails to catch bad/incomplete downloads.
+        self._prototxt_min_size = 10_000
+        self._caffemodel_min_size = 1_000_000
         
         self.extraction_net = None
         self._executor: Optional[ThreadPoolExecutor] = None
@@ -85,13 +89,39 @@ class FaceEngine:
             os.makedirs(self.models_dir)
 
         if not os.path.exists(self.prototxt_path):
-            urllib.request.urlretrieve(self.prototxt_url, self.prototxt_path)
+            self._download_with_validation(
+                self.prototxt_url,
+                self.prototxt_path,
+                self._prototxt_min_size,
+            )
 
         if not os.path.exists(self.caffemodel_path):
-            urllib.request.urlretrieve(self.caffemodel_url, self.caffemodel_path)
+            self._download_with_validation(
+                self.caffemodel_url,
+                self.caffemodel_path,
+                self._caffemodel_min_size,
+            )
 
         if self.extraction_net is None:
             self.extraction_net = cv2.dnn.readNetFromCaffe(self.prototxt_path, self.caffemodel_path)
+
+    @staticmethod
+    def _download_with_validation(url: str, target_path: str, min_size_bytes: int) -> None:
+        """Download required model file with basic validation and clear errors."""
+        try:
+            urllib.request.urlretrieve(url, target_path)
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            raise RuntimeError(f"Failed downloading model from {url}: {exc}") from exc
+
+        try:
+            size = os.path.getsize(target_path)
+        except OSError as exc:
+            raise RuntimeError(f"Downloaded model missing or unreadable: {target_path}: {exc}") from exc
+
+        if size < min_size_bytes:
+            raise RuntimeError(
+                f"Downloaded model file looks invalid ({size} bytes): {target_path}"
+            )
 
     def extract_face(self, input_path: str, output_path: str, padding: float = 0.175) -> float:
         """

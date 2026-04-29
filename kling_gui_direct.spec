@@ -131,16 +131,25 @@ for oldcam_dir_name in ('oldcam-v7', 'oldcam-v8'):
 similarity_dir = SPEC_DIR / 'similarity'
 if similarity_dir.exists():
     similarity_skip_dirs = {'.git', '.venv', '__pycache__', '.pytest_cache', '.serena'}
+    similarity_skip_files = {'config.json', 'manifest.json'}
+    similarity_skip_paths = {
+        Path('src') / 'models',
+    }
     for similarity_file in similarity_dir.rglob('*'):
         if not similarity_file.is_file():
             continue
-        if similarity_skip_dirs.intersection(similarity_file.parts):
+        relative_path = similarity_file.relative_to(similarity_dir)
+        if similarity_skip_dirs.intersection(relative_path.parts):
+            continue
+        if any(skip_path in relative_path.parents for skip_path in similarity_skip_paths):
+            continue
+        if similarity_file.name in similarity_skip_files:
             continue
         if similarity_file.name == '.DS_Store':
             continue
         if similarity_file.suffix.lower() == '.zip':
             continue
-        target_dir = Path('similarity') / similarity_file.relative_to(similarity_dir).parent
+        target_dir = Path('similarity') / relative_path.parent
         datas.append((str(similarity_file), str(target_dir)))
 
 # -----------------------------------------------------------------------
