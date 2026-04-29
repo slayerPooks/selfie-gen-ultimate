@@ -126,7 +126,7 @@ class TestMainRouting(unittest.TestCase):
         gui_module = types.ModuleType("src.gui")
         gui_module.run_gui = MagicMock()
 
-        with patch.dict(sys.modules, {"src.gui": gui_module}):
+        with patch.dict(sys.modules, self._cli_dependency_modules(gui_module=gui_module)):
             fake_cli = patch("src.cli.ProCLI").start()
             self.addCleanup(patch.stopall)
 
