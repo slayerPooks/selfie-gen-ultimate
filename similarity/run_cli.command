@@ -4,6 +4,38 @@
 cd "$(dirname "$0")" || exit 1
 export TF_USE_LEGACY_KERAS=1
 export KERAS_BACKEND=tensorflow
+export PYTHONNOUSERSITE=1
+unset PYTHONPATH
+unset PYTHONHOME
+
+sanitize_known_bad_pth() {
+    candidate="$1"
+    if [ -z "$candidate" ]; then
+        return 0
+    fi
+    "$candidate" - <<'PY'
+import site
+from pathlib import Path
+
+targets = []
+for root in (site.getsitepackages() or []):
+    targets.append(Path(root) / "protobuf-3.19.6-nspkg.pth")
+try:
+    user_site = site.getusersitepackages()
+except Exception:
+    user_site = None
+if user_site:
+    targets.append(Path(user_site) / "protobuf-3.19.6-nspkg.pth")
+
+for path in targets:
+    if path.exists():
+        try:
+            path.unlink()
+            print(f"[INFO] Removed incompatible site-packages artifact: {path}")
+        except Exception:
+            pass
+PY
+}
 
 pick_supported_python() {
     for candidate in python3.12 python3.11 python3.10 python3.9 python3; do
@@ -27,10 +59,12 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 echo "[INFO] Using Python interpreter: $PYTHON_BIN"
+sanitize_known_bad_pth "$PYTHON_BIN"
 
 # Check if .venv exists
 if [ ! -f ".venv/bin/activate" ]; then
     echo "[INFO] Virtual environment not found. Creating one..."
+    sanitize_known_bad_pth "$PYTHON_BIN"
     "$PYTHON_BIN" -m venv .venv
     if [ $? -ne 0 ]; then
         echo "[ERROR] Failed to create virtual environment."
@@ -41,6 +75,7 @@ else
     if ! .venv/bin/python -c 'import sys; raise SystemExit(0 if ((3,9) <= sys.version_info[:2] <= (3,12)) else 1)' >/dev/null 2>&1; then
         echo "[INFO] Existing virtual environment uses unsupported Python. Recreating..."
         rm -rf .venv
+        sanitize_known_bad_pth "$PYTHON_BIN"
         "$PYTHON_BIN" -m venv .venv
         if [ $? -ne 0 ]; then
             echo "[ERROR] Failed to recreate virtual environment."
