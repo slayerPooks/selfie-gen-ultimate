@@ -417,8 +417,68 @@ class DependencyChecker:
 
         return success, failed
 
+    def _brew_is_available(self) -> bool:
+        """Return True when Homebrew is available on PATH."""
+        return shutil.which("brew") is not None
 
-def run_dependency_check(auto_mode: bool = False) -> bool:
+    def install_external_tool(self, tool: ExternalTool) -> bool:
+        """Attempt to install a missing external tool automatically."""
+        if tool.name.lower() != "ffmpeg":
+            print(f"  {self.YELLOW}Auto-install not implemented for {tool.name}.{self.RESET}")
+            return False
+
+        if sys.platform == "darwin":
+            if not self._brew_is_available():
+                print(
+                    f"  {self.YELLOW}Homebrew not found; cannot auto-install FFmpeg on macOS.{self.RESET}"
+                )
+                return False
+            cmd = ["brew", "install", "ffmpeg"]
+        else:
+            print(
+                f"  {self.YELLOW}Auto-install for FFmpeg currently supported on macOS only.{self.RESET}"
+            )
+            return False
+
+        try:
+            print(f"  {self.CYAN}Installing {tool.name} via {' '.join(cmd)}...{self.RESET}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if result.returncode == 0:
+                print(f"  {self.GREEN}✓ {tool.name} installed successfully{self.RESET}")
+                return True
+            print(f"  {self.RED}✗ Failed to install {tool.name}{self.RESET}")
+            if result.stderr:
+                print(f"    {self.GRAY}{result.stderr[-400:]}{self.RESET}")
+            return False
+        except subprocess.TimeoutExpired:
+            print(f"  {self.RED}✗ Installation timed out for {tool.name}{self.RESET}")
+            return False
+        except Exception as exc:
+            print(f"  {self.RED}✗ Error installing {tool.name}: {exc}{self.RESET}")
+            return False
+
+    def install_missing_external_tools(self, include_optional: bool = True) -> Tuple[int, int]:
+        """Install all missing external tools when supported."""
+        missing = [tool for tool in self.external_tools if not tool.installed]
+        if not include_optional:
+            missing = [tool for tool in missing if tool.required]
+
+        if not missing:
+            return 0, 0
+
+        self.print_section(f"Installing {len(missing)} external tool(s)")
+        success = 0
+        failed = 0
+        for tool in missing:
+            if self.install_external_tool(tool):
+                success += 1
+            else:
+                failed += 1
+            print()
+        return success, failed
+
+
+def run_dependency_check(auto_mode: bool = False, install_external_tools: bool = True) -> bool:
     """
     Run the full dependency check workflow.
 
@@ -441,49 +501,65 @@ def run_dependency_check(auto_mode: bool = False) -> bool:
 
     # If nothing missing, we're done
     missing_pip = checker.get_missing_pip_packages()
-    if not missing_pip:
+    missing_tools = [t for t in checker.external_tools if not t.installed]
+    if not missing_pip and not (install_external_tools and missing_tools):
         print(f"{checker.GREEN}All Python packages are installed!{checker.RESET}")
-
-        # Check for missing external tools
-        missing_tools = [t for t in checker.external_tools if not t.installed]
         if missing_tools:
             print(f"\n{checker.YELLOW}Note: Some external tools are not installed.{checker.RESET}")
             print(f"{checker.GRAY}These must be installed manually (see instructions above).{checker.RESET}")
-
         return all_required_ok
 
-    # Offer to install missing packages
-    print(f"\n{checker.CYAN}{'─' * 79}{checker.RESET}")
+    # Offer to install missing Python packages
+    if missing_pip:
+        print(f"\n{checker.CYAN}{'─' * 79}{checker.RESET}")
 
-    missing_required = [d for d in missing_pip if d.required]
-    missing_optional = [d for d in missing_pip if not d.required]
+        missing_required = [d for d in missing_pip if d.required]
+        missing_optional = [d for d in missing_pip if not d.required]
 
-    print(f"\n  Missing packages:")
-    if missing_required:
-        print(f"    {checker.RED}Required: {', '.join(d.pip_name for d in missing_required)}{checker.RESET}")
-    if missing_optional:
-        print(f"    {checker.YELLOW}Optional: {', '.join(d.pip_name for d in missing_optional)}{checker.RESET}")
+        print(f"\n  Missing packages:")
+        if missing_required:
+            print(f"    {checker.RED}Required: {', '.join(d.pip_name for d in missing_required)}{checker.RESET}")
+        if missing_optional:
+            print(f"    {checker.YELLOW}Optional: {', '.join(d.pip_name for d in missing_optional)}{checker.RESET}")
 
-    print()
-    print(f"  {checker.WHITE}Options:{checker.RESET}")
-    print(f"    {checker.CYAN}1{checker.RESET}  Install all missing packages (required + optional)")
-    print(f"    {checker.CYAN}2{checker.RESET}  Install required packages only")
-    print(f"    {checker.CYAN}3{checker.RESET}  Skip installation")
-    print()
+        print()
+        print(f"  {checker.WHITE}Options:{checker.RESET}")
+        print(f"    {checker.CYAN}1{checker.RESET}  Install all missing packages (required + optional)")
+        print(f"    {checker.CYAN}2{checker.RESET}  Install required packages only")
+        print(f"    {checker.CYAN}3{checker.RESET}  Skip installation")
+        print()
 
-    if auto_mode:
-        choice = "1"
-        print(f"  {checker.GRAY}Auto-mode: Installing all packages...{checker.RESET}")
-    else:
-        choice = input(f"  {checker.GREEN}Enter choice (1/2/3): {checker.RESET}").strip()
+        if auto_mode:
+            choice = "1"
+            print(f"  {checker.GRAY}Auto-mode: Installing all packages...{checker.RESET}")
+        else:
+            choice = input(f"  {checker.GREEN}Enter choice (1/2/3): {checker.RESET}").strip()
 
-    if choice == "1":
-        success, failed = checker.install_all_missing(include_optional=True)
-    elif choice == "2":
-        success, failed = checker.install_all_missing(include_optional=False)
-    else:
-        print(f"\n  {checker.YELLOW}Installation skipped.{checker.RESET}")
-        return all_required_ok
+        if choice == "1":
+            checker.install_all_missing(include_optional=True)
+        elif choice == "2":
+            checker.install_all_missing(include_optional=False)
+        else:
+            print(f"\n  {checker.YELLOW}Installation skipped.{checker.RESET}")
+            return all_required_ok
+
+    if install_external_tools:
+        missing_tools = [tool for tool in checker.external_tools if not tool.installed]
+        if missing_tools:
+            if auto_mode:
+                checker.install_missing_external_tools(include_optional=True)
+            else:
+                print(f"\n{checker.CYAN}{'─' * 79}{checker.RESET}")
+                print("\n  Missing external tools:")
+                print(f"    {checker.YELLOW}{', '.join(t.name for t in missing_tools)}{checker.RESET}")
+                print()
+                print(f"  {checker.WHITE}Install missing external tools automatically?{checker.RESET}")
+                print(f"    {checker.CYAN}1{checker.RESET}  Yes")
+                print(f"    {checker.CYAN}2{checker.RESET}  No")
+                print()
+                tool_choice = input(f"  {checker.GREEN}Enter choice (1/2): {checker.RESET}").strip()
+                if tool_choice == "1":
+                    checker.install_missing_external_tools(include_optional=True)
 
     # Re-run check to verify
     print(f"\n{checker.MAGENTA}{'═' * 79}{checker.RESET}")
@@ -509,5 +585,6 @@ def run_dependency_check(auto_mode: bool = False) -> bool:
 if __name__ == "__main__":
     import sys
     auto = "--auto" in sys.argv
-    success = run_dependency_check(auto_mode=auto)
+    skip_external = "--skip-external-tools" in sys.argv
+    success = run_dependency_check(auto_mode=auto, install_external_tools=not skip_external)
     sys.exit(0 if success else 1)

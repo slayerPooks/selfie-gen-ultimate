@@ -19,6 +19,16 @@ if [[ ! -x "${ROOT_DIR}/run_gui.sh" ]]; then
   chmod +x "${ROOT_DIR}/run_gui.sh" || true
 fi
 
+if [[ -x "${ROOT_DIR}/setup_macos.sh" ]]; then
+  printf '[%s] Running setup_macos.sh preflight\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  "${ROOT_DIR}/setup_macos.sh" || true
+fi
+
+if [[ -x "${ROOT_DIR}/.venv-macos/bin/python" && -f "${ROOT_DIR}/dependency_checker.py" ]]; then
+  printf '[%s] Running dependency bootstrap preflight\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  "${ROOT_DIR}/.venv-macos/bin/python" "${ROOT_DIR}/dependency_checker.py" --auto || true
+fi
+
 set +e
 "${ROOT_DIR}/run_gui.sh"
 status=$?

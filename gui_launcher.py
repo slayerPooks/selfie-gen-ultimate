@@ -55,6 +55,17 @@ except Exception:
 CLI_ERROR_MODE = os.getenv("KLING_GUI_CLI_ERRORS", "").strip() == "1"
 
 
+def _run_dependency_bootstrap() -> bool:
+    """Auto-install missing dependencies before GUI import."""
+    try:
+        from dependency_checker import run_dependency_check
+
+        return bool(run_dependency_check(auto_mode=True, install_external_tools=True))
+    except Exception as exc:
+        sys.stderr.write(f"Warning: dependency bootstrap failed: {exc}\n")
+        return False
+
+
 def _load_gui_window():
     """Import GUI entry lazily so module import is testable and robust."""
     try:
@@ -85,6 +96,8 @@ def show_critical_error(title, message):
 
 def main():
     """Launch the Tkinter GUI directly."""
+    _run_dependency_bootstrap()
+
     KlingGUIWindow, import_error, import_traceback = _load_gui_window()
     if KlingGUIWindow is None:
         # Fallback error handling if GUI can't be imported
