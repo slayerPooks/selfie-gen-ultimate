@@ -377,13 +377,17 @@ class ImageCarousel(tk.Frame):
         self.next_btn.config(state=nav_state)
 
         # Sim ref button state
-        is_manual_ref = (session.current_index == session.similarity_ref_index
-                         and session.similarity_ref_index >= 0)
-        is_effective_ref = (entry is session.effective_similarity_ref_entry and entry is not None)
+        is_manual_ref = (
+            session.current_index == session.similarity_ref_index
+            and session.similarity_ref_index >= 0
+        )
+        is_effective_ref = (
+            entry is session.effective_similarity_ref_entry and entry is not None
+        )
 
         if n > 0:
             self._ref_btn.config(state=tk.NORMAL)
-            if is_effective_ref:
+            if is_manual_ref:
                 self._ref_btn.config(text="\u2605 Clear")
                 self._ref_btn.config(
                     bg=_REF_ACTIVE_BG,
@@ -394,10 +398,10 @@ class ImageCarousel(tk.Frame):
             else:
                 self._ref_btn.config(text="\u2605 Ref")
                 self._ref_btn.config(
-                    bg=COLORS["bg_panel"],
-                    fg=BUTTON_TEXT_COLOR,
-                    activebackground=COLORS["bg_hover"],
-                    activeforeground=BUTTON_TEXT_COLOR,
+                    bg=_REF_ACTIVE_BG if is_effective_ref else COLORS["bg_panel"],
+                    fg=_REF_ACTIVE_FG if is_effective_ref else BUTTON_TEXT_COLOR,
+                    activebackground=_REF_ACTIVE_BG if is_effective_ref else COLORS["bg_hover"],
+                    activeforeground=_REF_ACTIVE_FG if is_effective_ref else BUTTON_TEXT_COLOR,
                 )
         else:
             self._ref_btn.config(state=tk.DISABLED, text="\u2605 Ref")

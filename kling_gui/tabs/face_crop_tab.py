@@ -53,7 +53,6 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 # Accordion header background colors
 _HEADER_BG_COLLAPSED = "#333338"  # noticeably darker than bg_panel (#3C3C41)
 _HEADER_BG_OPEN = "#505055"       # matches COLORS["bg_hover"]
-_TOP_LAYOUT_BREAKPOINT = 1180
 
 
 def _platform_gui_repair_launcher() -> str:

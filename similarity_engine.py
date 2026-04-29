@@ -13,7 +13,14 @@ import numpy as np
 from PIL import Image
 
 # Configure DeepFace backend before import.
-from kling_gui.ml_backend_env import ensure_ml_backend_env
+try:
+    from kling_gui.ml_backend_env import ensure_ml_backend_env
+except Exception:
+    def ensure_ml_backend_env() -> None:
+        if not os.environ.get("TF_USE_LEGACY_KERAS"):
+            os.environ["TF_USE_LEGACY_KERAS"] = "1"
+        if not os.environ.get("KERAS_BACKEND"):
+            os.environ["KERAS_BACKEND"] = "tensorflow"
 
 ensure_ml_backend_env()
 from deepface import DeepFace

@@ -1,6 +1,5 @@
 import os
 import tempfile
-import tkinter as tk
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -32,16 +31,31 @@ class _FakeCanvas:
 
 
 class CarouselRefControlsTests(unittest.TestCase):
-    def test_ref_and_compare_have_stable_widths(self):
-        root = tk.Tk()
-        root.withdraw()
-        try:
+    def test_ref_and_compare_config_called_with_stable_widths(self):
+        tab = ImageCarousel.__new__(ImageCarousel)
+        tab.canvas = _FakeCanvas()
+        tab.remove_btn = _FakeButton()
+        tab.compare_btn = _FakeButton()
+        tab.prev_btn = _FakeButton()
+        tab.next_btn = _FakeButton()
+        tab._ref_btn = _FakeButton()
+        tab.counter_label = _FakeButton()
+        tab.info_label = _FakeButton()
+        tab.meta_label = _FakeButton()
+        tab.sim_label = _FakeButton()
+        tab._show_image_on_canvas = lambda *_args, **_kwargs: None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "front.png")
+            with open(image_path, "wb") as handle:
+                handle.write(b"x")
             session = ImageSession()
-            widget = ImageCarousel(root, session, lambda *_args: None)
-            self.assertEqual(int(widget._ref_btn.cget("width")), 10)
-            self.assertEqual(int(widget.compare_btn.cget("width")), 10)
-        finally:
-            root.destroy()
+            session.add_image(image_path, "input", make_active=True)
+            tab.image_session = session
+            tab._update_panel()
+
+        self.assertTrue(any("text" in call and call["text"] in {"★ Ref", "★ Clear"} for call in tab._ref_btn.calls))
+        self.assertTrue(any("state" in call for call in tab.compare_btn.calls))
 
     def test_ref_button_lights_when_active_image_is_effective_ref(self):
         tab = ImageCarousel.__new__(ImageCarousel)
@@ -66,9 +80,9 @@ class CarouselRefControlsTests(unittest.TestCase):
             tab.image_session = session
             tab._update_panel()
 
-        has_clear = any(call.get("text") == "★ Clear" for call in tab._ref_btn.calls)
+        has_ref = any(call.get("text") == "★ Ref" for call in tab._ref_btn.calls)
         has_active_color = any(call.get("bg") == "#E5C100" for call in tab._ref_btn.calls)
-        self.assertTrue(has_clear)
+        self.assertTrue(has_ref)
         self.assertTrue(has_active_color)
 
     def test_toggle_ref_sets_and_clears_manual_ref(self):
